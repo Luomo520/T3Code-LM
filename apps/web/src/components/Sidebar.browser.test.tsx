@@ -23,6 +23,7 @@ import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { useProjects, useServerConfigs, useQuietThreadShells } from "../state/entities";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { useUiStateStore } from "../uiStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import type { Project } from "../types";
 import Sidebar from "./Sidebar";
@@ -275,8 +276,14 @@ describe("sidebar settled pagination", () => {
         loading = true;
       },
     }));
+    const previousView = localStorage.getItem("t3.sidebar.task-view.v1");
+    stack.defer(() => {
+      if (previousView === null) localStorage.removeItem("t3.sidebar.task-view.v1");
+      else localStorage.setItem("t3.sidebar.task-view.v1", previousView);
+    });
+    localStorage.setItem("t3.sidebar.task-view.v1", JSON.stringify("status"));
     const activeProject = project("active");
-    const threads = Array.from({ length: 70 }, (_, index) =>
+    const threads = Array.from({ length: 250 }, (_, index) =>
       makeThreadFixture({
         environmentId: activeProject.environmentId,
         projectId: activeProject.id,
@@ -350,4 +357,157 @@ describe("sidebar settled pagination", () => {
     await act(() => moreButton.click());
     expect(screen.container.querySelectorAll("[data-thread-item]")).toHaveLength(loadedRows);
   });
+});
+
+describe("sidebar project completeness", () => {
+  it.each([68, 230])(
+    "lists %i settled conversations inside the scoped project with history collapsed",
+    async (settledCount) => {
+      using stack = new DisposableStack();
+      const style = document.createElement("style");
+      style.textContent = appCss;
+      document.head.append(style);
+      stack.defer(() => style.remove());
+      const previousSettings = getClientSettings();
+      stack.defer(() => __setClientSettingsForTests(previousSettings));
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+      for (const [key, value] of [
+        ["t3.sidebar.task-view.v1", "project"],
+        ["t3code:sidebar:settled-expanded", false],
+        ["t3code:sidebar:snoozed-expanded", false],
+      ] as const) {
+        const previous = localStorage.getItem(key);
+        stack.defer(() =>
+          previous === null ? localStorage.removeItem(key) : localStorage.setItem(key, previous),
+        );
+        localStorage.setItem(key, JSON.stringify(value));
+      }
+      const previousUi = useUiStateStore.getState();
+      stack.defer(() => useUiStateStore.setState(previousUi));
+      const scopedProject = project("scoped");
+      const otherProject = project("other");
+      const active = threadShell(scopedProject.id, 1000);
+      const pinned = {
+        ...threadShell(scopedProject.id, 1001),
+        pinnedAt: "2026-01-01T00:00:00.000Z",
+      };
+      const snoozed = {
+        ...threadShell(scopedProject.id, 1002),
+        snoozedAt: "2026-01-01T00:00:00.000Z",
+        snoozedUntil: "2099-01-01T00:00:00.000Z",
+      };
+      const settled = Array.from({ length: settledCount }, (_, index) =>
+        makeThreadFixture({
+          environmentId: scopedProject.environmentId,
+          projectId: scopedProject.id,
+          id: ThreadId.make(`history-${String(index).padStart(3, "0")}`),
+          title: `History ${index}`,
+          settledOverride: "settled",
+          settledAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      const threads = [
+        active,
+        pinned,
+        snoozed,
+        ...settled,
+        threadShell(otherProject.id, 2000),
+        { ...threadShell(scopedProject.id, 2001), archivedAt: "2026-01-01T00:00:00.000Z" },
+        { ...threadShell(scopedProject.id, 2002), deletedAt: "2026-01-01T00:00:00.000Z" },
+        {
+          ...threadShell(scopedProject.id, 2003),
+          lineage: {
+            rootThreadId: active.id,
+            parentThreadId: active.id,
+            relationshipToParent: "subagent" as const,
+          },
+        },
+      ];
+      useUiStateStore.setState({
+        sidebarProjectScopeKeys: ["local:/projects/scoped"],
+        projectExpandedById: {},
+      });
+      vi.mocked(useProjects).mockReturnValue([scopedProject, otherProject]);
+      vi.mocked(useQuietThreadShells).mockReturnValue(threads);
+      const routeThreadRef = { environmentId: scopedProject.environmentId, threadId: active.id };
+      vi.mocked(useThreadRouteTarget).mockReturnValue({
+        kind: "server",
+        threadRef: routeThreadRef,
+      });
+      vi.mocked(useHandleNewThread).mockReturnValue({
+        activeDraftThread: null,
+        activeThread: null,
+        defaultProjectRef: {
+          environmentId: scopedProject.environmentId,
+          projectId: scopedProject.id,
+        },
+        defaultProjectFallbackReady: true,
+        handleNewThread: vi.fn().mockResolvedValue(null),
+        routeDraftId: null,
+        routeThreadRef,
+      });
+      vi.mocked(useServerConfigs).mockReturnValue(
+        new Map([
+          [
+            scopedProject.environmentId,
+            {
+              scratchWorkspaceRoot: null,
+              shellThreadFamilies: false,
+            } as unknown as EnvironmentServerConfig,
+          ],
+        ]),
+      );
+      await using screen = await render(
+        <SidebarProvider>
+          <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+        </SidebarProvider>,
+      );
+      const rows = () => [...screen.container.querySelectorAll<HTMLElement>("[data-thread-item]")];
+      const folderRows = () =>
+        rows().filter((row) =>
+          row
+            .querySelector("[data-sidebar-parent]")
+            ?.getAttribute("data-sidebar-parent")
+            ?.startsWith("folder:"),
+        );
+      const initialCount = Math.min(settledCount, 200);
+      expect(rows()).toHaveLength(initialCount + 3);
+      expect(folderRows()).toHaveLength(initialCount + 2);
+      const expectedKeys = [active, pinned, snoozed, ...settled.slice(0, initialCount)].map(
+        (thread) => `${thread.environmentId}:${thread.id}`,
+      );
+      expect(new Set(rows().map((row) => row.dataset.threadItem))).toEqual(new Set(expectedKeys));
+      expect(
+        screen.container.querySelectorAll('[data-testid="sidebar-project-folder"]'),
+      ).toHaveLength(1);
+      expect(screen.container.querySelector('[data-sidebar-row="shelf:settled"]')).toBeNull();
+      expect(screen.container.querySelector('[data-sidebar-row="shelf:snoozed"]')).toBeNull();
+      const folder = screen.container.querySelector<HTMLButtonElement>(
+        '[data-testid="sidebar-project-folder"] button',
+      )!;
+      await act(() => folder.click());
+      // Only the route row remains in a closed folder; pinned stays outside it.
+      expect(rows()).toHaveLength(2);
+      expect(folderRows()).toHaveLength(1);
+      await act(() => folder.click());
+      expect(rows()).toHaveLength(initialCount + 3);
+      if (settledCount > 200) {
+        const more = screen.getByRole("button", { name: "Show 25 more", exact: true });
+        expect(more.element().getAttribute("data-sidebar-parent")).toBeNull();
+        await act(() => (more.element() as HTMLButtonElement).click());
+        expect(rows()).toHaveLength(228);
+        await userEvent.click(screen.getByRole("button", { name: "Show 5 more", exact: true }));
+        await expect.element(screen.getByText("History 229", { exact: true })).toBeInTheDocument();
+        expect(rows()).toHaveLength(settledCount + 3);
+      }
+      expect(vi.mocked(shelfHooks.useOlderSettledShelf).mock.calls.at(-1)?.[0]).toMatchObject({
+        expanded: true,
+        visibleCount: settledCount > 200 ? 250 : 200,
+      });
+      expect(useUiStateStore.getState().sidebarProjectScopeKeys).toEqual([
+        "local:/projects/scoped",
+      ]);
+      expect(localStorage.getItem("t3code:sidebar:settled-expanded")).toBe("false");
+    },
+  );
 });

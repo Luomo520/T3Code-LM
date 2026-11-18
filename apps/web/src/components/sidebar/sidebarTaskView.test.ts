@@ -105,7 +105,9 @@ describe("sidebar recent tasks", () => {
     expect(wanted("recent", false, 0, 10)).toEqual(new Map([[environmentId, 1]]));
     expect(wanted("recent", false, 10, 35)).toEqual(new Map([[environmentId, 1]]));
     expect(wanted("recent", false, 10, 10)).toBe(requested);
-    for (const view of ["project", "status"] as const) {
+    expect(wanted("project", false, 0, 10)).toEqual(new Map([[environmentId, 1]]));
+    expect(wanted("project", false, 10, 35)).toEqual(new Map([[environmentId, 1]]));
+    for (const view of ["status"] as const) {
       expect(wanted(view, false, 0, 10)).toBe(requested);
       expect(wanted(view, true, 0, 10)).toEqual(new Map([[environmentId, 1]]));
     }

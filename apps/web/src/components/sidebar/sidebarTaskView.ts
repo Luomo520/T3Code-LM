@@ -4,20 +4,17 @@ export function sidebarTaskHistoryIsVisible(
   view: SidebarTaskView,
   settledShelfExpanded: boolean,
 ): boolean {
-  return view === "recent" || settledShelfExpanded;
+  return view !== "status" || settledShelfExpanded;
 }
 
 export const SIDEBAR_HISTORY_INITIAL_COUNT = 10;
 export const SIDEBAR_HISTORY_PAGE_COUNT = 25;
 
 export function sidebarTaskHistoryVisibleCount(
-  view: SidebarTaskView,
+  _view: SidebarTaskView,
   requestedCount: number,
 ): number {
-  return Math.max(
-    view === "recent" || view === "status" ? 200 : SIDEBAR_HISTORY_INITIAL_COUNT,
-    requestedCount,
-  );
+  return Math.max(200, requestedCount);
 }
 
 export function nextSidebarTaskHistoryCount(view: SidebarTaskView, requestedCount: number): number {

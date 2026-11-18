@@ -9,7 +9,7 @@ import {
 } from "./sidebarTaskView";
 
 describe("sidebar completeness", () => {
-  it.each(["recent", "status"] as const)(
+  it.each(["recent", "project", "status"] as const)(
     "extends %s history past the first 200 rows on the first click",
     (view) => {
       let requested = 10;
@@ -76,10 +76,10 @@ describe("sidebar completeness", () => {
     },
   );
 
-  it("preserves explicit shelf collapse outside Recent instead of rendering invisible-toggle state", () => {
+  it("loads project history without inheriting the collapsed Status shelf", () => {
     expect(sidebarTaskHistoryIsVisible("recent", false)).toBe(true);
     expect(sidebarTaskHistoryIsVisible("status", false)).toBe(false);
     expect(sidebarTaskHistoryIsVisible("status", true)).toBe(true);
-    expect(sidebarTaskHistoryIsVisible("project", false)).toBe(false);
+    expect(sidebarTaskHistoryIsVisible("project", false)).toBe(true);
   });
 });

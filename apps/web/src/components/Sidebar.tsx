@@ -547,7 +547,18 @@ function useSidebarThreads(input: {
   const projectFolders =
     folderGroups === null
       ? null
-      : groupSidebarThreadsByProject(folderGroups, activeThreads, keepEmpty).map((folder) => {
+      : groupSidebarThreadsByProject(
+          folderGroups,
+          input.taskView === "project"
+            ? sortSidebarTasks([
+                ...activeThreads,
+                ...workingThreads,
+                ...snoozedThreads,
+                ...visibleSettledThreads,
+              ])
+            : activeThreads,
+          keepEmpty,
+        ).map((folder) => {
           const collapsed = !resolveProjectExpanded(
             projectExpandedById,
             sidebarFolderExpansionKeys(folder.group),
@@ -569,9 +580,9 @@ function useSidebarThreads(input: {
     ...(projectFolders === null
       ? activeThreads
       : projectFolders.flatMap((folder) => folder.threads)),
-    ...visibleWorkingThreads,
-    ...visibleSnoozedThreads,
-    ...renderedSettledThreads,
+    ...(input.taskView === "project"
+      ? []
+      : [...visibleWorkingThreads, ...visibleSnoozedThreads, ...renderedSettledThreads]),
   ];
   const orderedThreads =
     input.taskView === "recent"
@@ -2002,8 +2013,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
+    if (taskView === "project") {
+      for (const folder of projectFolders ?? []) {
+        for (const thread of folder.threads) {
+          const key = threadShellKey(thread);
+          items.push({ kind: "thread", key, section: sectionByThreadKey.get(key)! });
+        }
+      }
+      return items;
+    }
+    const activeRows = rowsOf(activeThreads, "active");
     items.push(...activeRows);
     if (workingThreads.length > 0) {
       items.push({ kind: "marker", marker: "working-header" });
@@ -3552,8 +3572,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       ];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
-                          // Folders draw active rows in their own place below.
-                          if (projectFolders !== null && item.section === "active") continue;
+                          // Project mode draws every non-pinned state inside its folder.
+                          if (
+                            projectFolders !== null &&
+                            (item.section === "active" ||
+                              (taskView === "project" && item.section !== "pinned"))
+                          )
+                            continue;
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
                           continue;
                         }
@@ -3574,7 +3599,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               items.push(
                                 renderThreadRow(
                                   thread,
-                                  "active",
+                                  sectionByThreadKey.get(threadShellKey(thread))!,
                                   sidebarFolderRowId(folder.group.projectKey),
                                 ),
                               );
@@ -3700,7 +3725,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         <button
                           type="button"
                           data-sidebar-row="settled:more"
-                          data-sidebar-parent="shelf:settled"
+                          data-sidebar-parent={taskView === "project" ? undefined : "shelf:settled"}
                           aria-disabled={olderSettledShelf.loading}
                           onClick={() => {
                             if (olderSettledShelf.loading) return;
