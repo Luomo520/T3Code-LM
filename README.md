@@ -8,6 +8,12 @@ T3Code-LM 是基于 [T3 Code](https://github.com/pingdotgg/t3code) 的中文增�
 
 **[下载 T3Code-LM](https://github.com/Luomo520/T3Code-LM/releases/latest)** · [查看全部版本](https://github.com/Luomo520/T3Code-LM/releases) · [反馈问题](https://github.com/Luomo520/T3Code-LM/issues)
 
+<p>
+  <img src="./.github/readme/lm/windows-overview.png" width="100%" alt="Windows 实机整体界面：左侧项目与会话列表、顶部统计及对话操作区，私人内容已替换为示例" />
+</p>
+
+_Windows 深色主题实机界面。项目名、会话内容、设备信息与统计数字已替换为示例，保留实际界面布局和控件。_
+
 ## 这个版本增加了什么？
 
 ### 余额与用量，一眼看清
@@ -37,6 +43,13 @@ _Windows 顶部统计展开后的概览区域，已脱敏。_
 - **Windows**：安装后即可使用桌面界面和本地服务，也能连接 NAS 或其他电脑上的服务。
 - **Android**：在手机上查看项目、继续会话和处理确认操作；连接同一服务后，可以看到同一份项目和会话。
 - **浏览器**：打开运行中的服务所提供的网页即可使用，方便临时换一台电脑操作。
+
+<p>
+  <img src="./.github/readme/lm/android-overview.png" width="280" alt="Android 实机：首页按项目查看会话，底部导航与新建任务入口，项目及统计为示例" />
+  <img src="./.github/readme/lm/android-conversation.png" width="280" alt="Android 实机：会话顶部统计、消息操作与输入区，标题、设备和聊天内容已替换为示例" />
+</p>
+
+_Android 浅色主题：首页项目列表（左）与会话界面（右）。项目、会话、设备、时间和数值均为脱敏示例；保留实机配色、导航和操作入口。_
 
 ### 文件看不了，也能直接下载
 
