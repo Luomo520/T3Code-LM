@@ -1,3 +1,4 @@
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as AssetSigner from "./AssetSigner.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 // @effect-diagnostics nodeBuiltinImport:off
@@ -34,6 +35,7 @@ import {
 
 const layerTest = AssetSigner.layer.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-attachment-upload-" })),
   Layer.provideMerge(
     DocumentText.layer.pipe(
@@ -335,5 +337,82 @@ describe("AttachmentUpload", () => {
       expect(NodeFS.existsSync(pendingPath)).toBe(false);
       expect(NodeFS.existsSync(claimedPath)).toBe(true);
     }).pipe(Effect.provide(layerTest)),
+  );
+});
+
+describe("configurable file upload policy", () => {
+  it.effect(
+    "rejects above the default, streams 51 MiB after saving 51, and rejects an old URL after shrinking",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const sizeBytes = 51 * 1024 * 1024;
+        const input = {
+          type: "file",
+          name: "large.zip",
+          mimeType: "application/zip",
+          sizeBytes,
+        } as const;
+        const rejected = yield* issueAttachmentUploadUrl(input).pipe(Effect.flip);
+        expect(rejected._tag).toBe("AttachmentUploadLimitError");
+        yield* settings.updateSettings({ attachmentMaxFileSizeMiB: 51 });
+        expect((yield* settings.getSettings).attachmentMaxFileSizeMiB).toBe(51);
+        const issued = yield* issueAttachmentUploadUrl(input);
+        const claims = yield* validateAttachmentUploadToken(
+          issued.relativeUrl.slice(ATTACHMENT_UPLOAD_ROUTE_PREFIX.length + 1),
+        );
+        if (!claims) throw new Error("Expected claims");
+        // Reuse one small chunk: verifies real disk streaming, not a giant buffer.
+        const chunk = new Uint8Array(1024 * 1024).fill(123);
+        const streamed = Stream.fromIterable(Array.from({ length: 51 }, () => chunk));
+        expect(yield* storeAttachmentUpload(claims, streamed)).toEqual({ ok: true });
+        const files = NodeFS.readdirSync(config.attachmentsDir, { recursive: true }).filter(
+          (path) => String(path).endsWith(".zip"),
+        );
+        expect(files.length).toBe(1);
+        expect(NodeFS.statSync(NodePath.join(config.attachmentsDir, String(files[0]))).size).toBe(
+          sizeBytes,
+        );
+        const claimed = yield* claimPendingAttachments({
+          threadId: "thread-configurable-upload",
+          attachments: [
+            {
+              type: "file",
+              id: ChatAttachmentId.make(claims.attachmentId),
+              name: input.name,
+              mimeType: input.mimeType,
+              sizeBytes,
+            },
+          ],
+        });
+        expect(claimed.attachments[0]).toMatchObject({ type: "file", sizeBytes });
+        expect(NodeFS.statSync(claimed.claimedPaths[0]!).size).toBe(sizeBytes);
+        yield* deletePendingAttachment(claims.attachmentId);
+
+        const fresh = yield* issueAttachmentUploadUrl(input);
+        const staleClaims = yield* validateAttachmentUploadToken(
+          fresh.relativeUrl.slice(ATTACHMENT_UPLOAD_ROUTE_PREFIX.length + 1),
+        );
+        if (!staleClaims) throw new Error("Expected claims");
+        yield* settings.updateSettings({ attachmentMaxFileSizeMiB: 1 });
+        let consumed = false;
+        const result = yield* storeAttachmentUpload(
+          staleClaims,
+          Stream.sync(() => {
+            consumed = true;
+            return chunk;
+          }),
+        );
+        expect(result).toMatchObject({ ok: false, status: 413 });
+        expect(consumed).toBe(false);
+        const boundary = { ...input, sizeBytes: 1024 * 1024 };
+        yield* issueAttachmentUploadUrl(boundary);
+        const over = yield* issueAttachmentUploadUrl({
+          ...boundary,
+          sizeBytes: boundary.sizeBytes + 1,
+        }).pipe(Effect.flip);
+        expect(over._tag).toBe("AttachmentUploadLimitError");
+      }).pipe(Effect.provide(layerTest)),
   );
 });

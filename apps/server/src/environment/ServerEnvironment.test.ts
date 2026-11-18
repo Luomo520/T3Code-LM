@@ -1,3 +1,4 @@
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
@@ -23,6 +24,8 @@ import * as ServerEnvironment from "./ServerEnvironment.ts";
 
 const layerServerEnvironment = (baseDir: string) =>
   ServerEnvironment.layer.pipe(
+              Layer.provide(ServerSettingsService.layerTest()),
+    Layer.provide(ServerSettingsService.layerTest()),
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
   );
@@ -98,6 +101,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         }).pipe(
           Effect.provide(
             ServerEnvironment.layer.pipe(
+              Layer.provide(ServerSettingsService.layerTest()),
+              Layer.provide(ServerSettingsService.layerTest()),
               Layer.provide(layerEmptySecretStore),
               Layer.provide(ServerConfig.layer({ ...config, mode })),
             ),
@@ -140,6 +145,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         }).pipe(
           Effect.provide(
             ServerEnvironment.layer.pipe(
+              Layer.provide(ServerSettingsService.layerTest()),
               Layer.provide(layerEmptySecretStore),
               Layer.provide(
                 ServerConfig.layer({
@@ -304,7 +310,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         prefix: "t3-server-environment-publish-test-",
       });
       const layerTest = Layer.mergeAll(
-        ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+        ServerEnvironment.layer.pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest()),
+          Layer.provide(ServerSecretStore.layer),
+        ),
         ServerSecretStore.layer,
       ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
 
@@ -315,6 +324,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
 
         const unlinked = yield* serverEnvironment.getDescriptor;
         expect(unlinked.capabilities.agentActivityPublishing).toBe(false);
+        expect(unlinked.capabilities.fileAttachments?.maxUploadBytes).toBe(50 * 1024 * 1024);
+        const settings = yield* ServerSettingsService;
+        yield* settings.updateSettings({ attachmentMaxFileSizeMiB: 256 });
+        expect(
+          (yield* serverEnvironment.getDescriptor).capabilities.fileAttachments?.maxUploadBytes,
+        ).toBe(256 * 1024 * 1024);
 
         yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("true"));
         const withoutLink = yield* serverEnvironment.getDescriptor;

@@ -12,6 +12,7 @@ import {
   RuntimeRequestId,
   NodeId,
   type ProjectId,
+  type ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as ProviderCommitBatch from "./ProviderCommitBatch.ts";
@@ -70,6 +71,13 @@ export class EventSinkStreamError extends Schema.TaggedError<EventSinkStreamErro
 export const EventSinkV2Error = Schema.Union([EventSinkWriteError, EventSinkStreamError]);
 export type EventSinkV2Error = typeof EventSinkV2Error.Type;
 
+interface IdleThreadGuard {
+  readonly threadId: ThreadId;
+  readonly updatedAt: DateTime.Utc;
+  readonly messageCount: number;
+  readonly sequence?: number;
+  readonly archivedAt?: DateTime.Utc | null;
+}
 interface ProviderBatchPublication {
   readonly publish: Array<Effect.Effect<void>>;
   eventCount: number;
@@ -98,16 +106,19 @@ export interface EventSinkV2Shape {
   ) => Effect.Effect<A, E | EventSinkV2Error, R>;
 
   readonly write: (input: {
+    /** Optimistic local-history merge; rechecked in the commit transaction. */
+    readonly guardIdleThread?: IdleThreadGuard;
     /** Return no events if another thread owns this native session at commit time. */
     readonly unlessNativeThreadOwned?: Pick<
       OrchestrationV2ProviderThread,
       "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
-    >;
+    > & { readonly providerInstanceIds?: ReadonlyArray<ProviderInstanceId> };
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
   readonly writeWithEffects: (input: {
+    readonly guardIdleThread?: IdleThreadGuard;
     /**
      * Rebuilds each run.updated from the stored row with only its delegatedCompletion replaced.
      * The batch must not also change that run's lifecycle.
@@ -116,7 +127,7 @@ export interface EventSinkV2Shape {
     readonly unlessNativeThreadOwned?: Pick<
       OrchestrationV2ProviderThread,
       "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
-    >;
+    > & { readonly providerInstanceIds?: ReadonlyArray<ProviderInstanceId> };
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -477,6 +488,35 @@ const layerBase: Layer.Layer<
       if (batch !== undefined) batch.eventCount += input.events.length;
       const { committed } = yield* commitThenPublish(
         Effect.gen(function* () {
+          if (input.guardIdleThread) {
+            const guard = input.guardIdleThread;
+            const current = yield* projectionStore.getThreadRecords(guard.threadId, [
+              "runs",
+              "messages",
+            ]);
+            if (
+              guard.sequence !== undefined &&
+              (yield* eventStore.latestSequence({ threadId: guard.threadId })) !== guard.sequence
+            ) {
+              return { committed: [], outcomes: [] };
+            }
+            if (
+              current.thread.deletedAt ||
+              (current.thread.archivedAt === null
+                ? null
+                : DateTime.toEpochMillis(current.thread.archivedAt)) !==
+                (guard.archivedAt == null ? null : DateTime.toEpochMillis(guard.archivedAt)) ||
+              DateTime.toEpochMillis(current.thread.updatedAt) !==
+                DateTime.toEpochMillis(guard.updatedAt) ||
+              current.messages.length !== guard.messageCount ||
+              current.messages.some((m) => m.streaming) ||
+              current.runs.some((run) =>
+                ["queued", "preparing", "starting", "running", "waiting"].includes(run.status),
+              )
+            ) {
+              return { committed: [], outcomes: [] };
+            }
+          }
           // Check ownership in the same transaction that claims the native session.
           const imported = input.unlessNativeThreadOwned;
           if (imported?.nativeThreadRef != null) {
@@ -484,7 +524,7 @@ const layerBase: Layer.Layer<
               SELECT provider_thread_id
               FROM orchestration_v2_projection_provider_threads
               WHERE driver = ${imported.driver}
-                AND provider_instance_id = ${imported.providerInstanceId}
+                AND provider_instance_id IN ${sql.in(imported.providerInstanceIds ?? [imported.providerInstanceId])}
                 AND thread_id IS NOT ${imported.appThreadId}
                 AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${imported.nativeThreadRef.nativeId}
               LIMIT 1

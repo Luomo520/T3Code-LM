@@ -127,15 +127,15 @@ function AgentActivity(
       : tint;
 
   const allDone = props.activeCount === 0;
-  const doneLabel = failedRow ? "Failed" : "Done";
-  const outcomeLabel = failedRow ? "Agent work failed" : "Agent work completed";
+  const doneLabel = failedRow ? "失败" : "完成";
+  const outcomeLabel = failedRow ? "智能体任务失败" : "智能体任务已完成";
 
   const agentWord = props.activeCount === 1 ? "agent" : "agents";
   const agentsLabel = allDone
     ? outcomeLabel
     : environment.isStale
-      ? "Agent status out of date"
-      : `${props.activeCount} active ${agentWord}`;
+      ? "智能体状态已过期"
+      : `${props.activeCount} 个活跃${agentWord}`;
   const attentionSuffix =
     attentionRows.length > 0
       ? `${attentionRows.length} need${attentionRows.length === 1 ? "s" : ""} attention`
@@ -143,8 +143,8 @@ function AgentActivity(
   const activeLabel = allDone
     ? doneLabel
     : environment.isStale
-      ? "Out of date"
-      : `${props.activeCount} active`;
+      ? "已过期"
+      : `${props.activeCount} 个活跃`;
   const showCompactGlyph = !attentionRow && !failedRow && !allDone && !environment.isStale;
   const summary = attentionSuffix || activeLabel;
 

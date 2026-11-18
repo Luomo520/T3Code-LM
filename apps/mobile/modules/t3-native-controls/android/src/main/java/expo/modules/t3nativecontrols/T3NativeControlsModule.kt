@@ -25,6 +25,26 @@ class T3NativeControlsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("T3NativeControls")
 
+    AsyncFunction("enqueueFileDownload") { url: String, fileName: String ->
+      T3FileDownloads.enqueue(appContext.reactContext ?: error("应用尚未就绪。"), url, fileName)
+    }
+    AsyncFunction("showFileDownloads") {
+      T3FileDownloads.show(appContext.reactContext ?: error("应用尚未就绪。"))
+    }
+    AsyncFunction("enqueueAppUpdateDownload") { url: String, fileName: String, version: String,
+      versionCode: Int, sizeBytes: Double, sha256: String, allowMetered: Boolean ->
+      T3AppUpdates.enqueue(appContext.reactContext ?: error("应用尚未就绪。"), url, fileName,
+        version, versionCode, sizeBytes, sha256, allowMetered)
+    }
+    AsyncFunction("getAppUpdateDownload") {
+      T3AppUpdates.status(appContext.reactContext ?: error("应用尚未就绪。"))
+    }
+    AsyncFunction("openAppUpdateInstaller") {
+      T3AppUpdates.openInstaller(appContext.reactContext ?: error("应用尚未就绪。"))
+    }
+    AsyncFunction("cancelAppUpdateDownload") {
+      T3AppUpdates.cancel(appContext.reactContext ?: error("应用尚未就绪。"))
+    }
     // React Native sets this once, at launch, from the system theme rather than the app's.
     AsyncFunction("setNavigationBarStyle") { light: Boolean ->
       // Below Android 10, React Native paints the navigation bar color itself.

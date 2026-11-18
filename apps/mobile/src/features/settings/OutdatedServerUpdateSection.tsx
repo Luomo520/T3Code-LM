@@ -3,8 +3,9 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import type { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useState } from "react";
-import { View } from "react-native";
+import { Linking, View } from "react-native";
 
+import { ENVIRONMENT_RELEASES_PAGE_URL } from "./environment-maintenance";
 import { AppText as Text } from "../../components/ui/AppText";
 import * as Dialog from "../../components/ui/Dialog";
 import {
@@ -42,10 +43,12 @@ export function OutdatedServerUpdateSection({
   function check() {
     if (busy) return;
     setCheckErrorDismissed(false);
-    startCheck(async () => {
-      const description = await describe(environmentId);
-      if (AsyncResult.isFailure(description)) throw squashAtomCommandFailure(description);
-      return description.value.serverVersion;
+    startCheck({
+      readServerVersion: async () => {
+        const description = await describe(environmentId);
+        if (AsyncResult.isFailure(description)) throw squashAtomCommandFailure(description);
+        return description.value.serverVersion;
+      },
     });
   }
 
@@ -56,9 +59,9 @@ export function OutdatedServerUpdateSection({
       `Update ${label}?`,
       `Install T3 Code ${targetVersion}. T3 Code restarts on that machine and reconnects. Running threads may be interrupted.`,
       [
-        { text: "Cancel", style: "cancel" },
+        { text: "取消", style: "cancel" },
         {
-          text: "Update",
+          text: "更新",
           onPress: () => {
             setCheckErrorDismissed(true);
             void update({
@@ -76,7 +79,7 @@ export function OutdatedServerUpdateSection({
     <SettingsSection title="T3 Code">
       <View className="gap-1 p-4">
         <Text className="text-base text-foreground">
-          {release ? `Version ${release.fromVersion}` : "Update required"}
+          {release ? `版本 ${release.fromVersion}` : "服务端版本信息待检查"}
         </Text>
         <Text className="text-sm text-foreground-muted">
           {state.status === "running"
@@ -88,8 +91,10 @@ export function OutdatedServerUpdateSection({
             : release
               ? release.targetVersion
                 ? `Version ${release.targetVersion} is available.`
-                : "No newer version is available yet."
-              : "This app needs a newer version of T3 Code on this machine."}
+                : release.manualCheckRequired
+                  ? "此环境无法确认适用更新，请查看发布页手动核对。"
+                  : "未发现适用于此环境的更新。"
+              : "此环境使用旧协议。可查看对应平台发布包，由你决定是否更新。"}
         </Text>
         {error || state.status === "failed" ? (
           <Text selectable accessibilityRole="alert" className="text-sm text-danger-foreground">
@@ -99,11 +104,22 @@ export function OutdatedServerUpdateSection({
       </View>
       <SettingsActionRow
         icon="arrow.clockwise"
-        label="Check for updates"
+        label="检查更新"
         disabled={busy}
         loading={checking}
         onPress={check}
       />
+      {release?.manualCheckRequired ? (
+        <SettingsActionRow
+          icon="arrow.up.right"
+          label="查看 GitHub 发布页"
+          onPress={() =>
+            void Linking.openURL(ENVIRONMENT_RELEASES_PAGE_URL).catch(() =>
+              Dialog.alert("无法打开发布页", "请检查网络后重试。"),
+            )
+          }
+        />
+      ) : null}
       {release?.targetVersion ? (
         <SettingsActionRow
           icon="arrow.up.circle"

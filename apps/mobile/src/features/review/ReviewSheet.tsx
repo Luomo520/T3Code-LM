@@ -84,14 +84,14 @@ function ReviewHeader(
       subtitle={presentation.subtitle}
       onBack={props.onReturnToThread}
       hideBottomBorder
-      backInSplitView={{ accessibilityLabel: "Back to chat", icon: "chevron.left" }}
+      backInSplitView={{ accessibilityLabel: "返回对话", icon: "chevron.left" }}
       actions={
         props.showChangedFilesToggle
           ? [
               {
                 accessibilityLabel: panes.auxiliaryPaneVisible
-                  ? "Hide changed files"
-                  : "Show changed files",
+                  ? "隐藏更改的文件"
+                  : "显示更改的文件",
                 icon: "sidebar.right",
                 selected: panes.auxiliaryPaneVisible,
                 onPress: toggleAuxiliaryPane,
@@ -104,7 +104,7 @@ function ReviewHeader(
         ...(props.showSectionToolbar
           ? [
               {
-                title: "Select diff",
+                title: "选择差异",
                 icon: presentation.menuIcon,
                 items: [
                   {
@@ -120,7 +120,7 @@ function ReviewHeader(
                     ? [
                         {
                           id: "turns",
-                          title: "Turn",
+                          title: "轮次",
                           items: props.sectionMenu.turns.map((section) => ({
                             id: `section:${section.id}`,
                             title: section.title,
@@ -146,7 +146,7 @@ const SHOWCASE_ENABLED = process.env.EXPO_PUBLIC_SHOWCASE === "1";
 const ReviewNotice = function ReviewNotice(props: { readonly notice: string }) {
   return (
     <ContentBand tone="warning">
-      <Text className="text-xs font-t3-bold uppercase text-warning-foreground">Partial diff</Text>
+      <Text className="text-xs font-t3-bold uppercase text-warning-foreground">{"部分差异"}</Text>
       <Text className="text-xs leading-normal text-warning-foreground">{props.notice}</Text>
     </ContentBand>
   );
@@ -313,8 +313,8 @@ function ReviewFileNavigator({ files, sectionId, onSelectFile, ref }: ReviewFile
   return (
     <SheetPane>
       <AppBar
-        title="Changed files"
-        subtitle={`${files.length} ${files.length === 1 ? "file" : "files"}`}
+        title="已更改的文件"
+        subtitle={`${files.length} ${files.length === 1 ? "个文件" : "个文件"}`}
         hideBottomBorder
       />
       <ScreenContent insetHorizontal>
@@ -552,7 +552,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
     if (error) {
       children.push(
         <ContentBand key="review-error">
-          <Text className="text-sm font-t3-bold text-foreground">Review unavailable</Text>
+          <Text className="text-sm font-t3-bold text-foreground">{"审查不可用"}</Text>
           <Text className="text-xs leading-normal text-foreground-muted">{error}</Text>
         </ContentBand>,
       );
@@ -577,7 +577,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
   ]
     .filter(Boolean)
     .join(" · ");
-  const headerTitleText = selectedSection?.title ?? "Review changes";
+  const headerTitleText = selectedSection?.title ?? "检查更改";
 
   return (
     <>
@@ -704,7 +704,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
               ) : parsedDiff.kind === "empty" ? (
                 <ContentStatus
                   title="No changes"
-                  detail={selectedSection.subtitle ?? "This diff is empty."}
+                  detail={selectedSection.subtitle ?? "此差异为空。"}
                 />
               ) : parsedDiff.kind === "raw" ? (
                 <ContentBand spacing="roomy">
@@ -719,9 +719,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
                 </ContentBand>
               ) : parsedDiff.kind === "files" ? (
                 <ContentBand spacing="roomy">
-                  <Text className="text-xs leading-normal text-foreground-muted">
-                    Native diff view unavailable. Showing the raw patch.
-                  </Text>
+                  <Text className="text-xs leading-normal text-foreground-muted">{"原生差异视图不可用，正在显示原始补丁。"}</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false}>
                     <Text selectable className="font-mono text-xs leading-relaxed text-foreground">
                       {selectedSection?.diff ?? ""}

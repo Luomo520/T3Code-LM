@@ -32,9 +32,7 @@ export function TextAppearancePreview(props: { readonly fontSize: number }) {
       <Text
         className="text-foreground-muted"
         style={{ fontSize: sizes.s, lineHeight: Math.round(sizes.s * 1.4) }}
-      >
-        Messages, labels, and headings scale with this size.
-      </Text>
+      >{"消息、标签和标题将随此字号缩放。"}</Text>
     </View>
   );
 }

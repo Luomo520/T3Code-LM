@@ -1,3 +1,7 @@
+import {
+  DEFAULT_ATTACHMENT_MAX_FILE_SIZE_MIB,
+  MAX_ATTACHMENT_FILE_SIZE_MIB,
+} from "./chatAttachment.ts";
 import { EasDeviceHostConfigs, SimlockDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
 import {
   AuthOrchestrationOperateScope,
@@ -702,8 +706,57 @@ export function makeProviderSettingsSchema<const Fields extends Schema.Struct.Fi
   );
 }
 
+const sub2ApiBillingFields = {
+  billingSource: Schema.optionalKey(Schema.Literals(["environment", "ccSwitch"])).pipe(
+    Schema.annotateKey({
+      title: "余额数据来源",
+      description: "默认沿用当前实例的查询配置；CC Switch 跟随本机 Codex 当前默认供应商。",
+      providerSettingsForm: {
+        control: "select",
+        options: [
+          { value: "environment", label: "当前环境（默认）" },
+          { value: "ccSwitch", label: "CC Switch 默认 Codex 供应商" },
+        ],
+        clearWhenEmpty: "omit",
+      },
+    }),
+  ),
+  billingUrl: Schema.optionalKey(TrimmedString).pipe(
+    Schema.annotateKey({
+      title: "余额查询网址",
+      description: "Sub2API 站点或完整 usage 查询地址；留空时使用实例环境变量中的地址。",
+      providerSettingsForm: {
+        placeholder: "https://telangpuai.com/v1/usage",
+        clearWhenEmpty: "omit",
+      },
+    }),
+  ),
+  billingKey: Schema.optionalKey(Schema.String).pipe(
+    secretSetting,
+    Schema.annotateKey({
+      title: "余额查询 Key",
+      description: "独立查询 Key，不修改模型调用凭据；留空保留已保存的 Key。",
+      providerSettingsForm: { control: "password", clearWhenEmpty: "omit" },
+    }),
+  ),
+  billingRefreshSeconds: Schema.optionalKey(Schema.Literals(["60", "30"])).pipe(
+    Schema.annotateKey({
+      title: "余额查询频率",
+      description: "远程查询默认 60 秒，本地对话用量单独更新。",
+      providerSettingsForm: {
+        control: "select",
+        options: [
+          { value: "60", label: "60 秒（默认）" },
+          { value: "30", label: "30 秒" },
+        ],
+      },
+    }),
+  ),
+};
+
 export const CodexSettings = makeProviderSettingsSchema(
   {
+    ...sub2ApiBillingFields,
     setupMode: Schema.optionalKey(Schema.Literals(["managed", "existing"])).pipe(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
@@ -754,7 +807,16 @@ export const CodexSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
+    order: [
+      "binaryPath",
+      "homePath",
+      "shadowHomePath",
+      "launchArgs",
+      "billingSource",
+      "billingUrl",
+      "billingKey",
+      "billingRefreshSeconds",
+    ],
   },
 );
 export type CodexSettings = typeof CodexSettings.Type;
@@ -783,6 +845,7 @@ const InstanceIdleCompaction = Schema.Literals(
 
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
+    ...sub2ApiBillingFields,
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
@@ -847,7 +910,17 @@ export const ClaudeSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "autoCompactWindow", "idleCompaction", "launchArgs"],
+    order: [
+      "binaryPath",
+      "homePath",
+      "autoCompactWindow",
+      "idleCompaction",
+      "launchArgs",
+      "billingSource",
+      "billingUrl",
+      "billingKey",
+      "billingRefreshSeconds",
+    ],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -1293,6 +1366,15 @@ export class DatabaseReclaimError extends Schema.TaggedError<DatabaseReclaimErro
   }
 }
 
+export class ServerRestartError extends Schema.TaggedError<ServerRestartError>()(
+  "ServerRestartError",
+  { reason: Schema.String },
+) {
+  override get message() {
+    return this.reason;
+  }
+}
+
 export function shouldRecommendDatabaseCompaction(status: DatabaseStorageStatus): boolean {
   return (
     !status.incrementalVacuumEnabled &&
@@ -1356,7 +1438,15 @@ export const CloudSpeechCredentials = Schema.Struct({
   openrouter: CloudSpeechCredential,
 });
 
+export const AttachmentMaxFileSizeMiB = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1),
+  Schema.isLessThanOrEqualTo(MAX_ATTACHMENT_FILE_SIZE_MIB),
+);
+
 export const ServerSettings = Schema.Struct({
+  attachmentMaxFileSizeMiB: AttachmentMaxFileSizeMiB.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_ATTACHMENT_MAX_FILE_SIZE_MIB)),
+  ),
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   providerModelPreferences: Schema.NullOr(ProviderModelPreferences).pipe(
@@ -1842,6 +1932,7 @@ export const ServerSettingsPatch = Schema.Struct({
   worktreesDirectory: Schema.optionalKey(TrimmedString),
   fastWorktreeCheckout: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
+  attachmentMaxFileSizeMiB: Schema.optionalKey(AttachmentMaxFileSizeMiB),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),

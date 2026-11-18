@@ -119,10 +119,8 @@ describe("DesktopRemoteUpdates", () => {
     );
   });
 
-  it.effect("switches to the requested track before preparing its release", () => {
-    // In-memory settings keep the channel write off real disk I/O.
-    const harness = makeHarness({ beforeSetUpdateChannel: Effect.void });
-
+  it.effect("rejects legacy Nightly requests without checking or downloading", () => {
+    const harness = makeHarness();
     return runRemoteUpdatesTest(harness, ({ reports, requests }) =>
       Effect.gen(function* () {
         const updates = yield* DesktopUpdates.DesktopUpdates;
@@ -132,62 +130,54 @@ describe("DesktopRemoteUpdates", () => {
           targetVersion: "1.2.4-nightly.20261027.1",
         });
         yield* settle;
-        assert.equal((yield* updates.getState).channel, "nightly");
-
-        harness.emit("update-available", { version: "1.2.4-nightly.20261027.1" });
-        yield* settle;
-        harness.emit("update-downloaded", { version: "1.2.4-nightly.20261027.1" });
-        yield* settle;
-
-        const terminals = terminalReports(reports);
+        assert.equal((yield* updates.getState).channel, "latest");
+        assert.equal(harness.checkCount(), 0);
+        assert.equal(harness.downloadCount(), 0);
         assert.deepEqual(
-          terminals.map((report) => [report.requestId, report.outcome]),
-          [["req-switch", "ready-to-install"]],
+          terminalReports(reports).map((report) => report.outcome),
+          ["failed"],
         );
-        assert.equal(terminals[0]?.state.downloadedVersion, "1.2.4-nightly.20261027.1");
+        assert.include(terminalReports(reports)[0]?.reason ?? "", "single release channel");
       }),
     );
   });
 
-  it.effect(
-    "refuses a crossing whose feed has only an older build, and never offers it later",
-    () => {
-      const harness = makeHarness({ beforeSetUpdateChannel: Effect.void });
+  it.effect("refuses a numeric build below the explicitly requested release", () => {
+    const harness = makeHarness({ beforeSetUpdateChannel: Effect.void });
 
-      return runRemoteUpdatesTest(harness, ({ reports, requests }) =>
-        Effect.gen(function* () {
-          const updates = yield* DesktopUpdates.DesktopUpdates;
-          const older = "1.2.4-nightly.20261020.1";
-          yield* Queue.offer(requests, {
-            ...request("req-older"),
-            channel: "nightly",
-            targetVersion: "1.2.4-nightly.20261027.1",
-          });
-          yield* settle;
-          // Answers the track change's check, then the request's own check.
-          harness.emit("update-available", { version: older });
-          yield* settle;
-          harness.emit("update-available", { version: older });
-          yield* settle;
+    return runRemoteUpdatesTest(harness, ({ reports, requests }) =>
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        const older = "1.2.4-1";
+        yield* Queue.offer(requests, {
+          ...request("req-older"),
+          channel: "latest",
+          targetVersion: "1.2.4-2",
+        });
+        yield* settle;
+        // Answers the track change's check, then the request's own check.
+        harness.emit("update-available", { version: older });
+        yield* settle;
+        harness.emit("update-available", { version: older });
+        yield* settle;
 
-          assert.deepEqual(
-            terminalReports(reports).map((report) => [report.outcome, report.reason]),
-            [["failed", "The desktop app found no build of 1.2.4-nightly.20261027.1."]],
-          );
-          // The saved track is the user's intent; a retry picks it up from here.
-          assert.equal((yield* updates.getState).channel, "nightly");
+        assert.deepEqual(
+          terminalReports(reports).map((report) => [report.outcome, report.reason]),
+          [["failed", "The desktop app found no build of 1.2.4-2."]],
+        );
+        // The saved track is the user's intent; a retry picks it up from here.
+        assert.equal((yield* updates.getState).channel, "latest");
 
-          // A plain update afterwards cannot reach the build the switch refused.
-          yield* Queue.offer(requests, request("req-plain"));
-          yield* settle;
-          harness.emit("update-available", { version: older });
-          yield* settle;
-          assert.isNull((yield* updates.getState).availableVersion);
-          assert.equal(harness.downloadCount(), 0);
-        }),
-      );
-    },
-  );
+        // A plain update afterwards cannot reach the build the switch refused.
+        yield* Queue.offer(requests, request("req-plain"));
+        yield* settle;
+        harness.emit("update-available", { version: older });
+        yield* settle;
+        assert.isNull((yield* updates.getState).availableVersion);
+        assert.equal(harness.downloadCount(), 0);
+      }),
+    );
+  });
 
   it.effect("only saves the track on a host already running the release", () => {
     const harness = makeHarness({ savedChannel: "nightly" });
@@ -265,7 +255,7 @@ describe("DesktopRemoteUpdates", () => {
           terminalReports(reports).map((report) => report.outcome),
           ["failed"],
         );
-        assert.include(terminalReports(reports)[0]?.reason ?? "", "Switch it on that machine");
+        assert.include(terminalReports(reports)[0]?.reason ?? "", "single release channel");
         assert.equal((yield* updates.getState).channel, "latest");
       }),
     );
@@ -324,16 +314,16 @@ describe("DesktopRemoteUpdates", () => {
     );
   });
 
-  it.effect("accepts a newer build than the checked release on the requested track", () => {
+  it.effect("accepts numeric build 10 after checking build 2 on the fork channel", () => {
     const harness = makeHarness({ beforeSetUpdateChannel: Effect.void });
 
     return runRemoteUpdatesTest(harness, ({ reports, requests }) =>
       Effect.gen(function* () {
-        const newer = "1.2.4-nightly.20261028.2";
+        const newer = "1.2.4-10";
         yield* Queue.offer(requests, {
           ...request("req-newer"),
-          channel: "nightly",
-          targetVersion: "1.2.4-nightly.20261027.1",
+          channel: "latest",
+          targetVersion: "1.2.4-2",
         });
         yield* settle;
         harness.emit("update-available", { version: newer });

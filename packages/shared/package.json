@@ -566,6 +566,10 @@
     "./speech": {
       "types": "./src/speech.ts",
       "import": "./src/speech.ts"
+    },
+    "./forkRelease": {
+      "types": "./src/forkRelease.ts",
+      "import": "./src/forkRelease.ts"
     }
   },
   "scripts": {

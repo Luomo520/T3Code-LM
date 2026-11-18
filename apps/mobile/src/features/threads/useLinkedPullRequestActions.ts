@@ -118,13 +118,13 @@ export function useLinkedPullRequestActions(input: {
     const open = link.snapshot === null || link.snapshot.state === "open";
     const watching = link.watch !== undefined;
     return [
-      { id: "copy", title: "Copy link", image: "link" },
-      { id: "browser", title: "Open in browser", image: "safari" },
+      { id: "copy", title: "复制链接", image: "link" },
+      { id: "browser", title: "在浏览器中打开", image: "safari" },
       ...((watching ? canWatch : canStartWatch) && open
         ? [
             {
               id: "watch",
-              title: watching ? "Stop watching" : "Watch for changes",
+              title: watching ? "停止关注" : "关注变化",
               image: watching ? "eye.slash" : "eye",
             },
           ]
@@ -133,7 +133,7 @@ export function useLinkedPullRequestActions(input: {
         ? [
             {
               id: "unlink",
-              title: link.source === "stack" ? "Dismiss from thread" : "Unlink from thread",
+              title: link.source === "stack" ? "从任务移除" : "取消关联任务",
               image: "xmark",
               attributes: { destructive: true },
             },

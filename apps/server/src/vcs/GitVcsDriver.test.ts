@@ -697,6 +697,40 @@ it.effect("checkpoint recovery discovers nested HEAD independently of inherited 
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
+it.effect.each(["win32", "darwin", "linux"] as const)(
+  "checkpoint durability avoids abandoned batch object directories on $0",
+  (platform) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const liveProcess = yield* VcsProcess.VcsProcess;
+      const driver = yield* GitVcsDriver.makeVcsDriverShape();
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-checkpoint-durability-" });
+      const { git, checkpointRef } = yield* makeCheckpointFixture(driver, cwd);
+      const originalIndex = yield* fs.readFile(path.join(cwd, ".git/index"));
+      const writes: ReadonlyArray<string>[] = [];
+      const captureDriver = yield* GitVcsDriver.makeVcsDriverShape().pipe(
+        Effect.provideService(HostProcess.Platform, platform),
+        Effect.provideService(VcsProcess.VcsProcess, {
+          run: (input) => {
+            if (input.args.includes("core.fsync=objects,reference")) writes.push(input.args);
+            return liveProcess.run(input);
+          },
+        }),
+      );
+      yield* captureDriver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+      assert.lengthOf(writes, 4);
+      for (const args of writes) {
+        assert.include(args, "core.fsyncMethod=fsync");
+        assert.strictEqual(args.includes("core.fsyncMethod=batch"), platform === "darwin");
+      }
+      assert.strictEqual((yield* git(["show", `${checkpointRef}:file.txt`])).stdout, "unstaged\n");
+      assert.deepEqual(yield* fs.readFile(path.join(cwd, ".git/index")), originalIndex);
+      const objects = yield* fs.readDirectory(path.join(cwd, ".git/objects"));
+      assert.isFalse(objects.some((entry) => entry.startsWith("tmp_objdir-")));
+    }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+);
+
 it.effect("checkpoint capture still fails when a clean filter rejects a file", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;

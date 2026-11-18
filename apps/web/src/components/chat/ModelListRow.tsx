@@ -49,6 +49,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
       disabled={Boolean(props.disabledReason)}
       className={cn(
         "group relative w-full !min-w-0 max-w-full cursor-pointer",
+        props.isSelected && "bg-foreground/[0.08]",
         props.disabledReason &&
           "data-disabled:pointer-events-auto data-disabled:cursor-not-allowed",
       )}
@@ -95,7 +96,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
         ) : null}
         {props.unavailable ? (
           <Badge variant="outline" size="sm">
-            Unavailable
+            不可用
           </Badge>
         ) : null}
       </div>
@@ -115,13 +116,13 @@ export const ModelListRow = memo(function ModelListRow(props: {
                   event.stopPropagation();
                 }}
                 disabled={Boolean(props.disabledReason)}
-                aria-label={props.isFavorite ? "Remove from favorites" : "Add to favorites"}
+                aria-label={props.isFavorite ? "取消收藏" : "收藏"}
               >
                 <StarIcon
                   className={cn(
                     "size-3.5 sm:size-3",
                     props.isFavorite && "fill-current text-warning",
-                    (!props.isFavorite || props.favoriteStarOnHover) &&
+                    false &&
                       "opacity-0 group-hover:opacity-100 group-data-highlighted:opacity-100 in-focus-visible:opacity-100 pointer-coarse:opacity-100",
                   )}
                 />
@@ -129,7 +130,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
             }
           />
           <TooltipPopup side="top" align="center">
-            {props.isFavorite ? "Remove from favorites" : "Add to favorites"}
+            {props.isFavorite ? "取消收藏" : "收藏"}
           </TooltipPopup>
         </Tooltip>
         {props.jumpLabel ? <Kbd>{props.jumpLabel}</Kbd> : null}

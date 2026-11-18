@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 import {
-  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  MAX_FILE_ATTACHMENT_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES,
 } from "./chatAttachment.ts";
@@ -29,6 +29,7 @@ export const AssetResource = Schema.Union([
   Schema.TaggedStruct("workspace-file", {
     threadId: ThreadId,
     path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+    disposition: Schema.optionalKey(Schema.Literal("attachment")),
   }),
   Schema.TaggedStruct("media-file", {
     threadId: ThreadId,
@@ -38,6 +39,7 @@ export const AssetResource = Schema.Union([
     hostOnly: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.TaggedStruct("draft-workspace-file", {
+    disposition: Schema.optionalKey(Schema.Literal("attachment")),
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
     path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
@@ -86,6 +88,8 @@ export const AssetImageDimensions = Schema.Struct({
 export type AssetImageDimensions = typeof AssetImageDimensions.Type;
 
 export const AssetCreateUrlResult = Schema.Struct({
+  download: Schema.optionalKey(Schema.Boolean),
+  fileName: Schema.optionalKey(Schema.String),
   relativeUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
   expiresAt: Schema.Number,
   sourcePath: Schema.optional(
@@ -115,7 +119,7 @@ const FileAttachmentCreateUploadUrlInput = Schema.Struct({
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
   sizeBytes: NonNegativeInt.check(
     Schema.isGreaterThanOrEqualTo(1),
-    Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES),
+    Schema.isLessThanOrEqualTo(MAX_FILE_ATTACHMENT_BYTES),
   ),
 });
 
@@ -336,3 +340,12 @@ export const AssetAccessError = Schema.Union([
   AssetSigningKeyLoadError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;
+
+export class AttachmentUploadLimitError extends Schema.TaggedError<AttachmentUploadLimitError>()(
+  "AttachmentUploadLimitError",
+  { maxUploadBytes: Schema.Number },
+) {
+  override get message(): string {
+    return "单个附件超过环境设置的 " + this.maxUploadBytes / (1024 * 1024) + " MiB 上限。";
+  }
+}

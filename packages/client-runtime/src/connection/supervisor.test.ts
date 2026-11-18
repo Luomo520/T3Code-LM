@@ -962,6 +962,37 @@ describe("EnvironmentSupervisor", () => {
     }),
   );
 
+  it.effect("reuses the successful LAN on the next background recovery", () =>
+    Effect.gen(function* () {
+      const other = new BearerConnectionTarget({ ...LAN_TARGET, connectionId: "bearer:lan2" });
+      const entry = entryWithRoutes(LAN_THEN_RELAY_ENTRY, [
+        LAN_ROUTE,
+        { target: other, profile: LAN_ROUTE.profile },
+      ]);
+      const attempted: string[] = [];
+      const harness = yield* makeHarness({
+        probe: () => Effect.fail(transient("stale background socket")),
+        prepare: (_attempt, target) => {
+          const id = connectionRouteId(target);
+          attempted.push(id);
+          return id === LAN_TARGET.connectionId
+            ? Effect.fail(transient())
+            : Effect.succeed(preparedFor(target));
+        },
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(entry, { initiallyDesired: true }).pipe(
+        Effect.provide(harness.dependencies),
+      );
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* harness.wake("application-active-long");
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      expect(attempted).toEqual([LAN_TARGET.connectionId, other.connectionId, other.connectionId]);
+    }),
+  );
+
   it.effect("keeps a live mobile session after a long background resume", () =>
     Effect.gen(function* () {
       const probeCount = yield* Ref.make(0);

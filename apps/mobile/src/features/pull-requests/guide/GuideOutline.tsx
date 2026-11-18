@@ -24,22 +24,21 @@ export function GuideOutline({
     <View>
       <View className="mb-5 flex-row items-center justify-between">
         <View className="flex-row items-baseline gap-2">
-          <Text className="text-base font-t3-semibold">{guide.stops.length} stops</Text>
-          <Text className="text-sm text-foreground-muted">
-            through {files.size} {files.size === 1 ? "file" : "files"}
+          <Text className="text-base font-t3-semibold">{guide.stops.length}{"站"}</Text>
+          <Text className="text-sm text-foreground-muted">{"涵盖"}{files.size} {files.size === 1 ? "file" : "files"}
           </Text>
         </View>
         <Menu
-          title="Guide options"
+          title="指南选项"
           actions={[
             {
               id: "word-wrap",
-              title: "Word wrap",
+              title: "自动换行",
               image: "text.alignleft",
               state: appearance.codeWordBreak ? "on" : "off",
             },
             ...(onRewrite
-              ? [{ id: "rewrite", title: "Rewrite guide", image: "arrow.clockwise" }]
+              ? [{ id: "rewrite", title: "重写指南", image: "arrow.clockwise" }]
               : []),
           ]}
           onPressAction={({ nativeEvent }) =>
@@ -50,7 +49,7 @@ export function GuideOutline({
         >
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Guide options"
+            accessibilityLabel="指南选项"
             className="h-11 w-11 items-center justify-center rounded-full active:bg-grouped-card"
           >
             <SymbolView name="ellipsis" size={20} tintColorClassName="accent-icon-muted" />
@@ -102,7 +101,7 @@ export function GuideOutline({
       })}
       {guide.stops.length ? (
         <View className="self-end">
-          <Button label="Start tour" tone="text" onPress={() => onOpen(0)} icon="arrow.right" />
+          <Button label="开始导览" tone="text" onPress={() => onOpen(0)} icon="arrow.right" />
         </View>
       ) : null}
     </View>

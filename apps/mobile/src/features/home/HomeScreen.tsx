@@ -1,3 +1,12 @@
+import { relativeTime } from "../../lib/time";
+import { useAtomSet } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { arrangeHomeList, homeConversationTimestamp, type ProjectHeading } from "./homeListView";
+import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { Pressable } from "react-native";
 import { useContentTopInset } from "../../components/ui/useBarInset";
 import { usePaneRole } from "../../components/ui/Pane";
 import { ScreenContent } from "../../components/ui/ScreenContent";
@@ -191,6 +200,28 @@ function renderHomeScrollView(props: ScrollViewProps) {
 }
 
 export function HomeScreen(props: HomeScreenProps) {
+  const homePreferences = useAtomValue(mobilePreferencesAtom);
+  const saveHomePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const homeView = AsyncResult.isSuccess(homePreferences)
+    ? (homePreferences.value.homeThreadView ?? "projects")
+    : "projects";
+  const collapsedProjects = new Set(
+    AsyncResult.isSuccess(homePreferences)
+      ? (homePreferences.value.homeCollapsedProjects ?? [])
+      : [],
+  );
+  const toggleProject = (key: string) => {
+    if (hasSearchQuery) return;
+    openSwipeableRef.current?.close();
+    saveHomePreferences({
+      transform: (current) => ({
+        homeCollapsedProjects: current.homeCollapsedProjects?.includes(key)
+          ? current.homeCollapsedProjects.filter((value) => value !== key)
+          : [...(current.homeCollapsedProjects ?? []), key],
+      }),
+    });
+  };
+
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const workspace = useWorkspaceTabs();
   const [initialScrollOffset] = useState(() => workspace?.getScrollOffset("threads") ?? 0);
@@ -446,13 +477,79 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     onSelectThread(thread);
   };
-  useThreadJumpShortcuts(threadListV2Items, selectThread);
+  const projectScopeKeyByProjectKey = new Map(projectScopes.flatMap((scope) => scope.projectRefs.map((ref) => [scopedProjectKey(ref.environmentId, ref.projectId), scope.key] as const)));
+  const effectiveCollapsedProjects = hasSearchQuery
+    ? new Set<string>()
+    : new Set(collapsedProjects);
+  // Keep the selected conversation visible in tablet/sidebar layouts.
+  for (const row of threadListV2Items) {
+    if (row.type !== "v2-thread") continue;
+    const thread = row.item.thread;
+    if (scopedThreadKey(thread.environmentId, thread.id) !== selectedThreadKey) continue;
+    const key = scopedProjectKey(thread.environmentId, thread.projectId);
+    effectiveCollapsedProjects.delete(projectScopeKeyByProjectKey.get(key) ?? key);
+  }
+  const displayedItems = arrangeHomeList({
+    rows: threadListV2Items
+      .filter((row) => row.type === "v2-thread" || row.type === "v2-pending")
+      .map((row) => {
+        if (row.type !== "v2-thread") return row;
+        const timestamp = homeConversationTimestamp(row.item.thread);
+        return {
+          ...row,
+          timeLabel: Number.isFinite(timestamp)
+            ? relativeTime(new Date(timestamp).toISOString())
+            : "",
+        };
+      }),
+    mode: homeView,
+    collapsed: effectiveCollapsedProjects,
+    describe: (row) => {
+      if (row.type !== "v2-thread") return null;
+      const thread = row.item.thread;
+      const key = scopedProjectKey(thread.environmentId, thread.projectId);
+      return {
+        projectKey: projectScopeKeyByProjectKey.get(key) ?? key,
+        title: v2ProjectTitleByProjectKey.get(key) ?? projectByKey.get(key)?.title ?? "未命名项目",
+        timestamp: homeConversationTimestamp(thread),
+        pinned: row.item.pinned,
+      };
+    },
+  });
+
+  useThreadJumpShortcuts(displayedItems.filter((item) => item.type !== "home-project"), selectThread);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the list's visible range after commit to enable swipe gestures on those rows
   useEffect(() => {
     if (swipeEnabled) activateVisibleRows(threadListV2Items);
   }, [activateVisibleRows, swipeEnabled, threadListV2Items]);
 
-  const renderV2Item = ({ item }: { readonly item: ThreadListV2ListItem }) => {
+  const renderV2Item = ({ item }: { readonly item: ThreadListV2ListItem | ProjectHeading }) => {
+    if (item.type === "home-project")
+      return (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${item.title}，${item.count}个会话`}
+          accessibilityState={{ expanded: item.expanded, disabled: hasSearchQuery }}
+          disabled={hasSearchQuery}
+          onPress={() => toggleProject(item.projectKey)}
+          className="min-h-12 flex-row items-center gap-2 px-5 py-2"
+        >
+          <SymbolView
+            name={item.expanded ? "chevron.down" : "chevron.right"}
+            size={12}
+            tintColorClassName="accent-icon-muted"
+          />
+          <SymbolView name="folder" size={16} tintColorClassName="accent-icon-muted" />
+          <Text
+            className="min-w-0 flex-1 text-[13px] font-t3-medium text-foreground-muted"
+            numberOfLines={1}
+          >
+            {item.title}
+          </Text>
+          <Text className="text-xs text-foreground-muted">{item.count}</Text>
+        </Pressable>
+      );
+
     if (item.type === "v2-pending") {
       const pendingScopeKey = scopedProjectKey(
         item.pendingTask.environmentId,
@@ -522,6 +619,7 @@ export function HomeScreen(props: HomeScreenProps) {
     const thread = item.item.thread;
     return (
       <ThreadListV2Row
+        groupedByProject={homeView === "projects"}
         pane={sidebarSurface ? "sidebar" : "screen"}
         selected={scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey}
         fullSwipeWidth={fullSwipeWidth}
@@ -762,16 +860,34 @@ export function HomeScreen(props: HomeScreenProps) {
                 onTouchEnd={(event) => trackListTouches(event, false)}
                 onTouchCancel={(event) => trackListTouches(event, false)}
                 renderScrollComponent={Platform.OS === "ios" ? renderHomeScrollView : undefined}
-                data={threadListV2Items}
+                data={displayedItems}
                 renderItem={renderV2Item}
-                keyExtractor={v2KeyExtractor}
+                keyExtractor={(item) => item.key}
                 getItemType={(item) => item.type}
-                itemsAreEqual={threadListV2ListItemsAreEqual}
+                itemsAreEqual={(a, b) => a.type === "home-project" || b.type === "home-project" ? a === b : threadListV2ListItemsAreEqual(a, b)}
                 estimatedItemSize={ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT}
                 drawDistance={THREAD_LIST_V2_DRAW_DISTANCE}
                 recycleItems
                 extraData={v2ExtraData}
-                ListHeaderComponent={v2ListHeader}
+                ListHeaderComponent={<>      <View className="min-h-11 flex-row items-center justify-end px-4 py-1">
+        <ListFilterMenu
+          label={homeView === "projects" ? "按项目" : "按时间"}
+          accessibilityLabel="会话排列方式"
+          actions={[
+            { id: "projects", title: "按项目", state: homeView === "projects" ? "on" : "off" },
+            { id: "time", title: "按时间", state: homeView === "time" ? "on" : "off" },
+          ]}
+          onSelect={(id) => {
+            if ((id === "projects" || id === "time") && id !== homeView) {
+              openSwipeableRef.current?.close();
+              saveHomePreferences({ homeThreadView: id });
+              workspace?.recordScrollOffset("threads", 0);
+              listRef.current?.scrollToOffset({ offset: 0, animated: false });
+            }
+          }}
+        />
+      </View>
+{v2ListHeader}</>}
                 // Lifted above the rows so an iOS filter menu's dismissal morph is not covered.
                 ListHeaderComponentStyle={{ zIndex: 1 }}
                 ListFooterComponent={

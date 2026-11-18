@@ -96,7 +96,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
       : null,
   );
 
-  const currentBranchLabel = gitStatus.data?.refName ?? selectedThread?.branch ?? "Detached HEAD";
+  const currentBranchLabel = gitStatus.data?.refName ?? selectedThread?.branch ?? "分离 HEAD";
   const currentStatusSummary = statusSummary(gitStatus.data);
   const currentWorktreePath = selectedThreadWorktreePath;
   const gitOperationLabel = gitState.gitOperationLabel;
@@ -255,7 +255,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         {behindCount > 0 ? (
           <ListRow
             icon="arrow.down.circle"
-            label="Pull latest"
+            label="拉取最新内容"
             description={
               canWriteSourceControl
                 ? `${behindCount} commit${behindCount === 1 ? "" : "s"} behind upstream`
@@ -267,8 +267,8 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         ) : null}
         <ListRow
           icon="text.bubble"
-          label="Review changes"
-          description="Inspect changes, uncommitted edits, and turn diffs"
+          label="检查更改"
+          description="检查更改、未提交修改与轮次差异"
           disabled={busy || !isRepo}
           onPress={() => {
             const params = { environmentId, threadId };
@@ -283,7 +283,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         />
         <ListRow
           icon="point.topleft.down.curvedto.point.bottomright.up"
-          label="Branches & worktrees"
+          label="分支与工作树"
           description={
             canChangeThreadBranch
               ? "Switch branch, create branch, or move to a worktree"
@@ -325,7 +325,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
       ) : null}
 
       {currentWorktreePath ? (
-        <ListSection title="Worktree">
+        <ListSection title="工作树">
           <Text selectable textRole="footnote" className="p-4 text-foreground-muted">
             {currentWorktreePath}
           </Text>
@@ -335,7 +335,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
   );
 
   const refresh = {
-    accessibilityLabel: "Refresh repository status",
+    accessibilityLabel: "刷新仓库状态",
     disabled: busy || isRefreshing,
     onPress: () => void handleRefresh(),
   };

@@ -215,7 +215,8 @@ class T3WorkspaceNavigationView(
       modifier = Modifier.fillMaxSize().padding(8.dp),
       shape = CircleShape,
       color = Color(containerColor),
-      shadowElevation = 6.dp,
+      // The React Native glass backdrop supplies depth; keep this overlay transparent.
+      shadowElevation = 0.dp,
     ) {
       Row(
         modifier = Modifier.fillMaxSize().selectableGroup(),

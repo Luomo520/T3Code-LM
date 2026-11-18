@@ -69,6 +69,7 @@ import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimi
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { CODEX_NATIVE_SUBAGENTS_ONLY, isNativeOnlyCodexTarget } from "./codexSubagentPolicy.ts";
 import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
@@ -807,8 +808,29 @@ const make = Effect.gen(function* () {
     }
   };
 
+  const assertNativeSubagentCreation = Effect.fn(
+    "orchestrationV2.threadManagement.assertNativeSubagentCreation",
+  )(function* (command: OrchestrationV2ServerCommand) {
+    if (
+      command.type !== "delegated_task.request" &&
+      !(command.type === "thread.create" && command.delegatedFrom !== undefined)
+    )
+      return;
+    // Receipt replay returns accepted work; it must not create a second child.
+    if (yield* hasReceipt(command.commandId)) return;
+    const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+    if (isNativeOnlyCodexTarget({ instanceId: command.modelSelection.instanceId, settings })) {
+      return yield* new Orchestrator.OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: new Error(CODEX_NATIVE_SUBAGENTS_ONLY),
+      });
+    }
+  });
+
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
-    ensureCommandTranscripts(command).pipe(
+    assertNativeSubagentCreation(command).pipe(
+      Effect.andThen(ensureCommandTranscripts(command)),
       Effect.andThen(assertDispatchTargetEnabled(command)),
       Effect.andThen(orchestrator.dispatch(command)),
     );

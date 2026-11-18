@@ -1,0 +1,94 @@
+diff --git a/dist/common/bundler/css-compiler/compileTailwind.js b/dist/common/bundler/css-compiler/compileTailwind.js
+index 5c464e06c6f087329143f00e7925dae3d7ca165c..45b43ccddd6b4063a711ccb398e8bb377358290f 100644
+--- a/dist/common/bundler/css-compiler/compileTailwind.js
++++ b/dist/common/bundler/css-compiler/compileTailwind.js
+@@ -16,11 +16,11 @@ const compileTailwind = async (bundlerConfig, onDependency = () => void 0) => {
+     onDependency
+   });
+   const scanner = new _oxide.Scanner({
+-    sources: [...compiler.sources, {
++    sources: [...compiler.sources, ...(compiler.root === "none" ? [] : [{
+       negated: false,
+       pattern: "**/*",
+       base: _path.default.dirname(bundlerConfig.cssPath)
+-    }]
++    }])]
+   });
+   return compiler.build(scanner.scan());
+ };
+diff --git a/dist/metro/transformer.cjs b/dist/metro/transformer.cjs
+index a6212f1d4454c3d0197a8f3146238b3cf6e6d33e..0d6665becf6bb7415165601fca2da5e19a1792b7 100644
+--- a/dist/metro/transformer.cjs
++++ b/dist/metro/transformer.cjs
+@@ -1887,11 +1887,12 @@ const compileTailwind = async (bundlerConfig, onDependency = () => void 0) => {
+   const scanner = new oxide.Scanner({
+     sources: [
+       ...compiler.sources,
+-      {
++      // Respect explicit @source entries when automatic detection is disabled.
++      ...(compiler.root === "none" ? [] : [{
+         negated: false,
+         pattern: "**/*",
+         base: path__default.dirname(bundlerConfig.cssPath)
+-      }
++      }])
+     ]
+   });
+   return compiler.build(scanner.scan());
+diff --git a/dist/metro/transformer.mjs b/dist/metro/transformer.mjs
+index 9183ecc536d8861f880ccff5aa3a8ed121253316..37755bb4bad72ea074651497f61135e6ebb0253c 100644
+--- a/dist/metro/transformer.mjs
++++ b/dist/metro/transformer.mjs
+@@ -1880,11 +1880,12 @@ const compileTailwind = async (bundlerConfig, onDependency = () => void 0) => {
+   const scanner = new Scanner({
+     sources: [
+       ...compiler.sources,
+-      {
++      // Respect explicit @source entries when automatic detection is disabled.
++      ...(compiler.root === "none" ? [] : [{
+         negated: false,
+         pattern: "**/*",
+         base: path.dirname(bundlerConfig.cssPath)
+-      }
++      }])
+     ]
+   });
+   return compiler.build(scanner.scan());
+diff --git a/dist/module/bundler/css-compiler/compileTailwind.js b/dist/module/bundler/css-compiler/compileTailwind.js
+index 5c14a2d7a0c383e1b18f9526128bf75ca94eb022..e288a9a72b5bbf7f52c17fc37b7d53f75cb74533 100644
+--- a/dist/module/bundler/css-compiler/compileTailwind.js
++++ b/dist/module/bundler/css-compiler/compileTailwind.js
+@@ -11,11 +11,12 @@ export const compileTailwind = async (bundlerConfig, onDependency = () => void 0
+   const scanner = new Scanner({
+     sources: [
+       ...compiler.sources,
+-      {
++      // Respect explicit @source entries when automatic detection is disabled.
++      ...(compiler.root === "none" ? [] : [{
+         negated: false,
+         pattern: "**/*",
+         base: path.dirname(bundlerConfig.cssPath)
+-      }
++      }])
+     ]
+   });
+   return compiler.build(scanner.scan());
+diff --git a/src/bundler/css-compiler/compileTailwind.ts b/src/bundler/css-compiler/compileTailwind.ts
+index 2bf9cf6b5e791ba01b971f9b4cac984f9fcf616f..091c94564e4773eb9dc85e1309c3ab66d8304d8b 100644
+--- a/src/bundler/css-compiler/compileTailwind.ts
++++ b/src/bundler/css-compiler/compileTailwind.ts
+@@ -16,11 +16,12 @@ export const compileTailwind = async (
+     const scanner = new Scanner({
+         sources: [
+             ...compiler.sources,
+-            {
++            // Respect explicit @source entries when automatic detection is disabled.
++            ...(compiler.root === 'none' ? [] : [{
+                 negated: false,
+                 pattern: '**/*',
+                 base: path.dirname(bundlerConfig.cssPath),
+-            },
++            }]),
+         ],
+     })
+ 

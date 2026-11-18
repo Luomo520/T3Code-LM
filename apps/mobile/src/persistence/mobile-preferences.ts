@@ -130,6 +130,8 @@ export interface Preferences {
   readonly threadListSnoozedShelfExpanded?: boolean;
   readonly threadListWorkingShelfExpanded?: boolean;
   readonly threadListFilters?: ThreadListFilters;
+  readonly homeThreadView?: "time" | "projects";
+  readonly homeCollapsedProjects?: readonly string[];
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
 }
@@ -213,6 +215,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
     threadListFilters?: ThreadListFilters;
+    homeThreadView?: "time" | "projects";
+    homeCollapsedProjects?: readonly string[];
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
   } = {};
@@ -357,6 +361,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.threadListWorkingShelfExpanded === "boolean") {
     preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;
   }
+  if (parsed.homeThreadView === "time" || parsed.homeThreadView === "projects")
+    preferences.homeThreadView = parsed.homeThreadView;
+  if (Array.isArray(parsed.homeCollapsedProjects))
+    preferences.homeCollapsedProjects = parsed.homeCollapsedProjects.filter(
+      (key): key is string => typeof key === "string",
+    );
   if (isThreadListFilters(parsed.threadListFilters)) {
     preferences.threadListFilters = parsed.threadListFilters;
   }

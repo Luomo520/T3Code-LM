@@ -100,10 +100,10 @@ export function T3ConnectProfilePage() {
       traceId
         ? [
             {
-              text: "Copy trace ID",
+              text: "复制跟踪 ID",
               onPress: () => copyTextWithHaptic(traceId, { target: "connection-trace-id" }),
             },
-            { text: "OK", style: "cancel" },
+            { text: "确定", style: "cancel" },
           ]
         : undefined,
     );
@@ -133,17 +133,17 @@ export function T3ConnectProfilePage() {
         />
       }
     >
-      <ClerkSectionHeader>Registered servers</ClerkSectionHeader>
+      <ClerkSectionHeader>{"已注册服务端"}</ClerkSectionHeader>
 
       {environmentsState.error ? (
         <>
           <ClerkRow
-            title="Could not load T3 Connect environments"
+            title="无法加载 T3 Connect 环境"
             subtitle={environmentsState.error}
           />
           {errorTraceId ? (
             <ClerkButtonRow
-              label="Copy trace ID"
+              label="复制跟踪 ID"
               onPress={() => {
                 copyTextWithHaptic(errorTraceId, { target: "connection-trace-id" });
               }}
@@ -153,7 +153,7 @@ export function T3ConnectProfilePage() {
       ) : isInitialLoad ? (
         <View className="flex-row items-center gap-3 px-6 py-4">
           <AppActivityIndicator colorClassName={"accent-clerk-foreground-muted"} size="small" />
-          <Text className="text-base text-clerk-foreground-muted">Loading environments</Text>
+          <Text className="text-base text-clerk-foreground-muted">{"正在加载环境"}</Text>
         </View>
       ) : environments.length > 0 ? (
         environments.map((environment) => (
@@ -197,20 +197,18 @@ export function T3ConnectProfilePage() {
         ))
       ) : (
         <ClerkRow
-          title="No servers registered"
-          subtitle="Link a server from its local Settings to reach it through T3 Connect."
+          title="尚未注册服务端"
+          subtitle="在服务端的本地设置中关联账号，即可通过 T3 Connect 连接。"
         />
       )}
 
-      <Text className="px-6 pt-6 text-xs leading-normal text-clerk-foreground-muted">
-        Connections on this device are managed in Settings.
-      </Text>
+      <Text className="px-6 pt-6 text-xs leading-normal text-clerk-foreground-muted">{"请在设置中管理此设备上的连接。"}</Text>
     </ScrollView>
   );
 }
 
 const ENVIRONMENT_MENU_ACTIONS = [
-  { id: "deregister", title: "Deregister", image: "trash", attributes: { destructive: true } },
+  { id: "deregister", title: "注销", image: "trash", attributes: { destructive: true } },
 ] satisfies MenuAction[];
 
 function ClerkSectionHeader(props: { readonly children: string }) {

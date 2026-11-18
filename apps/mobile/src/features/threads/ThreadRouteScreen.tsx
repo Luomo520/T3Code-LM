@@ -110,6 +110,7 @@ import {
   threadRouteOpensDraft,
 } from "./thread-route-hydration";
 import { ThreadHeader } from "./ThreadHeader";
+import { HeaderUsageStats } from "../usage/HeaderUsageStats";
 import { resumeThread } from "./resume-thread";
 import {
   useAndroidWorkspaceBack,
@@ -190,7 +191,7 @@ function ThreadUnavailableScreen(props: {
         className="bg-screen flex-1 android:bg-transparent"
       >
         <EmptyState
-          title="Thread unavailable"
+          title="任务不可用"
           detail="This thread is not available in the current mobile snapshot."
           actionLabel={props.actionLabel}
           onAction={props.onAction}
@@ -831,10 +832,7 @@ function ThreadRouteContent(
     try {
       await recoverFailedThreadDraft(creation);
     } catch (error) {
-      Dialog.alert(
-        "Could not restore draft",
-        error instanceof Error ? error.message : String(error),
-      );
+      Dialog.alert("无法恢复草稿", error instanceof Error ? error.message : String(error));
       return;
     }
     clearPendingThreadCreationOutcome(routeThreadIdentity);
@@ -976,6 +974,7 @@ function ThreadRouteContent(
           header={
             props.inspectorPresentation ? null : (
               <ThreadHeader
+                headerUsage={<HeaderUsageStats environmentId={selectedThread.environmentId} threadId={selectedThread.id} providerInstanceId={(composer.modelSelection ?? selectedThread.modelSelection)?.instanceId} />}
                 title={selectedThread.title}
                 subtitle={headerSubtitle}
                 gitControls={threadGitControlProps}

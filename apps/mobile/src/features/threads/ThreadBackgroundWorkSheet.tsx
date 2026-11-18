@@ -49,9 +49,7 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}
     >
       {presentation === null ? (
-        <Text className="pt-6 text-center text-sm text-foreground-muted">
-          Nothing running in the background.
-        </Text>
+        <Text className="pt-6 text-center text-sm text-foreground-muted">{"没有后台运行的工作。"}</Text>
       ) : (
         presentation.items.map((item) => (
           <BackgroundWorkRow key={item.taskId} item={item} onOpen={openThread} />
@@ -61,7 +59,7 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
   );
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <SheetHeader title="Background work" onClose={() => navigation.goBack()} />
+      <SheetHeader title="后台工作" onClose={() => navigation.goBack()} />
       <ScreenContent>{content}</ScreenContent>
     </View>
   );

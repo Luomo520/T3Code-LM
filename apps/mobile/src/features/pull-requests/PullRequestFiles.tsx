@@ -117,8 +117,7 @@ function FileRow(props: {
           </Text>
         ) : null}
         {file.previousPath ? (
-          <Text textRole="caption" className="text-foreground-muted" numberOfLines={1}>
-            Renamed from {file.previousPath}
+          <Text textRole="caption" className="text-foreground-muted" numberOfLines={1}>{"重命名自"}{file.previousPath}
           </Text>
         ) : null}
       </View>
@@ -158,11 +157,11 @@ function FileRowSkeleton(props: { readonly index: number }) {
 function FileFilterMenu({ filter }: { readonly filter: ChangedFiles["filter"] }) {
   return (
     <Menu
-      title="Review files"
+      title="审查文件"
       actions={[
         {
           id: "hide-tests",
-          title: "Hide test files",
+          title: "隐藏测试文件",
           image: "line.3.horizontal.decrease",
           state: filter.hideTestFiles ? "on" : "off",
         },
@@ -172,7 +171,7 @@ function FileFilterMenu({ filter }: { readonly filter: ChangedFiles["filter"] })
       <View pointerEvents="none">
         <IconButton
           icon="line.3.horizontal.decrease"
-          accessibilityLabel="Filter review files"
+          accessibilityLabel="筛选审查文件"
           selected={filter.hideTestFiles}
         />
       </View>
@@ -187,15 +186,13 @@ function NoVisibleFiles({ files }: { readonly files: ChangedFiles }) {
       <EmptyState
         title={diff.nextCursor ? "No non-test files loaded yet" : "Only test files changed"}
         detail="Test files are hidden from this review."
-        action={<Button label="Show test files" tone="contrast" onPress={filter.showAll} />}
+        action={<Button label="显示测试文件" tone="contrast" onPress={filter.showAll} />}
         variant="plain"
       />
     ) : null;
   }
   return !diff.isPending && !diff.error ? (
-    <Text textRole="footnote" className="py-6 text-foreground-muted">
-      No text changes available.
-    </Text>
+    <Text textRole="footnote" className="py-6 text-foreground-muted">{"没有文本更改。"}</Text>
   ) : null;
 }
 
@@ -265,15 +262,15 @@ export function usePullRequestFilesSection(params: PullRequestParams) {
         <PullRequestReadStatus pending={false} error={diff.error} terminology={files.terminology} />
         {loading ? (
           <View
-            accessibilityLabel="Loading changed files"
+            accessibilityLabel="正在加载更改的文件"
             accessibilityState={{ busy: true }}
             className="min-h-17 flex-row items-center gap-2 py-3"
           >
             <View className="min-w-0 flex-1 gap-1">
-              <PullRequestSectionHeading>Changed files</PullRequestSectionHeading>
+              <PullRequestSectionHeading>{"已更改的文件"}</PullRequestSectionHeading>
               {pr ? (
                 <Text textRole="caption" className="text-foreground-muted">
-                  {pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}
+                  {pr.changedFiles} {pr.changedFiles === 1 ? "个文件" : "个文件"}
                 </Text>
               ) : (
                 <View className="h-2.5 w-28 rounded bg-subtle-strong" />
@@ -297,7 +294,7 @@ export function usePullRequestFilesSection(params: PullRequestParams) {
         ) : parsed.kind === "files" ? (
           <View className="min-h-17 flex-row items-center gap-2 py-3">
             <View className="min-w-0 flex-1 gap-1">
-              <PullRequestSectionHeading>Changed files</PullRequestSectionHeading>
+              <PullRequestSectionHeading>{"已更改的文件"}</PullRequestSectionHeading>
               <Text textRole="caption" className="text-foreground-muted">
                 {describeFiles(parsed, files)}
               </Text>
@@ -412,17 +409,17 @@ export function PullRequestFilesSheet({ route }: StaticScreenProps<PullRequestDi
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       <SheetHeader
-        title="Changed files"
+        title="已更改的文件"
         subtitle={`#${params.number} · ${params.commit?.slice(0, 7) ?? params.repository}`}
         onClose={() => navigation.goBack()}
         menus={[
           {
-            title: "Filter review files",
+            title: "筛选审查文件",
             icon: "line.3.horizontal.decrease",
             items: [
               {
                 id: "hide-tests",
-                title: "Hide test files",
+                title: "隐藏测试文件",
                 icon: "line.3.horizontal.decrease",
                 selected: filter.hideTestFiles,
                 onPress: filter.toggle,
@@ -498,7 +495,7 @@ export function PullRequestFilesSheet({ route }: StaticScreenProps<PullRequestDi
             loading ? (
               <View
                 accessible
-                accessibilityLabel="Loading changed files"
+                accessibilityLabel="正在加载更改的文件"
                 accessibilityState={{ busy: true }}
               >
                 {Array.from({ length: loadingRowCount(files) }, (_, index) => (

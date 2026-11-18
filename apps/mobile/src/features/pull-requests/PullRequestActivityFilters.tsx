@@ -14,14 +14,14 @@ export function PullRequestActivityFilters({
   readonly hiddenCount: number;
 }) {
   const kinds = [
-    { id: "all", title: "All activity" },
-    { id: "comments", title: "Comments" },
-    { id: "commits", title: "Commits" },
+    { id: "all", title: "所有活动" },
+    { id: "comments", title: "评论" },
+    { id: "commits", title: "提交" },
   ] as const;
   return (
     <View className="mb-4 flex-row items-center justify-between gap-3">
       <Menu
-        title="Activity"
+        title="活动"
         actions={kinds.map((kind) => ({ ...kind, state: value.kind === kind.id ? "on" : "off" }))}
         onPressAction={({ nativeEvent }) => {
           const kind = kinds.find((item) => item.id === nativeEvent.event);
@@ -41,12 +41,12 @@ export function PullRequestActivityFilters({
       </Menu>
       <View className="flex-row items-center gap-3">
         <Menu
-          title="Show in activity"
+          title="在活动中显示"
           actions={[
-            { id: "bots", title: "Bot comments", state: value.bots ? "on" : "off" },
+            { id: "bots", title: "机器人评论", state: value.bots ? "on" : "off" },
             {
               id: "resolved",
-              title: "Resolved or dismissed",
+              title: "已解决或已忽略",
               state: value.resolved ? "on" : "off",
             },
           ]}
@@ -61,7 +61,7 @@ export function PullRequestActivityFilters({
             className="min-h-11 flex-row items-center gap-1.5 active:opacity-60"
           >
             {hiddenCount > 0 ? (
-              <Text className="text-xs text-foreground-muted">{hiddenCount} hidden</Text>
+              <Text className="text-xs text-foreground-muted">{hiddenCount}{"已隐藏"}</Text>
             ) : null}
             <SymbolView
               name="line.3.horizontal.decrease"

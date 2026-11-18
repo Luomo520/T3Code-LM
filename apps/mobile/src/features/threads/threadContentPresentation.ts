@@ -21,14 +21,14 @@ export function projectThreadContentPresentation(input: {
   if (input.detailDeleted) {
     return {
       kind: "unavailable",
-      title: "Thread unavailable",
+      title: "任务不可用",
       detail: "This thread was deleted or is no longer available.",
     };
   }
   if (input.detailError !== null) {
     return {
       kind: "unavailable",
-      title: "Could not load conversation",
+      title: "无法加载对话",
       detail: input.detailError,
     };
   }
@@ -41,7 +41,7 @@ export function projectThreadContentPresentation(input: {
   }
   return {
     kind: "unavailable",
-    title: "Messages not cached",
+    title: "消息尚未缓存",
     detail: "Reconnect this environment to load the conversation.",
   };
 }

@@ -2233,7 +2233,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingGuestMessageCount: Schema.optional(NonNegativeInt),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
-  /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */
+  latestConversationMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /**
+   * The last message the user wrote. Wakes and agent messages also use the
+   * user role, so they move latestUserMessageAt but not this.
+   */
   latestUserAuthoredMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   hasActionableProposedPlan: Schema.Boolean,
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
@@ -2874,6 +2878,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   pendingRuntimeRequest: Schema.NullOr(OrchestrationV2PendingRuntimeRequestSummaryJson),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummaryJson),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  latestConversationMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   latestUserAuthoredMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,

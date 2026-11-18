@@ -224,6 +224,7 @@ export type ProjectionSettlementCandidate = Pick<
   | "latestRunStartedAt"
   | "latestRunCompletedAt"
   | "latestUserMessageAt"
+  | "latestConversationMessageAt"
   | "status"
   | "activityRunStartedAt"
   | "activityRunStatus"
@@ -1114,6 +1115,7 @@ type ShellThreadRow = {
   readonly pending_secret_request_payload_json: string | null;
   readonly pending_link_request_payload_json: string | null;
   readonly latest_user_message_at: string | null;
+  readonly latest_conversation_message_at: string | null;
   readonly latest_user_authored_message_at: string | null;
   readonly has_actionable_proposed_plan: number;
 };
@@ -1140,6 +1142,7 @@ type SettlementThreadRow = Pick<
   | "latest_run_started_at"
   | "latest_run_completed_at"
   | "latest_user_message_at"
+  | "latest_conversation_message_at"
   | "latest_user_authored_message_at"
 >;
 
@@ -1744,6 +1747,17 @@ export function threadShellFromProjection(
     }
   }
   const latestUserMessage = userMessages[0] ?? null;
+  let latestConversationMessageAt: DateTime.Utc | null = null;
+  for (const message of projection.messages) {
+    if (
+      (message.role === "user" || message.role === "assistant") &&
+      (latestConversationMessageAt === null ||
+        DateTime.toEpochMillis(message.updatedAt) >
+          DateTime.toEpochMillis(latestConversationMessageAt))
+    ) {
+      latestConversationMessageAt = message.updatedAt;
+    }
+  }
   const pendingBackgroundTasks = derivePendingBackgroundWork({
     latestRun,
     providerThreads: projection.providerThreads,
@@ -1813,6 +1827,7 @@ export function threadShellFromProjection(
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
     latestUserMessageAt: latestUserMessage?.updatedAt ?? null,
+    latestConversationMessageAt,
     latestUserAuthoredMessageAt,
     hasActionableProposedPlan: projection.plans.some(
       (plan) => plan.kind === "proposed_plan" && plan.status === "active",
@@ -1945,6 +1960,7 @@ type ShellThreadState = {
   readonly usageLimitResetAt: OrchestrationV2ThreadShell["usageLimitResetAt"];
   readonly pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
+  readonly latestConversationMessageAt: DateTime.Utc | null;
   readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
@@ -2118,6 +2134,7 @@ function shellFromState(input: {
     pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
+    latestConversationMessageAt: input.state.latestConversationMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
     pendingBackgroundTasks: input.state.pendingBackgroundTasks,
@@ -7796,6 +7813,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 SELECT message.updated_at
                 FROM orchestration_v2_projection_messages message
                 WHERE message.thread_id = t.thread_id
+                  AND message.role IN ('user', 'assistant')
+                ORDER BY message.updated_at DESC, message.message_id DESC
+                LIMIT 1
+              ) AS latest_conversation_message_at,
+              (
+                SELECT message.updated_at
+                FROM orchestration_v2_projection_messages message
+                WHERE message.thread_id = t.thread_id
                   AND message.role = 'user'
                   AND json_extract(message.payload_json, '$.createdBy') = 'user'
                   AND NOT ${isIdleCompactionMessage("message")}
@@ -8092,6 +8117,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               (
                 SELECT message.updated_at
                 FROM orchestration_v2_projection_messages message
+                WHERE message.thread_id = t.thread_id
+                  AND message.role IN ('user', 'assistant')
+                ORDER BY message.updated_at DESC, message.message_id DESC
+                LIMIT 1
+              ) AS latest_conversation_message_at,
+              (
+                SELECT message.updated_at
+                FROM orchestration_v2_projection_messages message
                 WHERE message.thread_id = t.thread_id AND message.role = 'user'
                   AND json_extract(message.payload_json, '$.createdBy') = 'user'
                   AND NOT ${isIdleCompactionMessage("message")}
@@ -8186,6 +8219,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     row.latest_user_message_at === null
                       ? null
                       : DateTime.makeUnsafe(row.latest_user_message_at),
+                  latestConversationMessageAt:
+                    row.latest_conversation_message_at === null
+                      ? null
+                      : DateTime.makeUnsafe(row.latest_conversation_message_at),
                   latestUserAuthoredMessageAt:
                     row.latest_user_authored_message_at === null
                       ? null
@@ -8455,6 +8492,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             row.latest_user_message_at === null
               ? null
               : DateTime.makeUnsafe(row.latest_user_message_at),
+          latestConversationMessageAt:
+            row.latest_conversation_message_at === null
+              ? null
+              : DateTime.makeUnsafe(row.latest_conversation_message_at),
           latestUserAuthoredMessageAt,
           hasActionableProposedPlan: row.has_actionable_proposed_plan === 1,
           pendingBackgroundTasks,

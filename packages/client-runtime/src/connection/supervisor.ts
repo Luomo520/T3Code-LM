@@ -34,6 +34,7 @@ import {
   connectionRouteId,
   connectionRouteKind,
   connectionRoutes,
+  preferLanRoutes,
   type ConnectionRouteKind,
   entryWithRoutes,
   insertRoute,
@@ -322,8 +323,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   // Learned routes arrive while a session is live, so the route list is read
   // fresh by each attempt and check instead of being fixed at creation.
   const currentEntry = yield* Ref.make(entry);
-  const currentRoutes = Ref.get(currentEntry).pipe(Effect.map(connectionRoutes));
   const preferredRouteId = yield* Ref.make(Option.none<string>());
+  const lastSuccessfulRouteId = yield* Ref.make<string | undefined>(undefined);
+  const currentRoutes = Effect.gen(function* () {
+    return connectionRoutes(
+      preferLanRoutes(yield* Ref.get(currentEntry), yield* Ref.get(lastSuccessfulRouteId)),
+    );
+  });
   const routeCooldowns = yield* Ref.make<ReadonlyMap<string, bigint>>(new Map());
   // The generation keeps a check that started before a reset from recording
   // its stale failures after it.
@@ -340,7 +346,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const latest = yield* Ref.get(currentEntry);
     const routes = connectionRoutes(latest);
     const preferred = yield* Ref.getAndSet(preferredRouteId, Option.none());
-    if (Option.isNone(preferred)) return latest;
+    if (Option.isNone(preferred))
+      return preferLanRoutes(latest, yield* Ref.get(lastSuccessfulRouteId));
     const route = routes.find(
       (candidate) => connectionRouteId(candidate.target) === preferred.value,
     );
@@ -1025,6 +1032,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       } satisfies AttemptOutcome;
     }
 
+    yield* Ref.set(lastSuccessfulRouteId, connectionRouteId(active.lease.prepared.target));
     const connectedLease: ConnectedLease = {
       ...active.lease,
       activeRoute: (yield* currentRoutes).find(

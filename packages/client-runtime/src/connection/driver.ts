@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
-import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
+import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -18,6 +19,7 @@ import { ConnectionTransientError } from "./model.ts";
 import * as ConnectionResolver from "./resolver.ts";
 import {
   connectionRoutes,
+  connectionRouteKind,
   routeEntry,
   routeHttpBaseUrl,
   routeKeepsItsHost,
@@ -27,6 +29,7 @@ import {
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+import * as ConnectionProfileStore from "./profileStore.ts";
 
 export type ConnectionDriverProgress =
   | {
@@ -145,6 +148,8 @@ export const make = Effect.gen(function* () {
   const resolver = yield* ConnectionResolver.ConnectionResolver;
   const sessions = yield* RpcSession.RpcSessionFactory;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+  const profiles = yield* Effect.serviceOption(ConnectionProfileStore.ConnectionProfileStore);
+  const serviceScope = yield* Scope.Scope;
   const httpClient = yield* HttpClient.HttpClient;
 
   // The descriptor is public, so this sends no credential to whatever
@@ -201,17 +206,36 @@ export const make = Effect.gen(function* () {
       "connection.target.kind": target._tag,
       "connection.route.count": connectionRoutes(entry).length,
     });
+    const attemptStartedAt = yield* Clock.currentTimeMillis;
     yield* reportProgress({ stage: "preparing" });
     return yield* connectOverRoutes(
       entry,
       (route) => checkRoute(entry, route),
       Effect.fnUntraced(function* (route) {
+        const startedAt = yield* Clock.currentTimeMillis;
         yield* reportProgress({ stage: "preparing" });
         const prepared = yield* resolver.prepare(routeEntry(entry, route));
+        const preparedAt = yield* Clock.currentTimeMillis;
         yield* reportProgress({ stage: "opening", prepared });
         const session = yield* sessions.connect(prepared);
         yield* reportProgress({ stage: "synchronizing", prepared });
         yield* session.ready;
+        const readyAt = yield* Clock.currentTimeMillis;
+        yield* Effect.logInfo("Environment connection established", {
+          environmentId: entry.target.environmentId,
+          routeKind: connectionRouteKind(route),
+          routeSelectionMs: startedAt - attemptStartedAt,
+          prepareMs: preparedAt - startedAt,
+          socketAndConfigMs: readyAt - preparedAt,
+          totalMs: readyAt - attemptStartedAt,
+        });
+        const profile = Option.getOrUndefined(route.profile);
+        if (profile?._tag === "BearerConnectionProfile" && connectionRouteKind(route) === "lan") {
+          yield* (Option.isSome(profiles) ? profiles.value.recordSuccess?.(profile, readyAt) ?? Effect.void : Effect.void).pipe(
+            Effect.catch(() => Effect.logWarning("Could not save the successful LAN route hint.")),
+            Effect.forkIn(serviceScope),
+          );
+        }
         // The server closes a socket when its session expires, unless the same key renewed it.
         if (prepared.httpAuthorization?._tag === "Dpop") {
           yield* remote

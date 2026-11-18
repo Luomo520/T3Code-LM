@@ -19,10 +19,12 @@ import {
 } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
+import { FORK_RELEASE_REPOSITORY } from "../../packages/shared/src/forkRelease.generated.ts";
 import { resolveTaggedSourceVersion } from "../../scripts/lib/tagged-source-version";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
+import { t3zhPlugin } from "./localization/plugin/index.mjs";
 import { formatAppDisplayName, resolveWebAppStageLabel } from "./src/branding.logic";
 
 const repoEnv = loadRepoEnv();
@@ -46,10 +48,7 @@ const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim()
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredReleaseChannel =
   process.env.T3CODE_BUILT_DEV === "1" ? "dev" : process.env.VITE_RELEASE_CHANNEL?.trim() || "";
-const configuredDesktopUpdateRepository =
-  process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
-  process.env.GITHUB_REPOSITORY?.trim() ||
-  "";
+const configuredDesktopUpdateRepository = FORK_RELEASE_REPOSITORY;
 const configuredFeatureSecrets = process.env.T3CODE_FEATURE_SECRETS?.trim() || "";
 const configuredHostedAppUrl = (() => {
   const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
@@ -296,7 +295,7 @@ const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .filter((entry) => entry.length > 0);
 const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
-export default defineConfig(({ command }) => {
+export default defineConfig(({ command, mode }) => {
   // `vp dev` and `--built` dev pair this client with a server run from source, which reports the
   // manifest version. Only a production build is paired with a packed server.
   const configuredAppVersion =
@@ -316,6 +315,12 @@ export default defineConfig(({ command }) => {
     },
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      mode === "test"
+        ? undefined
+        : t3zhPlugin({
+            monorepoRoot: `${import.meta.dirname}/../..`,
+            statsFile: false,
+          }),
       bootstrapTitlePlugin(),
       devCompressionPlugin(),
       chunkCycleGuardPlugin(),

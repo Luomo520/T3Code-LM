@@ -2393,6 +2393,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
   );
 });
 
+it.effect("persists and broadcasts the environment file size limit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      {
+        const initial = yield* service.getSettings;
+        assert.equal(initial.attachmentMaxFileSizeMiB, 50);
+      }
+      const changes = yield* service.subscribeChanges;
+      yield* service.updateSettings({ attachmentMaxFileSizeMiB: 256 });
+      const received = Option.getOrThrow(yield* Stream.runHead(changes));
+      assert.equal(received.attachmentMaxFileSizeMiB, 256);
+      const saved = yield* decodeServerSettingsJson(yield* fs.readFileString(config.settingsPath));
+      assert.equal(saved.attachmentMaxFileSizeMiB, 256);
+      yield* service.updateSettings({ responseStreamingMode: "turn" });
+      assert.equal((yield* service.getSettings).attachmentMaxFileSizeMiB, 256);
+    }),
+  ).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))))),
+);
+
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
   "server settings under a managed policy",
   (it) => {

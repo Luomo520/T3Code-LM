@@ -116,7 +116,7 @@ function requireRelayUrl(): Effect.Effect<string, CloudEnvironmentLinkError> {
   const relayUrl = readRelayUrl();
   return relayUrl
     ? Effect.succeed(relayUrl)
-    : Effect.fail(new CloudEnvironmentLinkError({ message: "Relay URL is not configured." }));
+    : Effect.fail(new CloudEnvironmentLinkError({ message: "尚未配置中继地址。" }));
 }
 
 function endpointOrigin(httpBaseUrl: string) {
@@ -134,12 +134,12 @@ function ensureLinkedEnvironmentMatches(input: {
 }): Effect.Effect<void, CloudEnvironmentLinkError> {
   if (input.link.environmentId !== input.expectedEnvironmentId) {
     return new CloudEnvironmentLinkError({
-      message: "Relay returned credentials for a different environment.",
+      message: "中继返回的凭据属于其他环境。",
     });
   }
   if (input.link.endpoint.providerKind !== input.expectedProviderKind) {
     return new CloudEnvironmentLinkError({
-      message: "Relay returned credentials for a different endpoint provider.",
+      message: "中继返回的凭据属于其他端点服务提供方。",
     });
   }
   return Effect.void;
@@ -162,7 +162,7 @@ export const linkEnvironmentToCloudWithPreference = Effect.fn(
 ): Effect.fn.Return<void, CloudEnvironmentLinkError, LinkEnvironmentToCloudRequirements> {
   if (!input.connection.bearerToken) {
     return yield* new CloudEnvironmentLinkError({
-      message: "Only a locally paired bearer connection can be linked to the cloud.",
+      message: "只有通过本地配对建立的 Bearer 连接才能关联到云端。",
     });
   }
   const localBearerToken = input.connection.bearerToken;

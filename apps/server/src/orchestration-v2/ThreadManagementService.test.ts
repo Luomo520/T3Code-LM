@@ -3,6 +3,7 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2Run,
   type OrchestrationV2ProviderThread,
@@ -121,6 +122,87 @@ const layerDispatchChokepointTest =
       Layer.provide(settingsLayer),
       Layer.provideMerge(layerReceiptsTest),
     );
+
+it.effect.each([
+  { driver: "codex", instance: "codex", incoming: false, replay: false, blocked: true },
+  { driver: "codex", instance: "local_provider", incoming: false, replay: false, blocked: true },
+  { driver: "codex", instance: "local_provider", incoming: true, replay: false, blocked: true },
+  { driver: "codex", instance: "local_provider", incoming: false, replay: true, blocked: false },
+  {
+    driver: "claudeAgent",
+    instance: "claudeAgent",
+    incoming: false,
+    replay: false,
+    blocked: false,
+  },
+] as const)("native-only dispatch $instance incoming=$incoming replay=$replay", (testCase) => {
+  const dispatched: Array<string> = [];
+  const instanceId = ProviderInstanceId.make(testCase.instance);
+  const threadId = ThreadId.make("thread:thread-management:chokepoint");
+  const commandId = CommandId.make("command:native-only-dispatch");
+  const settings = ServerSettings.layerTest({
+    providerInstances: { [instanceId]: { driver: testCase.driver, enabled: true } },
+  });
+  const common = {
+    commandId,
+    createdBy: "agent" as const,
+    creationSource: "mcp" as const,
+    modelSelection: {
+      instanceId,
+      model: "test",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    },
+    runtimeMode: "full-access" as const,
+    interactionMode: "default" as const,
+  };
+  const command: OrchestrationV2Command = testCase.incoming
+    ? {
+        ...common,
+        type: "thread.create",
+        threadId,
+        projectId: ProjectId.make("project:thread-management:chokepoint"),
+        title: "Incoming child",
+        branch: null,
+        worktreePath: null,
+        delegatedFrom: {
+          environmentId: EnvironmentId.make("environment:remote"),
+          threadId,
+          title: "Parent",
+        },
+      }
+    : {
+        ...common,
+        type: "delegated_task.request",
+        parentThreadId: threadId,
+        parentRunId: RunId.make("run:native-policy"),
+        parentNodeId: NodeId.make("node:native-policy"),
+        task: "Review without creating an ordinary Codex thread.",
+        completionWake: "always",
+      };
+  return Effect.gen(function* () {
+    if (testCase.replay) {
+      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+      yield* receipts.insertIfAbsent({
+        commandId,
+        threadId,
+        commandType: command.type,
+        acceptedAt: yield* DateTime.now,
+        resultSequence: 1,
+        status: "accepted",
+        error: null,
+      });
+    }
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    if (testCase.blocked) {
+      const error = yield* threads.dispatch(command).pipe(Effect.flip);
+      expect(String(error.cause)).toContain("native subagent tools");
+      expect(dispatched).toEqual([]);
+    } else {
+      yield* threads.dispatch(command);
+      expect(dispatched).toEqual([command.type]);
+    }
+  }).pipe(Effect.provide(layerDispatchChokepointTest(settings)(dispatched)));
+});
 
 it.effect(
   "the dispatch chokepoint refuses a continuation message.dispatch on a project-disabled instance before reaching the orchestrator",

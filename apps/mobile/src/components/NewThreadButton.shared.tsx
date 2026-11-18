@@ -13,7 +13,7 @@ export function NewThreadButton(props: {
 }) {
   return (
     <Pressable
-      accessibilityLabel="New thread"
+      accessibilityLabel="新建任务"
       accessibilityRole="button"
       onPress={props.onPress}
       className={cn(
@@ -32,7 +32,7 @@ export function NewThreadButton(props: {
         type="monochrome"
       />
       {props.extended && props.expanded !== false ? (
-        <AppText className="text-[16px] font-t3-medium text-primary-foreground">New thread</AppText>
+        <AppText className="text-[16px] font-t3-medium text-primary-foreground">{"新建任务"}</AppText>
       ) : null}
     </Pressable>
   );

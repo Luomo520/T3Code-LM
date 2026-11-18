@@ -94,6 +94,7 @@ import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsD
 import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
+import { HeaderUsageSettingsRouteScreen } from "./features/usage/HeaderUsageSettingsRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsFollowUpRouteScreen } from "./features/settings/SettingsFollowUpRouteScreen";
 import { SettingsLanguageRouteScreen } from "./features/settings/SettingsLanguageRouteScreen";
@@ -147,12 +148,15 @@ const settingsPage = (title: string) => pageRoute({ title, itemStyle: "standard"
 
 // Thread settings keep the Duo's vertical bar so cancel, search, filter and confirm sit in the
 // rail. The picker stack spans the sheet so its header reaches the rail, and insets its content.
-const THREAD_SETTINGS_ROUTE = sheetRoute({
-  detent: "full",
-  header: "none",
-  android: "card",
-  spansRail: true,
-});
+const THREAD_SETTINGS_ROUTE =
+  Platform.OS === "android"
+    ? {
+        presentation: "transparentModal" as const,
+        animation: "fade" as const,
+        headerShown: false,
+        contentStyle: { backgroundColor: "transparent" },
+      }
+    : sheetRoute({ detent: "full", header: "none", spansRail: true });
 
 // Search sheets push on Android like the branch picker; a formSheet there leaves the list's
 // header peeking above it once the keyboard opens.
@@ -171,6 +175,11 @@ const SETTINGS_SCREENS = {
     screen: SettingsEnvironmentsRouteScreen,
     linking: "settings/environments",
     options: settingsPage("Environments"),
+  }),
+  SettingsHeaderUsage: createNativeStackScreen({
+    screen: HeaderUsageSettingsRouteScreen,
+    linking: "settings/header-usage",
+    options: settingsPage("余额查询设置"),
   }),
   SettingsEnvironmentDetail: createNativeStackScreen({
     screen: SettingsEnvironmentDetailRouteScreen,
@@ -460,13 +469,13 @@ function NotFoundScreen() {
       style={[{ flex: 1 }, screenBgStyle]}
     >
       <Text className="text-3xl font-t3-bold text-foreground" selectable>
-        Route not found
+        {"未找到页面"}
       </Text>
       <Pressable
         style={returnHomeButtonStyle}
         onPress={() => navigation.dispatch(StackActions.replace("Home"))}
       >
-        <Text className="text-base font-t3-bold text-primary-foreground">Return home</Text>
+        <Text className="text-base font-t3-bold text-primary-foreground">{"返回首页"}</Text>
       </Pressable>
     </ScrollView>
   );
@@ -486,7 +495,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
           ComponentCatalog: createNativeStackScreen({
             screen: ComponentCatalogScreen,
             linking: "dev/components",
-            options: { title: "UI components" },
+            options: { title: "界面组件" },
           }),
         }
       : {}),
@@ -760,7 +769,7 @@ function GuardedScreenLayout(props: {
 function ScreenRenderFallback(props: RenderFailureProps & { readonly routeName: string }) {
   const navigation = useNavigation();
   const exit = navigation.canGoBack()
-    ? { label: "Go back", onPress: () => navigation.goBack() }
+    ? { label: "返回", onPress: () => navigation.goBack() }
     : props.routeName === "Home"
       ? // Home itself failed, and the Settings list renders inside it; open a Settings page.
         {

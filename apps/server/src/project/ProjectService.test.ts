@@ -19,6 +19,7 @@ import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import { bootstrapStartupProject } from "../serverRuntimeStartup.ts";
 import {
   orchestrationCommandDuration,
   orchestrationCommandsTotal,
@@ -367,7 +368,7 @@ it.layer(layerTest)("ProjectService", (it) => {
     }),
   );
 
-  it.effect("auto-bootstraps a workspace exactly once", () =>
+  it.effect("auto-bootstraps once and preserves deleted roots across repeated startups", () =>
     Effect.gen(function* () {
       const service = yield* ProjectService.ProjectService;
       yield* TestClock.setTime(Date.parse("2026-06-20T10:00:00.000Z"));
@@ -377,15 +378,86 @@ it.layer(layerTest)("ProjectService", (it) => {
         title: "Bootstrap",
         workspaceRoot: "/work/bootstrap/",
       };
-      const first = yield* service.bootstrap(input);
-      const second = yield* service.bootstrap({
-        ...input,
-        commandId: CommandId.make("command:bootstrap:second"),
-        projectId: ProjectId.make("project:bootstrap:unused"),
-      });
+      const first = Option.getOrThrow(
+        Option.fromUndefinedOr(yield* bootstrapStartupProject(input)),
+      );
+      const second = Option.getOrThrow(
+        Option.fromUndefinedOr(
+          yield* bootstrapStartupProject({
+            ...input,
+            commandId: CommandId.make("command:bootstrap:second"),
+            projectId: ProjectId.make("project:bootstrap:unused"),
+          }),
+        ),
+      );
       assert.isTrue(first.created);
       assert.isFalse(second.created);
       assert.equal(second.project.id, first.project.id);
+      yield* service.delete({
+        commandId: CommandId.make("command:bootstrap:delete"),
+        projectId: first.project.id,
+      });
+      for (const attempt of ["restart", "restart-again"]) {
+        assert.isUndefined(
+          yield* bootstrapStartupProject({
+            ...input,
+            commandId: CommandId.make(`command:bootstrap:${attempt}`),
+            projectId: ProjectId.make(`project:bootstrap:${attempt}`),
+          }),
+        );
+      }
+      const tombstone = Option.getOrThrow(
+        yield* service.getById(first.project.id, { includeDeleted: true }),
+      );
+      assert.isNotNull(tombstone.deletedAt);
+      assert.isTrue(Option.isNone(yield* service.getByWorkspaceRoot(input.workspaceRoot)));
+
+      const unseen = Option.getOrThrow(
+        Option.fromUndefinedOr(
+          yield* bootstrapStartupProject({
+            ...input,
+            commandId: CommandId.make("command:bootstrap:unseen"),
+            projectId: ProjectId.make("project:bootstrap:unseen"),
+            workspaceRoot: "/work/unseen/",
+          }),
+        ),
+      );
+      assert.isTrue(unseen.created);
+      yield* service.update({
+        commandId: CommandId.make("command:bootstrap:archive"),
+        projectId: unseen.project.id,
+        archived: true,
+      });
+      const archived = Option.getOrThrow(
+        Option.fromUndefinedOr(
+          yield* bootstrapStartupProject({
+            ...input,
+            commandId: CommandId.make("command:bootstrap:archived"),
+            projectId: ProjectId.make("project:bootstrap:archived:unused"),
+            workspaceRoot: "/work/unseen/",
+          }),
+        ),
+      );
+      assert.isFalse(archived.created);
+      assert.equal(archived.project.id, unseen.project.id);
+      assert.isNotNull(archived.project.archivedAt);
+
+      const readded = yield* service.create({
+        ...input,
+        commandId: CommandId.make("command:bootstrap:manual-readd"),
+        projectId: ProjectId.make("project:bootstrap:manual-readd"),
+      });
+      const restored = Option.getOrThrow(
+        Option.fromUndefinedOr(
+          yield* bootstrapStartupProject({
+            ...input,
+            commandId: CommandId.make("command:bootstrap:after-manual-readd"),
+            projectId: ProjectId.make("project:bootstrap:after-manual-readd:unused"),
+          }),
+        ),
+      );
+      assert.isFalse(restored.created);
+      assert.equal(restored.project.id, readded.id);
     }),
   );
 

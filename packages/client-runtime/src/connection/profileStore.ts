@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 
-import type { ConnectionProfile } from "./catalog.ts";
+import type { BearerConnectionProfile, ConnectionProfile } from "./catalog.ts";
 import type { ConnectionAttemptError } from "./model.ts";
 
 export class ConnectionProfileStore extends Context.Service<
@@ -12,6 +12,10 @@ export class ConnectionProfileStore extends Context.Service<
       connectionId: string,
     ) => Effect.Effect<Option.Option<ConnectionProfile>, ConnectionAttemptError>;
     readonly put: (profile: ConnectionProfile) => Effect.Effect<void, ConnectionAttemptError>;
+    readonly recordSuccess?: (
+      profile: BearerConnectionProfile,
+      connectedAtEpochMs: number,
+    ) => Effect.Effect<void, ConnectionAttemptError>;
     readonly remove: (connectionId: string) => Effect.Effect<void, ConnectionAttemptError>;
   }
 >()("@t3tools/client-runtime/connection/profileStore/ConnectionProfileStore") {}

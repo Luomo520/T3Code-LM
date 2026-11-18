@@ -1317,7 +1317,7 @@ function deriveThreadFeedRunFolds(
         return {
           runId: steerFoldRunId(runId, steer.id),
           entries,
-          label: segmentMs !== null ? `Continued for ${formatDuration(segmentMs)}` : "Continued",
+          label: segmentMs !== null ? `Continued for ${formatDuration(segmentMs)} 后停止了任务` : "Continued",
         };
       }),
     ];

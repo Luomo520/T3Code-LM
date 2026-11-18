@@ -1,3 +1,8 @@
+import { HeaderUsageStats } from "../usage/HeaderUsageStats";
+import { resolveHeaderUsageTarget } from "../usage/headerUsageTarget";
+import { headerUsageTargetAtom } from "../usage/headerUsageTargetState";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { useAtomValue } from "@effect/atom-react";
 import { uuidv4 } from "../../lib/uuid";
 import { ThreadUndoNotice } from "./ThreadUndoNotice";
 import { use } from "react";
@@ -158,6 +163,15 @@ export function HomeRouteScreen() {
   const selectedProjectKey =
     resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
 
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const preferred = useAtomValue(headerUsageTargetAtom);
+  const usageTarget = resolveHeaderUsageTarget({
+    environmentIds: environments.map((environment) => environment.environmentId),
+    configs,
+    selectedEnvironmentId,
+    preferred,
+  });
+
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
       <WorkspaceListEmptyDetail
@@ -173,6 +187,15 @@ export function HomeRouteScreen() {
       <>
         <WorkspaceListHeader
           accessibilityLabel="T3 Code, Threads"
+          titleAccessory={
+            Platform.OS === "android" ? (
+              <HeaderUsageStats
+                home
+                environmentId={usageTarget?.environmentId ?? null}
+                providerInstanceId={usageTarget?.providerInstanceId}
+              />
+            ) : undefined
+          }
           onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
           search={{
             value: searchQuery,

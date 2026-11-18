@@ -1,4 +1,8 @@
-import { DatabaseReclaimError, type DatabaseStorageStatus } from "@t3tools/contracts";
+import {
+  DatabaseReclaimError,
+  ServerRestartError,
+  type DatabaseStorageStatus,
+} from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -32,11 +36,12 @@ export class DatabaseStorage extends Context.Service<
     readonly status: Stream.Stream<DatabaseStorageStatus | null>;
     /** Checks free space, then stops the server; its shutdown runs the offline repair. */
     readonly requestReclaim: Effect.Effect<void, DatabaseReclaimError>;
+    readonly requestRestart: Effect.Effect<void, ServerRestartError>;
   }
 >()("t3/persistence/DatabaseStorage") {}
 
 /** Stops this server so its desktop app or background service starts it again; null when run by hand. */
-export const ServerRestart = Context.Reference<Effect.Effect<void> | null>(
+export const ServerRestart = Context.Reference<Effect.Effect<void, ServerRestartError> | null>(
   "t3/persistence/DatabaseStorage/ServerRestart",
   { defaultValue: () => null },
 );
@@ -237,10 +242,30 @@ const make = Effect.gen(function* () {
     Effect.withSpan("DatabaseStorage.requestReclaim"),
   );
 
+  const requestRestart = Effect.gen(function* () {
+    if (restart === null) {
+      return yield* new ServerRestartError({
+        reason: "This T3 backend is not managed by a supervisor and cannot restart itself.",
+      });
+    }
+    // The lifecycle must acknowledge scheduling before reporting success. It owns the
+    // short handoff delay that lets this RPC reply before stopping the server.
+    yield* restart;
+    yield* Effect.logInfo("T3 backend restart requested from Settings");
+  }).pipe(
+    Effect.mapError((cause) =>
+      cause._tag === "ServerRestartError"
+        ? cause
+        : new ServerRestartError({ reason: "Could not schedule the T3 backend restart." }),
+    ),
+    Effect.withSpan("DatabaseStorage.requestRestart"),
+  );
+
   return DatabaseStorage.of({
     reclaim,
     status: SubscriptionRef.changes(statusRef),
     requestReclaim,
+    requestRestart,
   });
 });
 

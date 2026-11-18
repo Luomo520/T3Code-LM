@@ -116,7 +116,7 @@ export function buildComposerSlashCommandItems(input: {
           type: "slash-command",
           command: "model",
           label: "/model",
-          description: "Switch model",
+          description: "切换模型",
         },
       ]
     : [];
@@ -371,7 +371,7 @@ export function useComposerCommandMenu({
           isDraft: entry.isDraft,
         },
         label: `#${entry.number}`,
-        description: `${entry.isDraft ? "Draft" : entry.state} · ${
+        description: `${entry.isDraft ? "草稿" : entry.state} · ${
           entry.repository.toLowerCase() === pullRequestRepository?.toLowerCase()
             ? ""
             : `${entry.repository} · `

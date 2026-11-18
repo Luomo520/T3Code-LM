@@ -118,8 +118,8 @@ export function PullRequestInlineCommentScreen({ route }: StaticScreenProps<Inli
         onBlur={completions.onBlur}
         editable={store.ready && !busy}
         autoFocus
-        accessibilityLabel="Inline review comment"
-        placeholder="Write feedback on this line…"
+        accessibilityLabel="行内审查评论"
+        placeholder="为此行填写反馈…"
         placeholderTextColorClassName="accent-foreground-muted"
         maxLength={65536}
         value={body}
@@ -127,25 +127,21 @@ export function PullRequestInlineCommentScreen({ route }: StaticScreenProps<Inli
         className="min-h-32 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
         style={{ textAlignVertical: "top" }}
       />
-      <Text className="text-xs text-foreground-muted">
-        Saved comments are private until you submit your review.
-      </Text>
+      <Text className="text-xs text-foreground-muted">{"提交审查前，已保存的评论仅自己可见。"}</Text>
       {stale ? (
-        <Text className="text-sm text-danger-foreground">
-          The branch changed. Return to the current diff and select the line again.
-        </Text>
+        <Text className="text-sm text-danger-foreground">{"分支已更改，请返回当前差异并重新选择行。"}</Text>
       ) : null}
       {store.error || detail.error ? (
         <Text className="text-sm text-danger-foreground">{store.error ?? detail.error}</Text>
       ) : null}
       {saved ? (
         <Button
-          label="Delete draft"
+          label="删除草稿"
           onPress={() =>
             Dialog.alert("Delete this draft?", "Your other review comments will be kept.", [
-              { text: "Cancel", style: "cancel" },
+              { text: "取消", style: "cancel" },
               {
-                text: "Delete",
+                text: "删除",
                 style: "destructive",
                 onPress: () => {
                   store.update((draft) => ({

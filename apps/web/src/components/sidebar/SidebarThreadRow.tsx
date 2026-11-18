@@ -551,6 +551,7 @@ type SidebarThreadRowProps = {
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
   navigationParent?: string | undefined;
+  activityTimestamp?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
   snoozeSupported: boolean;
@@ -1337,7 +1338,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       <span className="text-xs">
                         <RelativeTimeLabel
                           timestamp={
-                            variantAction === "unsettle"
+                            props.activityTimestamp !== undefined ? props.activityTimestamp : variantAction === "unsettle"
                               ? resolveSettledThreadTimestamp(thread)
                               : resolveThreadActivityTimestamp(thread)
                           }

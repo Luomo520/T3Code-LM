@@ -92,10 +92,10 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface({
   const { themeAppearance, themeId } = useAppearancePreferences();
   const theme = props.theme ?? getMobileTerminalTheme(themeId, themeAppearance);
   const statusLabel = props.readOnly
-    ? "Viewing terminal output."
+    ? "正在查看终端输出。"
     : props.isRunning
-      ? "Native terminal unavailable. Using text fallback."
-      : "Open terminal to start a shell.";
+      ? "原生终端不可用，正在使用文本模式。"
+      : "打开终端以启动命令行。";
 
   const handleLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -164,7 +164,7 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface({
           autoCorrect={false}
           blurOnSubmit={false}
           editable={props.isRunning && !props.readOnly}
-          placeholder="type and press return"
+          placeholder="输入后按回车"
           placeholderTextColor={theme.mutedForeground}
           returnKeyType="send"
           className="text-sm"

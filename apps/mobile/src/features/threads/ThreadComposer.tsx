@@ -1,3 +1,4 @@
+import { DockGlassBackdrop } from "../../components/ui/DockGlass";
 import { useSidebarWorkspaceTabs } from "../layout/workspace/useSystemWorkspaceTabBar";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
@@ -52,7 +53,6 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
-import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import {
@@ -332,7 +332,7 @@ function SendActionButton(props: {
   );
   return (
     <Menu
-      accessibilityLabel="Choose how to send this message"
+      accessibilityLabel="选择此消息的发送方式"
       shouldOpenOnLongPress
       actions={actions.map((action) => ({
         id: action,
@@ -387,18 +387,22 @@ function ComposerSurface(props: {
         },
       ]}
     >
-      <AnimatedGlassSurface
-        chrome="none"
-        fallbackColor={colors["--color-composer-surface"]}
-        fallbackClassName="border border-composer-border"
-        glassEffectStyle="regular"
-        pointerEvents="none"
-        tintColor="transparent"
-        layout={layoutTransition}
-        style={[{ position: "absolute", inset: 0 }, animatedShapeStyle]}
-      >
-        {null}
-      </AnimatedGlassSurface>
+      {Platform.OS === "android" ? (
+        <DockGlassBackdrop scope="thread" borderRadius={targetBorderRadius} />
+      ) : (
+        <AnimatedGlassSurface
+          chrome="none"
+          fallbackColor={colors["--color-composer-surface"]}
+          fallbackClassName="border border-composer-border"
+          glassEffectStyle="regular"
+          pointerEvents="none"
+          tintColor="transparent"
+          layout={layoutTransition}
+          style={[{ position: "absolute", inset: 0 }, animatedShapeStyle]}
+        >
+          {null}
+        </AnimatedGlassSurface>
+      )}
       <Animated.View
         collapsable={false}
         layout={layoutTransition}
@@ -575,7 +579,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   });
   const voiceInput = useVoiceInputController({
     ownerKey: composerDraftKey,
-    label: props.selectedThread.title || "Untitled thread",
+    label: props.selectedThread.title || "未命名任务",
     readDraftMessage: () => getComposerDraftSnapshot(composerDraftKey).text,
     selection: composerMenu.selection,
     onChangeDraftMessage: (text) => setComposerDraftText(composerDraftKey, text),
@@ -820,8 +824,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       style={{
         paddingTop: 6,
         paddingBottom: (props.bottomInset ?? 0) + THREAD_COMPOSER_BOTTOM_GUTTER,
-        backgroundColor:
-          Platform.OS === "android" ? themeColorWithAlpha(composerPanel, 1) : undefined,
+        backgroundColor: "transparent",
       }}
     >
       {/* Use a plain View: Reanimated Animated.View drops experimental_backgroundImage on Android. */}
@@ -874,11 +877,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
           </Text>
         ) : null}
         {modelUnavailable ? (
-          <Button
-            label="Model unavailable. Open model settings."
-            tone="text"
-            onPress={openSettings}
-          />
+          <Button label="模型不可用，请打开模型设置。" tone="text" onPress={openSettings} />
         ) : null}
 
         <ComposerSurface
@@ -1105,7 +1104,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 {showStopAction ? (
                   <ComposerActionButton
                     size={usesLargeControls ? "large" : "regular"}
-                    accessibilityLabel="Stop agent"
+                    accessibilityLabel="停止智能体"
                     icon="stop.fill"
                     variant="danger"
                     disabled={!props.canOperateThread}
@@ -1173,7 +1172,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   {showStopAction ? (
                     <ComposerActionButton
                       size={usesLargeControls ? "large" : "regular"}
-                      accessibilityLabel="Stop agent"
+                      accessibilityLabel="停止智能体"
                       icon="stop.fill"
                       variant="danger"
                       disabled={!props.canOperateThread}
@@ -1204,7 +1203,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
 
         {props.connectionState === "connected" && !props.canOperateThread ? (
           <Text className="pt-2 text-xs text-foreground-muted">
-            This connection cannot control this task. You can still edit your draft.
+            {"此连接无法控制该任务，你仍可编辑草稿。"}
           </Text>
         ) : null}
       </Animated.View>

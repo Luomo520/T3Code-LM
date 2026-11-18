@@ -154,9 +154,7 @@ function usePullRequestActivityRows(params: PullRequestParams, filter: ActivityF
         key: "empty",
         date: "",
         content: (
-          <Text className="py-6 text-sm text-foreground-muted">
-            No activity matches these filters.
-          </Text>
+          <Text className="py-6 text-sm text-foreground-muted">{"没有活动符合当前筛选条件。"}</Text>
         ),
       });
     return rows;
@@ -230,9 +228,7 @@ function PullRequestIdentity(props: {
         <Text className="min-w-0 flex-1 text-xs font-t3-medium" numberOfLines={1}>
           {pr.author?.login ?? "Unknown author"}
         </Text>
-        <Text className="shrink text-right text-2xs text-foreground-muted" numberOfLines={1}>
-          Updated <RelativeTime timestamp={pr.updatedAt} /> ago
-        </Text>
+        <Text className="shrink text-right text-2xs text-foreground-muted" numberOfLines={1}>{"已更新"}<RelativeTime timestamp={pr.updatedAt} />{"前"}</Text>
       </View>
       <View className="flex-row items-start gap-1.5">
         <Pressable
@@ -587,7 +583,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                   ? [
                       {
                         id: "submit-review",
-                        title: "Submit review",
+                        title: "提交评审",
                         icon: "text.bubble",
                         onPress: () =>
                           navigation.navigate("PullRequestReview", { ...params, mode: "review" }),
@@ -598,7 +594,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                   ? [
                       {
                         id: "add-comment",
-                        title: "Add comment",
+                        title: "添加评论",
                         icon: "plus.bubble",
                         onPress: () =>
                           navigation.navigate("PullRequestReview", { ...params, mode: "comment" }),
@@ -648,13 +644,13 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                       },
                       {
                         id: "copy-link",
-                        title: "Copy link",
+                        title: "复制链接",
                         icon: "link",
                         onPress: () => copyPullRequestLink(identity),
                       },
                       {
                         id: "share",
-                        title: "Share…",
+                        title: "分享…",
                         icon: "square.and.arrow.up",
                         onPress: () => sharePullRequestLink(identity),
                       },
@@ -905,11 +901,11 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                           {Platform.OS !== "ios" || section === tab ? (
                             <SegmentedControl
                               options={[
-                                { value: "overview", label: "Overview" },
+                                { value: "overview", label: "概览" },
                                 ...(guidesEnabled
-                                  ? [{ value: "guide" as const, label: "Guide" }]
+                                  ? [{ value: "guide" as const, label: "指南" }]
                                   : []),
-                                { value: "activity", label: "Activity" },
+                                { value: "activity", label: "活动" },
                               ]}
                               selected={section}
                               onSelect={selectSection}
@@ -1171,18 +1167,18 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
     <View className="flex-1 android:bg-header ios:bg-screen">
       <AppBar
         title={title}
-        subtitle={`${commit ? commit.slice(0, 7) : `#${route.params.number}`} · ${data.files.length} ${data.files.length === 1 ? "file" : "files"}${filter.hideTestFiles && filter.hiddenCount ? ` · ${filter.hiddenCount} ${filter.hiddenCount === 1 ? "test" : "tests"} hidden` : ""}`}
+        subtitle={`${commit ? commit.slice(0, 7) : `#${route.params.number}`} · ${data.files.length} ${data.files.length === 1 ? "个文件" : "个文件"}${filter.hideTestFiles && filter.hiddenCount ? ` · ${filter.hiddenCount} ${filter.hiddenCount === 1 ? "test" : "tests"} hidden` : ""}`}
         onBack={() => navigation.goBack()}
         menus={[
           {
-            title: "Diff options",
+            title: "差异选项",
             icon: "ellipsis",
             items: [
               ...(permissions.verdicts.length
                 ? [
                     {
                       id: "submit-review",
-                      title: "Submit review",
+                      title: "提交评审",
                       icon: "text.bubble",
                       onPress: () =>
                         navigation.navigate("PullRequestReview", {
@@ -1196,7 +1192,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                 ? [
                     {
                       id: "comment-on-pr",
-                      title: "Add comment",
+                      title: "添加评论",
                       icon: "plus.bubble",
                       onPress: () =>
                         navigation.navigate("PullRequestReview", {
@@ -1208,14 +1204,14 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                 : []),
               {
                 id: "word-wrap",
-                title: "Word wrap",
+                title: "自动换行",
                 icon: "text.alignleft",
                 selected: appearance.codeWordBreak,
                 onPress: () => setCodeWordBreak(!appearance.codeWordBreak),
               },
               {
                 id: "hide-tests",
-                title: "Hide test files",
+                title: "隐藏测试文件",
                 icon: "line.3.horizontal.decrease",
                 selected: filter.hideTestFiles,
                 onPress: toggleTestFiles,
@@ -1225,8 +1221,8 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                     {
                       id: "comment",
                       title: route.params.replacingDraftId
-                        ? "Move draft to this line"
-                        : "Add review comment",
+                        ? "将草稿移至此行"
+                        : "添加审查评论",
                       icon: "bubble.left",
                       onPress: () => commentOnLine(),
                     },
@@ -1236,7 +1232,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                 ? [
                     {
                       id: "copy",
-                      title: "Copy line",
+                      title: "复制行",
                       icon: "document.on.document",
                       onPress: () => void Clipboard.setStringAsync(selectedRow.content ?? ""),
                     },
@@ -1247,9 +1243,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
         ]}
       />
       {route.params.replacingDraftId ? (
-        <Text className="px-4 py-2 text-xs text-foreground-muted">
-          Select a current line, then choose “Move draft to this line” from its menu.
-        </Text>
+        <Text className="px-4 py-2 text-xs text-foreground-muted">{"选择当前行，然后在菜单中选择“将草稿移至此行”。"}</Text>
       ) : null}
       {viewed.error ? (
         <Text className="px-4 py-2 text-xs text-danger-foreground">{viewed.error}</Text>
@@ -1259,11 +1253,9 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
           className="flex-row items-center gap-2 px-4 py-2"
           style={{ paddingTop: contentTopInset + 8 }}
         >
-          <Text className="min-w-0 flex-1 text-xs text-foreground-muted">
-            The branch changed. Reload before adding line comments.
-          </Text>
+          <Text className="min-w-0 flex-1 text-xs text-foreground-muted">{"分支已更改，请重新加载后再添加行评论。"}</Text>
           <Button
-            label="Reload changes"
+            label="重新加载更改"
             onPress={() => {
               result.refresh();
               setDiffHead({ scopeKey, sha: detail.data?.headSha ?? null });
@@ -1365,15 +1357,15 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
             !seekingFile ? (
             <View style={{ paddingTop: contentTopInset }}>
               <EmptyState
-                title="Only test files changed"
+                title="仅测试文件有更改"
                 detail="Test files are hidden from this review."
-                action={<Button label="Show test files" tone="contrast" onPress={filter.showAll} />}
+                action={<Button label="显示测试文件" tone="contrast" onPress={filter.showAll} />}
                 variant="plain"
               />
             </View>
           ) : !result.isPending && !result.error && !seekingFile ? (
             <EmptyState
-              title="Diff unavailable"
+              title="差异不可用"
               detail={`Open this ${terminology.singular} on its provider to view the changes.`}
               variant="plain"
             />
@@ -1381,12 +1373,12 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
           {result.nextCursor && result.isPending && data.rows.length && !seekingFile ? (
             <View className="flex-row items-center justify-center gap-2 py-2">
               <AppActivityIndicator size="small" />
-              <Text className="text-xs text-foreground-muted">Loading more files…</Text>
+              <Text className="text-xs text-foreground-muted">{"正在加载更多文件…"}</Text>
             </View>
           ) : null}
           {result.error && result.nextCursor ? (
             <View className="self-center">
-              <Button label="Retry loading remaining files" tone="text" onPress={result.refresh} />
+              <Button label="重试加载剩余文件" tone="text" onPress={result.refresh} />
             </View>
           ) : null}
           {parsed.kind === "files" && parsed.notice ? (

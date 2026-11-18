@@ -1,8 +1,11 @@
 import {
   getPromptControlledTraits,
   getTraitSelectChange,
+  isReasoningControl,
 } from "@t3tools/client-runtime/model-traits";
+import { useModelPopupColors, ReasoningSlider } from "./ReasoningSlider";
 import * as Dialog from "../../components/ui/Dialog";
+import { DockGlassBackdrop } from "../../components/ui/DockGlass";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { useSheetStackOptions } from "../layout/nested-stacks";
 import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
@@ -45,7 +48,17 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  View,
+  useWindowDimensions,
+  type TextInputInstance,
+} from "react-native";
+import { useKeyboardState } from "react-native-keyboard-controller";
+import { SearchField } from "../../components/ui/SearchField";
 import { READABLE_WIDTH_STYLE, ROW_MIN_HEIGHT } from "../../components/ui/listMetrics";
 import { RefreshControl } from "../../components/ui/RefreshControl";
 import Animated, {
@@ -479,7 +492,7 @@ function ThreadSettingsSessionProvider(
     });
   };
   const [showLegacyToggle, setShowLegacyToggle] = useState(false);
-  const [providerFilter, setProviderFilter] = useState<string | null>(null);
+  const [providerFilter, setProviderFilter] = useState<string | null>(() => Platform.OS === "android" ? FAVORITES_PROVIDER_FILTER : null);
   const [searchQuery, setSearchQuery] = useState("");
   const [providerExpansionOverrides, setProviderExpansionOverrides] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -715,12 +728,96 @@ type ThreadSettingsCatalogItem =
     };
 
 function ThreadSettingsModelListRow(props: {
+  readonly compact?: boolean;
   readonly option: ModelOption;
   readonly isFirst: boolean;
   readonly isLast: boolean;
 }) {
+  const colors = useModelPopupColors();
   const session = useThreadSettingsSession();
   const onPress = () => session.pressModel(props.option);
+  if (props.compact) {
+    const option = props.option;
+    const selected = session.isDisplayed(option);
+    const unavailable = option.isUnavailable === true || option.isHidden === true;
+    const favorite = session.favoriteKeys.has(option.key);
+    return (
+      <View
+        className="mx-2 min-h-12 flex-row items-center rounded-lg pl-2"
+        style={{ backgroundColor: selected ? colors.selected : "transparent" }}
+      >
+        <Pressable
+          accessibilityRole="radio"
+          accessibilityLabel={[
+            option.label,
+            option.subtitle,
+            option.isDefault ? "默认" : null,
+            unavailable ? "不可用" : null,
+          ]
+            .filter(Boolean)
+            .join("，")}
+          accessibilityState={{ checked: selected, disabled: unavailable }}
+          disabled={unavailable}
+          onPress={onPress}
+          className={cn(
+            "min-h-12 min-w-0 flex-1 flex-row items-center gap-2 active:opacity-60",
+            unavailable && "opacity-50",
+          )}
+        >
+          <ProviderIcon
+            appearance={colors.appearance}
+            iconUrl={option.providerIconUrl}
+            provider={option.providerDriver}
+            size={18}
+          />
+          <Text className="min-w-0 flex-1 text-sm" style={{ color: colors.text }} numberOfLines={1}>
+            {option.label}
+          </Text>
+          {option.isDefault ? <Text style={{ fontSize: 11, color: colors.muted }}>默认</Text> : null}
+          {option.isHidden ? (
+            <Text style={{ fontSize: 11, color: colors.muted }}>已隐藏</Text>
+          ) : option.isUnavailable ? (
+            <Text style={{ fontSize: 11, color: colors.muted }}>不可用</Text>
+          ) : null}
+        </Pressable>
+        {session.manageHidden && option.canHide ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${option.isHidden ? "显示" : "隐藏"}模型：${option.label}`}
+            accessibilityState={{ disabled: session.pendingHiddenKeys.has(option.key) }}
+            disabled={session.pendingHiddenKeys.has(option.key)}
+            onPress={() => session.toggleHidden(option)}
+            className="min-h-12 w-12 items-center justify-center active:opacity-60"
+          >
+            <SymbolView
+              name={option.isHidden ? "eye.slash" : "eye"}
+              size={16}
+              tintColor={colors.muted}
+            />
+          </Pressable>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${favorite ? "取消收藏" : "收藏"}：${option.label}`}
+          accessibilityState={{ disabled: !session.favoritesLoaded, selected: favorite }}
+          disabled={!session.favoritesLoaded}
+          onPress={() => session.toggleFavorite(option)}
+          className="min-h-12 w-12 items-center justify-center active:opacity-60"
+        >
+          <SymbolView
+            name={favorite ? "star.fill" : "star"}
+            size={16}
+            tintColor={favorite ? colors.favorite : colors.muted}
+          />
+        </Pressable>
+        <View pointerEvents="none" className="w-6 items-center">
+          {selected ? (
+            <SymbolView name="checkmark" size={15} tintColor={colors.text} />
+          ) : null}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <ModelRow
@@ -864,7 +961,7 @@ function ThreadSettingsOptionsItem(props: {
   return (
     <View style={{ paddingBottom: insets.bottom + props.bottomInset + 12 }}>
       <ChatGptSharingStatus provider={selectedProvider} />
-      <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">Options</Text>
+      <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">{"选项"}</Text>
       <Animated.View
         className="mx-4 overflow-hidden rounded-2xl bg-grouped-card"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
@@ -915,7 +1012,7 @@ function ThreadSettingsOptionsItem(props: {
         <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
           <DisclosureRow
             isLast
-            label="Runtime"
+            label="运行时"
             value={
               session.runtimeModeChoices.find((choice) => choice.mode === session.runtimeMode)
                 ?.label
@@ -925,10 +1022,12 @@ function ThreadSettingsOptionsItem(props: {
         </Animated.View>
       </Animated.View>
 
-      <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">Catalog</Text>
+      <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">
+        {"模型目录"}
+      </Text>
       <View className="mx-4 overflow-hidden rounded-2xl bg-grouped-card">
         <SwitchRow
-          label="Manage hidden models"
+          label="管理隐藏的模型"
           value={session.manageHidden}
           onValueChange={session.setManageHidden}
           isLast
@@ -939,9 +1038,11 @@ function ThreadSettingsOptionsItem(props: {
 }
 
 function ThreadSettingsMainContent(props: {
+  readonly compact?: boolean;
   readonly bottomInset: number;
   readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
 }) {
+  const colors = useModelPopupColors();
   const session = useThreadSettingsSession();
   const refreshProvidersCommand = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
@@ -989,12 +1090,12 @@ function ThreadSettingsMainContent(props: {
   const reducedMotion = useReducedMotion();
   const reduceMotionEnabled = useReduceMotionEnabled();
   const animationsReady = listLoaded && !reducedMotion && !reduceMotionEnabled;
-  const catalogItems = buildThreadSettingsCatalogItems(session);
+  const catalogItems = buildThreadSettingsCatalogItems(session).filter((item) => !props.compact || item.kind !== "provider");
   const hasActiveCatalogFilter =
     session.providerFilter !== null || session.searchQuery.trim().length > 0;
   const listItems = [
     ...(catalogItems.length === 0 ? ([{ kind: "empty", key: "empty" }] as const) : catalogItems),
-    { kind: "options", key: "options" },
+    ...(props.compact ? [] : [{ kind: "options", key: "options" } as const]),
   ] satisfies ReadonlyArray<ThreadSettingsCatalogItem>;
   const renderCatalogItem = (itemProps: LegendListRenderItemProps<ThreadSettingsCatalogItem>) => {
     const item = itemProps.item;
@@ -1005,6 +1106,7 @@ function ThreadSettingsMainContent(props: {
     } else if (item.kind === "model") {
       content = (
         <ThreadSettingsModelListRow
+          compact={props.compact}
           isFirst={item.isFirst}
           isLast={item.isLast}
           option={item.option}
@@ -1014,14 +1116,14 @@ function ThreadSettingsMainContent(props: {
       content = <Text className="mx-8 mt-2 text-xs text-foreground-muted">{item.text}</Text>;
     } else if (item.kind === "empty") {
       content = (
-        <View className="items-center px-8 py-14">
-          <Text className="text-center text-sm text-foreground-muted">
+        <View className={props.compact ? "items-center px-4 py-4" : "items-center px-8 py-14"}>
+          <Text className="text-center text-sm text-foreground-muted" style={props.compact ? { color: colors.muted } : undefined}>
             {session.providerFilter === FAVORITES_PROVIDER_FILTER &&
             session.searchQuery.trim().length === 0
-              ? "No favorite models"
+              ? "暂无收藏模型，请切换到全部添加收藏"
               : hasActiveCatalogFilter
-                ? "No matching models"
-                : "No available models"}
+                ? "没有匹配的模型"
+                : "暂无可用模型"}
           </Text>
         </View>
       );
@@ -1051,12 +1153,12 @@ function ThreadSettingsMainContent(props: {
     <AnimatedLegendList
       alwaysBounceVertical
       automaticallyAdjustsScrollIndicatorInsets
-      className="flex-1 bg-sheet"
-      style={READABLE_WIDTH_STYLE}
-      contentContainerStyle={{ paddingTop: 4 }}
-      contentInsetAdjustmentBehavior="automatic"
+      className={props.compact ? "flex-1" : "flex-1 bg-sheet"}
+      style={[READABLE_WIDTH_STYLE, props.compact ? { backgroundColor: colors.panel } : undefined]}
+      contentContainerStyle={{ paddingTop: 4, paddingBottom: props.compact ? 8 : 0 }}
+      contentInsetAdjustmentBehavior={props.compact ? "never" : "automatic"}
       data={listItems}
-      estimatedItemSize={ROW_MIN_HEIGHT.item}
+      estimatedItemSize={props.compact ? 48 : ROW_MIN_HEIGHT.item}
       extraData={animationsReady}
       getItemType={(item) => item.kind}
       itemLayoutAnimation={THREAD_SETTINGS_CATALOG_LAYOUT_TRANSITION}
@@ -1212,15 +1314,15 @@ function ThreadSettingsModelsScreen() {
   const search: AppBarSearch = {
     value: session.searchQuery,
     onChangeText: session.setSearchQuery,
-    placeholder: "Find a model",
+    placeholder: "查找模型",
     clearAccessibilityLabel: "Clear model search",
     mode: "inline",
     compactToolbar: true,
   };
   const searchToolbarInset = useSearchToolbarInset(search);
   const providerFilters = [
-    { id: "all-providers", title: "All providers", value: null },
-    { id: "favorites", title: "Favorites", value: FAVORITES_PROVIDER_FILTER },
+    { id: "all-providers", title: "所有服务提供方", value: null },
+    { id: "favorites", title: "收藏", value: FAVORITES_PROVIDER_FILTER },
     ...session.providerGroups.map((group) => ({
       id: `provider:${group.providerKey}`,
       title: group.providerLabel,
@@ -1231,20 +1333,20 @@ function ThreadSettingsModelsScreen() {
   return (
     <>
       <AppBar
-        title="Thread settings"
+        title="任务设置"
         onClose={presentation.onClose}
         closeAccessibilityLabel="Cancel thread settings"
         search={search}
         menus={[
           {
-            title: "Model filters",
+            title: "模型筛选",
             icon: hasCustomCatalogFilter
               ? "line.3.horizontal.decrease.circle.fill"
               : "line.3.horizontal.decrease",
             items: [
               {
                 id: "provider",
-                title: "Provider",
+                title: "服务提供方",
                 items: providerFilters.map((filter) => ({
                   id: filter.id,
                   title: filter.title,
@@ -1256,7 +1358,7 @@ function ThreadSettingsModelsScreen() {
                 ? [
                     {
                       id: "show-legacy",
-                      title: "Show legacy models",
+                      title: "显示旧模型",
                       selected: session.showLegacy,
                       onPress: () => session.setShowLegacy(!session.showLegacy),
                     },
@@ -1272,7 +1374,7 @@ function ThreadSettingsModelsScreen() {
           session.hasLegacyModels,
         ]}
         confirm={{
-          label: session.pendingModel ? "Save" : "Done",
+          label: session.pendingModel ? "保存" : "完成",
           onPress: commitAndClose,
         }}
         hideBottomBorder
@@ -1327,7 +1429,7 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
         <ThreadSettingsPickerStack.Screen
           name="ThreadSettingsModels"
           component={ThreadSettingsModelsScreen}
-          options={{ headerBackVisible: false, title: "Thread settings" }}
+          options={{ headerBackVisible: false, title: "任务设置" }}
         />
         <ThreadSettingsPickerStack.Screen
           name="ThreadSettingsChoice"
@@ -1339,12 +1441,434 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
   );
 }
 
+function PopupChoice(props: {
+  readonly label: string;
+  readonly selected: boolean;
+  readonly isDefault?: boolean;
+  readonly disabled?: boolean;
+  readonly description?: string;
+  readonly onPress: () => void;
+}) {
+  const colors = useModelPopupColors();
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={[props.label, props.isDefault ? "默认" : null, props.description]
+        .filter(Boolean)
+        .join("，")}
+      accessibilityState={{ checked: props.selected, disabled: props.disabled === true }}
+      disabled={props.disabled}
+      onPress={props.onPress}
+      className={cn(
+        "min-h-11 flex-row items-center gap-2 rounded-md px-3 active:opacity-60",
+        props.disabled && "opacity-50",
+      )}
+      style={{ backgroundColor: props.selected ? colors.selected : "transparent" }}
+    >
+      <Text
+        className={cn("min-w-0 flex-1 text-sm", props.selected && "font-t3-medium")}
+        style={{ color: colors.text }}
+      >
+        {props.label}
+      </Text>
+      <View className="w-9 items-end">
+        <Text style={{ fontSize: 12, color: colors.muted }}>{props.isDefault ? "默认" : ""}</Text>
+      </View>
+      <View className="w-5 items-center">
+        {props.selected ? (
+          <SymbolView name="checkmark" size={15} tintColor={colors.text} />
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
+const POPUP_REASONING_LABELS: Readonly<Record<string, string>> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+  ultra: "Ultra",
+};
+const POPUP_OPTION_LABELS: Readonly<Record<string, string>> = {
+  Reasoning: "思考强度",
+  "Reasoning effort": "思考强度",
+  Effort: "思考强度",
+  "Service tier": "响应模式",
+  Speed: "响应模式",
+  "Fast mode": "快速模式",
+  "Fast Mode": "快速模式",
+  Standard: "标准",
+  Fast: "快速",
+  Priority: "优先",
+  Default: "默认",
+  Auto: "自动",
+  Enabled: "开启",
+  Disabled: "关闭",
+};
+const popupLabel = (label: string) => POPUP_OPTION_LABELS[label] ?? label;
+
+function PopupSpeedSegments(props: {
+  readonly choices: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+  readonly current: string | null;
+  readonly onChange: (value: string) => void;
+}) {
+  const colors = useModelPopupColors();
+  return <View style={{ paddingHorizontal: 6, paddingVertical: 6, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+    <Text style={{ color: colors.text, fontSize: 12, flexGrow: 1 }}>响应模式</Text>
+    <View accessibilityRole="radiogroup" style={{ flexDirection: "row", flexWrap: "wrap", backgroundColor: colors.rail, padding: 3, borderRadius: 10 }}>
+      {props.choices.map((choice) => <Pressable key={choice.id} accessibilityRole="radio" accessibilityLabel={choice.label} accessibilityState={{ checked: choice.id === props.current }} onPress={() => props.onChange(choice.id)} style={{ minHeight: 44, paddingHorizontal: 12, borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: choice.id === props.current ? colors.segment : "transparent" }}>
+        {choice.label === "快速" ? <SymbolView name="bolt.circle" size={13} tintColor={colors.muted} /> : null}
+        <Text style={{ fontSize: 12, color: choice.id === props.current ? colors.text : colors.muted }}>{choice.label}</Text>
+      </Pressable>)}
+    </View>
+  </View>;
+}
+
+function ThreadSettingsPopupOptions(props: { readonly onDraggingChange: (dragging: boolean) => void }) {
+  const colors = useModelPopupColors();
+  const session = useThreadSettingsSession();
+  const [showMore, setShowMore] = useState(false);
+  const modelLabel = session.providerGroups.flatMap((group) => group.models).find(session.isDisplayed)?.label
+    ?? session.displayedModelSelection?.model ?? "";
+  return (
+    <View className="px-2 pb-2">
+      {session.displayedDescriptors.map((descriptor) => {
+        if (descriptor.type !== "select") {
+          if (descriptor.id === "fastMode") {
+            return <PopupSpeedSegments key={descriptor.id} choices={[{ id: "standard", label: "标准" }, { id: "fast", label: "快速" }]} current={descriptor.currentValue ? "fast" : "standard"} onChange={(value) => session.applyOptionChange(descriptor.id, value === "fast")} />;
+          }
+          return (
+            <View key={descriptor.id} className="min-h-11 flex-row items-center justify-between px-3">
+              <Text style={{ color: colors.text, fontSize: 13 }}>{popupLabel(descriptor.label)}</Text>
+              <ThemedSwitch accessibilityLabel={popupLabel(descriptor.label)} value={descriptor.currentValue ?? false} onValueChange={(value) => session.applyOptionChange(descriptor.id, value)} />
+            </View>
+          );
+        }
+        const primary = descriptor.id === session.promptTraits.primarySelectDescriptor?.id;
+        const reasoning = isReasoningControl(descriptor);
+        const current =
+          primary && session.promptTraits.ultrathinkPromptControlled
+            ? "ultrathink"
+            : getProviderOptionCurrentValue(
+                descriptor,
+                session.displayedModelSelection,
+                session.reportedModelSelection,
+              );
+        const applyChoice = (value: string) => {
+          if (primary && session.promptTraits.ultrathinkInBodyText) {
+            Dialog.alert("思考强度由提示词控制", '请先移除提示词中的 "ultrathink" 再调整。');
+            return;
+          }
+          void Haptics.selectionAsync();
+          session.applyOptionChange(descriptor.id, value);
+        };
+        if (reasoning) {
+          return <ReasoningSlider key={`${session.displayedModelSelection?.instanceId}:${session.displayedModelSelection?.model}:${descriptor.id}:${selectableChoices(descriptor).map((choice) => choice.id).join(",")}`} choices={selectableChoices(descriptor)} value={typeof current === "string" ? current : null} modelLabel={modelLabel} disabled={primary && session.promptTraits.ultrathinkInBodyText} onChange={applyChoice} onDraggingChange={props.onDraggingChange} />;
+        }
+        if (descriptor.id === "serviceTier") {
+          return <PopupSpeedSegments key={descriptor.id} choices={selectableChoices(descriptor).map((choice) => ({ id: choice.id, label: choice.id === "priority" || choice.id === "fast" ? "快速" : choice.id === "default" || choice.id === "standard" ? "标准" : popupLabel(choice.label) }))} current={typeof current === "string" ? current : null} onChange={applyChoice} />;
+        }
+        return (
+          <View key={descriptor.id}>
+            <Text
+              accessibilityRole="header"
+              className="px-3 pb-1 pt-3 text-xs font-t3-medium text-foreground-muted"
+            >
+              {reasoning ? "思考强度" : popupLabel(descriptor.label)}
+            </Text>
+            {selectableChoices(descriptor).map((choice) => (
+              <PopupChoice
+                key={choice.id}
+                label={
+                  reasoning
+                    ? (POPUP_REASONING_LABELS[choice.id] ?? choice.label)
+                    : popupLabel(choice.label)
+                }
+                isDefault={choice.isDefault}
+                description={choice.description}
+                selected={choice.id === current}
+                onPress={() => {
+                  if (primary && session.promptTraits.ultrathinkInBodyText) {
+                    Dialog.alert(
+                      "思考强度由提示词控制",
+                      '请先移除提示词中的 "ultrathink" 再调整。',
+                    );
+                    return;
+                  }
+                  void Haptics.selectionAsync();
+                  session.applyOptionChange(descriptor.id, choice.id);
+                }}
+              />
+            ))}
+          </View>
+        );
+      })}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: showMore }}
+        onPress={() => setShowMore(!showMore)}
+        className="min-h-11 flex-row items-center justify-between px-3 active:opacity-60"
+      >
+        <Text style={{ fontSize: 12, color: colors.muted }}>更多设置</Text>
+        <SymbolView
+          name={showMore ? "chevron.up" : "chevron.down"}
+          size={12}
+          tintColor={colors.muted}
+        />
+      </Pressable>
+      {showMore ? (
+        <View>
+          <Text
+            accessibilityRole="header"
+            className="px-3 pb-1 text-xs font-t3-medium" style={{ color: colors.muted }}
+          >
+            权限
+          </Text>
+          {session.runtimeModeChoices.map((choice) => (
+            <PopupChoice
+              key={choice.mode}
+              label={choice.label}
+              selected={choice.mode === session.runtimeMode}
+              disabled={choice.disabledReason !== undefined}
+              description={choice.disabledReason ?? choice.description}
+              onPress={() => {
+                void Haptics.selectionAsync();
+                session.onUpdateRuntimeMode(choice.mode);
+              }}
+            />
+          ))}
+          {session.runtimeModeChoices
+            .filter((choice) => choice.disabledReason)
+            .map((choice) => (
+              <Text key={choice.mode} className="px-3 py-1 text-xs" style={{ color: colors.muted }}>
+                {choice.label}：{choice.disabledReason}
+              </Text>
+            ))}
+          {session.hasLegacyModels ? (
+            <View className="min-h-11 flex-row items-center justify-between px-3">
+              <Text style={{ color: colors.text, fontSize: 13 }}>显示旧模型</Text>
+              <ThemedSwitch accessibilityLabel="显示旧模型" value={session.showLegacy} onValueChange={session.setShowLegacy} />
+            </View>
+          ) : null}
+          <View className="min-h-11 flex-row items-center justify-between px-3">
+            <Text style={{ color: colors.text, fontSize: 13 }}>管理隐藏的模型</Text>
+            <ThemedSwitch accessibilityLabel="管理隐藏的模型" value={session.manageHidden} onValueChange={session.setManageHidden} />
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
+  const colors = useModelPopupColors();
+  const session = useThreadSettingsSession();
+  const { height, width, fontScale } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const keyboardVisible = useKeyboardState((keyboard) => keyboard.isVisible);
+  const [availableHeight, setAvailableHeight] = useState(height - insets.top - insets.bottom - 24);
+  const [headerContentHeight, setHeaderContentHeight] = useState(92);
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [sliderDragging, setSliderDragging] = useState(false);
+  const inputRef = useRef<TextInputInstance>(null);
+  const panelLimit = Math.min(560, availableHeight * (keyboardVisible ? 0.98 : 0.9));
+  const headerLimit = panelLimit * (searchVisible ? 0.48 : 0.36);
+  const catalogItems = buildThreadSettingsCatalogItems(session).filter((item) => item.kind !== "provider");
+  const estimatedCatalogHeight = catalogItems.length
+    ? catalogItems.reduce(
+        (sum) => sum + 48 * Math.max(1, fontScale),
+        8,
+      )
+    : 64;
+  const catalogHeight = Math.min(192, panelLimit * 0.31, estimatedCatalogHeight);
+  const optionsLimit = Math.max(
+    44,
+    panelLimit - Math.min(headerContentHeight, headerLimit) - catalogHeight - 2,
+  );
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const selectedProvider = session.environmentId
+    ? configs
+        .get(session.environmentId)
+        ?.providers.find((provider) => provider.instanceId === session.providerInstanceId)
+    : undefined;
+  const filterButton = (key: string | null, label: string, icon: ReactNode) => (
+    <Pressable
+      key={key ?? "all"}
+      accessibilityRole="button"
+      accessibilityLabel={`筛选：${label}`}
+      accessibilityState={{ selected: session.providerFilter === key }}
+      onPress={() => session.setProviderFilter(key)}
+      className={cn(
+        "min-h-11 flex-row items-center justify-center gap-1.5 rounded-lg px-2 active:opacity-60",
+      )}
+      style={{ backgroundColor: session.providerFilter === key ? colors.selected : "transparent" }}
+    >
+      {icon}
+      <Text style={{ fontSize: 11, color: colors.muted }} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+  return (
+    <View className="flex-1">
+      <Pressable
+        accessibilityLabel="关闭模型与参数"
+        accessibilityRole="button"
+        className="absolute inset-0 bg-backdrop"
+        onPress={props.onClose}
+      />
+      <KeyboardAvoidingView
+        behavior="height"
+        className="flex-1"
+        pointerEvents="box-none"
+        style={{ paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }}
+      >
+        <View
+          pointerEvents="box-none"
+          className="flex-1 items-center justify-center"
+          onLayout={(event) => setAvailableHeight(event.nativeEvent.layout.height)}
+        >
+          <View
+            accessibilityViewIsModal
+            className="overflow-hidden"
+            style={{
+              borderRadius: 22,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.panel,
+              width: Math.min(380, width - insets.left - insets.right - 32),
+              maxHeight: panelLimit,
+              marginTop: keyboardVisible ? 0 : Math.min(48, availableHeight * 0.06),
+            }}
+          >
+            <DockGlassBackdrop scope="thread" material="popup" />
+            <ScrollView
+              style={{ flexGrow: 0, flexShrink: 1, maxHeight: headerLimit }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              onContentSizeChange={(_, contentHeight) => setHeaderContentHeight(contentHeight)}
+            >
+              <View className="flex-row items-center gap-1 px-2">
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="取消模型选择"
+                  onPress={props.onClose}
+                  className="min-h-12 min-w-12 items-center justify-center active:opacity-60"
+                >
+                  <SymbolView name="xmark" size={17} tintColor={colors.text} />
+                </Pressable>
+                <Text
+                  accessibilityRole="header"
+                  className="min-w-0 flex-1 text-sm font-t3-semibold"
+                  style={{ color: colors.text }}
+                >
+                  模型与参数
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="搜索模型"
+                  accessibilityState={{ expanded: searchVisible }}
+                  onPress={() => {
+                    if (searchVisible) {
+                      inputRef.current?.blur();
+                      session.setSearchQuery("");
+                    }
+                    setSearchVisible(!searchVisible);
+                  }}
+                  className="min-h-12 min-w-11 items-center justify-center active:opacity-60"
+                >
+                  <SymbolView name="magnifyingglass" size={17} tintColor={colors.text} />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    if (session.commitPendingModel()) props.onClose();
+                  }}
+                  className="min-h-12 min-w-12 items-center justify-center px-2 active:opacity-60"
+                >
+                  <Text className="text-sm font-t3-medium" style={{ color: colors.text }}>
+                    {session.pendingModel ? "保存" : "完成"}
+                  </Text>
+                </Pressable>
+              </View>
+              {searchVisible ? <View className="mx-3 flex-row">
+                <SearchField
+                  inputRef={inputRef}
+                  autoFocus
+                  accessibilityLabel="查找模型"
+                  clearAccessibilityLabel="清空模型搜索"
+                  placeholder="查找模型"
+                  value={session.searchQuery}
+                  onChangeText={session.setSearchQuery}
+                />
+              </View> : null}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingHorizontal: 8, paddingVertical: 4 }}
+              >
+                <View className="flex-row gap-1">
+                  {filterButton(
+                    null,
+                    "全部",
+                    <SymbolView
+                      name="square.grid.2x2"
+                      size={18}
+                      tintColor={colors.text}
+                    />,
+                  )}
+                  {filterButton(
+                    FAVORITES_PROVIDER_FILTER,
+                    "收藏",
+                    <SymbolView name="star" size={18} tintColor={colors.text} />,
+                  )}
+                  {session.providerGroups.map((group) =>
+                    filterButton(
+                      group.providerKey,
+                      group.providerLabel,
+                      <ProviderIcon
+                        appearance={colors.appearance}
+                        iconUrl={group.models[0]?.providerIconUrl}
+                        provider={group.models[0]?.providerDriver}
+                        size={18}
+                      />,
+                    ),
+                  )}
+                </View>
+              </ScrollView>
+              <ChatGptSharingStatus provider={selectedProvider ?? null} />
+            </ScrollView>
+            <View style={{ height: catalogHeight }}>
+              <ThreadSettingsMainContent compact bottomInset={0} onOpenSubmenu={() => undefined} />
+            </View>
+            <ScrollView
+              scrollEnabled={!sliderDragging}
+              style={{ flexGrow: 0, flexShrink: 1, maxHeight: optionsLimit, borderTopWidth: 1, borderTopColor: colors.border }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+            >
+              <ThreadSettingsPopupOptions onDraggingChange={setSliderDragging} />
+            </ScrollView>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
+
 export function ThreadSettingsPickerScreen(
   props: ThreadSettingsSessionProps & { readonly onClose: () => void },
 ) {
   return (
     <ThreadSettingsSessionProvider {...props}>
-      <ThreadSettingsPickerNavigator onClose={props.onClose} />
+      {Platform.OS === "android" ? (
+        <ThreadSettingsPopup onClose={props.onClose} />
+      ) : (
+        <ThreadSettingsPickerNavigator onClose={props.onClose} />
+      )}
     </ThreadSettingsSessionProvider>
   );
 }

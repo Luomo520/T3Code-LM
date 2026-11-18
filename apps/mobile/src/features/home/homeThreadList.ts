@@ -22,8 +22,19 @@ import * as Order from "effect/Order";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { buildThreadListV2Items } from "../threads/threadListV2";
 
 export type HomeProjectSortOrder = Exclude<SidebarProjectSortOrder, "manual">;
+
+export function buildHomeThreadList(input: Parameters<typeof buildThreadListV2Items>[0]) {
+  return buildThreadListV2Items({
+    ...input,
+    settledLimit: Number.POSITIVE_INFINITY,
+    workingShelfExpanded: true,
+    snoozedShelfExpanded: true,
+    settledShelfExpanded: true,
+  });
+}
 
 export interface HomeProjectScope {
   readonly key: string;
@@ -33,6 +44,35 @@ export interface HomeProjectScope {
   readonly projectRefs: ReadonlyArray<ScopedProjectRef>;
   readonly pinned: boolean;
   readonly archived: boolean;
+}
+
+export function selectHomeCatalog(input: {
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingTasks?: ReadonlyArray<PendingNewTask>;
+}): { readonly projects: EnvironmentProject[]; readonly threads: EnvironmentThreadShell[] } {
+  const projectKeys = new Set(
+    input.projects.map((project) => scopedProjectKey(project.environmentId, project.id)),
+  );
+  const threads = input.threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      thread.deletedAt === null &&
+      thread.lineage.relationshipToParent !== "subagent" &&
+      projectKeys.has(scopedProjectKey(thread.environmentId, thread.projectId)),
+  );
+  const occupiedProjectKeys = new Set(
+    threads.map((thread) => scopedProjectKey(thread.environmentId, thread.projectId)),
+  );
+  for (const task of input.pendingTasks ?? []) {
+    occupiedProjectKeys.add(scopedProjectKey(task.environmentId, task.projectId));
+  }
+  return {
+    projects: input.projects.filter((project) =>
+      occupiedProjectKeys.has(scopedProjectKey(project.environmentId, project.id)),
+    ),
+    threads,
+  };
 }
 
 function getProjectSortTimestamp(

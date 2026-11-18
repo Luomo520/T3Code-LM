@@ -89,8 +89,7 @@ function WindowRow(props: {
       <View className="flex-row items-baseline justify-between gap-3">
         <Text className="text-sm text-foreground">{window.label}</Text>
         <Text className="text-sm font-t3-medium tabular-nums text-foreground">
-          {remaining}% left
-        </Text>
+          {remaining}{"% 剩余"}</Text>
       </View>
       <View
         className="h-3 justify-center"
@@ -213,7 +212,7 @@ export function AccountLimits(props: {
           className="min-h-11 justify-center"
           onPress={() => void Linking.openURL(externalUsage.url).catch(() => undefined)}
         >
-          <Text className="text-sm font-t3-medium text-primary">Manage usage</Text>
+          <Text className="text-sm font-t3-medium text-primary">{"管理用量"}</Text>
         </Pressable>
       ) : null}
       {props.footer}
@@ -264,8 +263,8 @@ export function ResetCredits(props: {
   const confirm = (choice: ResetCreditChoice) => {
     if (!readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
     Dialog.alert("Use a reset credit?", choice.confirmDescription, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Use credit", onPress: () => void redeem(choice) },
+      { text: "取消", style: "cancel" },
+      { text: "使用额度", onPress: () => void redeem(choice) },
     ]);
   };
 
@@ -300,9 +299,7 @@ export function ResetCredits(props: {
         </View>
       ))}
       {!canManageProviders ? (
-        <Text className="text-xs text-foreground-tertiary">
-          This connection cannot manage provider accounts.
-        </Text>
+        <Text className="text-xs text-foreground-tertiary">{"此连接无权管理服务提供方账户。"}</Text>
       ) : null}
       {status ? <Text className="text-sm text-foreground">{status}</Text> : null}
     </View>

@@ -1,4 +1,6 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+@source "./src";
+@source "./index.ts";
 @import "uniwind";
 @import "./generated-uniwind-themes.css";
 

@@ -115,9 +115,9 @@ export function EnvironmentRoutesSection({
       `Remove ${connectionRouteLabel(route)}?`,
       connectionRouteAddress(route) ?? undefined,
       [
-        { text: "Cancel", style: "cancel" },
+        { text: "取消", style: "cancel" },
         {
-          text: "Remove",
+          text: "移除",
           style: "destructive",
           onPress: () =>
             void removeRoute({ environmentId, routeId: connectionRouteId(route.target) }),
@@ -130,7 +130,7 @@ export function EnvironmentRoutesSection({
 
   return (
     <SettingsSection
-      title="Routes"
+      title="路由"
       trailing={
         routes.length > 1 ? (
           <Button
@@ -143,7 +143,7 @@ export function EnvironmentRoutesSection({
     >
       <SettingsActionRow
         icon="checkmark.circle"
-        label="Your permissions"
+        label="你的权限"
         onPress={() => setPermissionsOpen((open) => !open)}
       />
       {permissionsOpen ? (
@@ -153,10 +153,7 @@ export function EnvironmentRoutesSection({
           !sessionResult.waiting &&
           session?.authenticated ? (
             <>
-              <Text className="text-sm text-foreground-muted">
-                Applies to the route marked In use. Other routes may have different permissions and
-                have not been checked.
-              </Text>
+              <Text className="text-sm text-foreground-muted">{"适用于标记为使用中的路由，其他路由可能具有不同权限，尚未检查。"}</Text>
               {AUTH_SCOPE_OPTIONS.map(({ scope, title }) => (
                 <Text key={scope} className="text-sm text-foreground">
                   {title}: {sessionGrantsScope(session, scope) ? "Allowed" : "Not granted"}
@@ -218,7 +215,7 @@ export function EnvironmentRoutesSection({
           />
         );
       })}
-      <SettingsActionRow icon="plus" label="Add route" onPress={onAddRoute} />
+      <SettingsActionRow icon="plus" label="添加路由" onPress={onAddRoute} />
     </SettingsSection>
   );
 }
@@ -260,7 +257,7 @@ function RouteRow(props: {
       {props.editing && props.onRemove ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Remove ${label} route`}
+          accessibilityLabel={`移除 ${label} route`}
           hitSlop={8}
           onPress={props.onRemove}
           className="active:opacity-70"
@@ -305,7 +302,7 @@ function RouteRow(props: {
               {label}
             </Text>
             {props.inUse ? (
-              <StatusPill {...connectionTone("connected")} label="In use" size="compact" />
+              <StatusPill {...connectionTone("connected")} label="使用中" size="compact" />
             ) : null}
           </View>
           {address !== null ? (

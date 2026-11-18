@@ -30,11 +30,11 @@ export function SettingsLegalDocumentRouteScreen({
   const headerOptions = (
     <SheetHeader
       title={documentName}
-      accessibilityLabel="Close legal document"
+      accessibilityLabel="关闭法律文档"
       onClose={() => navigation.goBack()}
       actions={[
         {
-          accessibilityLabel: "Open legal documents in external browser",
+          accessibilityLabel: "在外部浏览器中打开法律文档",
           icon: "safari",
           onPress: () => void Linking.openURL(safeExternalUrl).catch(() => undefined),
         },
@@ -67,7 +67,7 @@ export function SettingsLegalDocumentRouteScreen({
           </View>
           <View className="w-full max-w-[320px] gap-2">
             <Button
-              label="Try Again"
+              label="重试"
               tone="contrast"
               fullWidth
               onPress={() => {

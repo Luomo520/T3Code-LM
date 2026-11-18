@@ -61,7 +61,7 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
 } {
   if (catalogState.isLoadingConnections) {
     return {
-      title: "Loading environments",
+      title: "正在加载环境",
       detail: "Checking saved environments on this device.",
       loading: true,
     };
@@ -69,7 +69,7 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
 
   if (!catalogState.hasConnections) {
     return {
-      title: "No environments connected",
+      title: "尚未连接环境",
       detail: "Add an environment before creating a task.",
       loading: false,
     };
@@ -85,8 +85,8 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
     return {
       title:
         catalogState.connectionState === "unsupported"
-          ? "Client not supported"
-          : "Environment unavailable",
+          ? "不支持此客户端"
+          : "环境不可用",
       detail:
         catalogState.connectionError ??
         "The saved environment is offline. Check the URL or start the environment, then retry.",
@@ -100,14 +100,14 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
     catalogState.connectionError === null
   ) {
     return {
-      title: "Connecting to environment",
+      title: "正在连接环境",
       detail: "Loading projects from the saved environment.",
       loading: true,
     };
   }
 
   return {
-    title: "No projects found",
+    title: "未找到项目",
     detail: "The connected environment did not report any projects.",
     loading: false,
   };
@@ -136,7 +136,7 @@ function NewTaskHeader(props: {
           props.canAddProject
             ? [
                 {
-                  accessibilityLabel: "Add project",
+                  accessibilityLabel: "添加项目",
                   icon: "plus",
                   onPress: () => navigation.dispatch(StackActions.push("AddProject")),
                 },
@@ -146,7 +146,7 @@ function NewTaskHeader(props: {
         search={{
           value: props.searchText,
           onChangeText: props.onSearchTextChange,
-          placeholder: "Search projects",
+          placeholder: "搜索项目",
         }}
       />
     </>
@@ -177,7 +177,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
         ? `Choose a project for the ${incomingShare.attachments[0]?.type === "image" ? "image" : "file"} you shared`
         : `Choose a project for the ${incomingShare.attachments.length} ${incomingShare.attachments.every((attachment) => attachment.type === "image") ? "images" : "files"} you shared`
     : null;
-  const screenTitle = incomingShare ? "Start a task" : "Choose project";
+  const screenTitle = incomingShare ? "开始任务" : "选择项目";
   const projectEmptyState = deriveProjectEmptyState(catalogState);
   const serverConfigs = useServerConfigs();
   const listScopes = pickableProjectGroups(projectScopes).filter(
@@ -356,8 +356,8 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               <View collapsable={false} className="overflow-hidden rounded-[28px] bg-grouped-card">
                 <NavigationRow
                   className="bg-grouped-card"
-                  title="No project"
-                  subtitle="Start a task without a project"
+                  title="无项目"
+                  subtitle="不选择项目直接开始任务"
                   disabled={!canStartScratch}
                   onPress={() => void startScratch()}
                   leading={
@@ -374,7 +374,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               <View collapsable={false} className="overflow-hidden rounded-[24px] bg-grouped-card">
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="No project"
+                  accessibilityLabel="无项目"
                   disabled={!canStartScratch}
                   onPress={() => void startScratch()}
                   className={cn(
@@ -391,10 +391,8 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                     />
                   </View>
                   <View className="min-w-0 flex-1">
-                    <Text className="text-base font-t3-bold leading-snug">No project</Text>
-                    <Text className="text-xs leading-snug text-foreground-muted" numberOfLines={1}>
-                      Start a task without a project
-                    </Text>
+                    <Text className="text-base font-t3-bold leading-snug">{"无项目"}</Text>
+                    <Text className="text-xs leading-snug text-foreground-muted" numberOfLines={1}>{"不选择项目直接开始任务"}</Text>
                   </View>
                   <SymbolView
                     name="chevron.right"
@@ -428,7 +426,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                   <View>
                     <Button
                       label={
-                        catalogState.hasReadyEnvironment ? "Add new project" : "Add environment"
+                        catalogState.hasReadyEnvironment ? "添加新项目" : "添加环境"
                       }
                       tone="primary"
                       onPress={() =>
@@ -441,7 +439,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                   {canStartScratch ? (
                     <View>
                       <Button
-                        label="Start without a project"
+                        label="不选择项目，直接开始"
                         tone="secondary"
                         onPress={() => void startScratch()}
                       />
@@ -451,7 +449,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               ) : !catalogState.hasReadyEnvironment ? (
                 <View className="mt-1">
                   <Button
-                    label="Add environment"
+                    label="添加环境"
                     tone="primary"
                     onPress={() => navigation.navigate("ConnectionsNew")}
                   />
@@ -460,7 +458,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                 <>
                   <View className="mt-1">
                     <Button
-                      label="Add new project"
+                      label="添加新项目"
                       tone="primary"
                       onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
                     />
@@ -468,7 +466,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                   {canStartScratch ? (
                     <View>
                       <Button
-                        label="Start without a project"
+                        label="不选择项目，直接开始"
                         tone="secondary"
                         onPress={() => void startScratch()}
                       />
@@ -479,12 +477,8 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             </View>
           ) : visibleScopes.length === 0 ? (
             <View className="items-center gap-2 px-6 py-8">
-              <Text className="text-center text-lg font-t3-bold text-foreground">
-                No matching projects
-              </Text>
-              <Text className="text-center text-sm leading-normal text-foreground-muted">
-                Try a different project name or workspace path.
-              </Text>
+              <Text className="text-center text-lg font-t3-bold text-foreground">{"没有匹配的项目"}</Text>
+              <Text className="text-center text-sm leading-normal text-foreground-muted">{"请尝试其他项目名称或工作区路径。"}</Text>
             </View>
           ) : (
             <View
@@ -510,7 +504,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                       title={scope.title}
                       subtitle={
                         hasMultipleProjects
-                          ? `${scope.projects.length} workspaces`
+                          ? `${scope.projects.length} 个工作区`
                           : selectionTarget.workspaceRoot
                       }
                       subtitleNumberOfLines={1}

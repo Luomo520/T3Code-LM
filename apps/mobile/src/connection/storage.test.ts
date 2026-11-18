@@ -1,3 +1,5 @@
+import { EnvironmentId } from "@t3tools/contracts";
+import { BearerConnectionProfile } from "@t3tools/client-runtime/connection";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { vi } from "vite-plus/test";
@@ -34,6 +36,35 @@ function makeStorage(initial: Readonly<Record<string, string>>) {
 }
 
 describe("mobile connection catalog storage", () => {
+  it.effect("restores the successful route hint after a new catalog instance", () =>
+    Effect.gen(function* () {
+      const memory = makeStorage({});
+      const first = yield* make().pipe(
+        Effect.provideService(MobileSecureStorage.MobileSecureStorage, memory.storage),
+      );
+      yield* first.update((document) => ({
+        ...document,
+        profiles: [
+          new BearerConnectionProfile({
+            connectionId: "lan",
+            environmentId: EnvironmentId.make("pc"),
+            label: "PC",
+            httpBaseUrl: "http://192.168.1.10:3773/",
+            wsBaseUrl: "ws://192.168.1.10:3773/",
+            lastConnectedAtEpochMs: 1234,
+          }),
+        ],
+      }));
+      const second = yield* make().pipe(
+        Effect.provideService(MobileSecureStorage.MobileSecureStorage, memory.storage),
+      );
+      expect((yield* second.read).profiles[0]).toMatchObject({
+        connectionId: "lan",
+        lastConnectedAtEpochMs: 1234,
+      });
+    }),
+  );
+
   it.effect("recovers from a corrupt current catalog", () =>
     Effect.gen(function* () {
       const memory = makeStorage({

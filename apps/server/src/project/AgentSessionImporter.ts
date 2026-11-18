@@ -12,6 +12,7 @@ import {
   MessageId,
   ProjectId,
   ProviderDriverKind,
+  type ProviderInstanceId,
   ThreadId,
   TurnItemId,
   type AgentSessionImportInput,
@@ -109,13 +110,14 @@ type HistoryMessage = Omit<AgentSessionScanner.AgentSessionThreadMessage, "role"
   readonly role: AgentSessionScanner.AgentSessionThreadMessage["role"] | "reasoning";
 };
 
-function messageEvents(input: {
+export function messageEvents(input: {
   readonly threadId: ThreadId;
   readonly index: number;
   readonly message: HistoryMessage;
+  readonly identity?: string;
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
   const ordinal = input.index + 1;
-  const suffix = String(input.index).padStart(6, "0");
+  const suffix = input.identity ?? String(input.index).padStart(6, "0");
   const messageId = MessageId.make(`${input.threadId}:${suffix}`);
   const turnItemId = TurnItemId.make(
     `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`,
@@ -207,6 +209,11 @@ const make = Effect.gen(function* () {
   const ceiling = settingsService.managedPolicy?.limits?.maxRuntimeMode;
   const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(function* (
     input: AgentSessionImportInput,
+    local?: {
+      readonly outcomes: ReadonlyArray<AgentSessionScanner.AgentSessionRecentThread>;
+      readonly active: boolean;
+      readonly ownerProviderInstanceIds?: ReadonlyArray<ProviderInstanceId>;
+    },
   ) {
     const project = yield* projects.getById(input.projectId).pipe(
       Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-projects", cause })),
@@ -262,7 +269,9 @@ const make = Effect.gen(function* () {
         ),
       );
     })).flat();
-    const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources);
+    const outcomes = local
+      ? Stream.fromIterable(local.outcomes)
+      : scanner.recentThreads(project.workspaceRoot, completedSources);
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
     let skippedCount = 0;
@@ -386,8 +395,8 @@ const make = Effect.gen(function* () {
             createdAt,
             updatedAt,
             archivedAt: null,
-            settledOverride: "settled",
-            settledAt: updatedAt,
+            settledOverride: local?.active ? "active" : "settled",
+            settledAt: local?.active ? null : updatedAt,
             unsettledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
@@ -421,7 +430,12 @@ const make = Effect.gen(function* () {
           };
 
           const committed = yield* eventSink.write({
-            unlessNativeThreadOwned: providerThread,
+            unlessNativeThreadOwned: {
+              ...providerThread,
+              ...(local?.ownerProviderInstanceIds === undefined
+                ? {}
+                : { providerInstanceIds: local.ownerProviderInstanceIds }),
+            },
             events: [
               {
                 id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${threadId}:created`),

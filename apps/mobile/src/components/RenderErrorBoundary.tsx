@@ -102,16 +102,14 @@ export function RenderFailureView(
       <Text accessibilityRole="header" className="text-center text-xl font-t3-bold">
         {title}
       </Text>
-      <Text className="text-center text-sm text-foreground-muted">
-        Try again. If it keeps happening, copy the details for a bug report.
-      </Text>
+      <Text className="text-center text-sm text-foreground-muted">{"请重试。如果问题持续出现，可复制详情以报告问题。"}</Text>
       <Text selectable className="text-center font-mono text-xs text-danger-foreground">
         {props.details.split("\n", 1)[0]?.slice(0, 300)}
       </Text>
       <View className="w-full max-w-xs gap-2">
-        <Button label="Try again" onPress={props.retry} tone="primary" fullWidth />
+        <Button label="重试" onPress={props.retry} tone="primary" fullWidth />
         <Button
-          label="Copy details"
+          label="复制详情"
           onPress={() => copyTextWithHaptic(props.details, { target: "error details" })}
           fullWidth
         />

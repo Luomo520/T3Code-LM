@@ -115,7 +115,7 @@ export function ThreadWorkflowOpening(props: {
       <View className="mb-5 gap-3">
         <View className="flex-row items-start gap-2">
           <View className="min-w-0 flex-1 gap-0.5">
-            <Text className="font-t3-medium text-2xs text-foreground-muted">Workflow started</Text>
+            <Text className="font-t3-medium text-2xs text-foreground-muted">{"工作流已启动"}</Text>
             <Text numberOfLines={1} className="font-t3-medium text-sm text-foreground">
               {headline.title}
             </Text>

@@ -91,11 +91,11 @@ export function SettingsEnvironmentsRouteScreen() {
 
   return (
     <SettingsScreen
-      title="Environments"
+      title="环境"
       refresh={
         relaySession
           ? {
-              accessibilityLabel: "Refresh cloud environments",
+              accessibilityLabel: "刷新云端环境",
               disabled: isRefreshingCloud,
               onPress: () => void refreshCloudEnvironments(),
             }
@@ -103,7 +103,7 @@ export function SettingsEnvironmentsRouteScreen() {
       }
       actions={[
         {
-          accessibilityLabel: "Add environment",
+          accessibilityLabel: "添加环境",
           icon: "plus",
           tintColor: headerIconColor,
           onPress: () => navigation.navigate("SettingsEnvironmentNew"),

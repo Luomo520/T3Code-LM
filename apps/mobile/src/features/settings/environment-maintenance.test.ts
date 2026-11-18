@@ -56,76 +56,55 @@ describe("environment maintenance access", () => {
 
 describe("environment release checks", () => {
   const signal = new AbortController().signal;
-  const feed = (...tags: ReadonlyArray<string>) =>
-    new Response(
-      `<feed><id>tag:github.com,2008:https://github.com/pingdotgg/t3code/releases</id>${tags
-        .map((tag) => `<entry><id>tag:github.com,2008:Repository/1/${tag}</id></entry>`)
-        .join("")}</feed>`,
-    );
 
-  it("keeps nightly and preview hosts on their channel without using the anonymous API quota", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) =>
-        url === "https://github.com/pingdotgg/t3code/releases.atom"
-          ? feed(
-              "desktop-preview",
-              "v1.0.0-preview.20260924.3",
-              "v1.0.0-nightly.20260924.2",
-              "v1.0.0",
-              "v1.0.0-nightly.20260923.1",
-            )
-          : new Response(null, { status: 403 }),
-      ),
-    );
-    expect(await findEnvironmentUpdate("1.0.0-nightly.20260923.1", signal)).toBe(
-      "1.0.0-nightly.20260924.2",
-    );
-    expect(await findEnvironmentUpdate("1.0.0-nightly.20260924.2", signal)).toBeNull();
-    expect(await findEnvironmentUpdate("1.0.0-preview.20260923.1", signal)).toBe(
-      "1.0.0-preview.20260924.3",
-    );
-    expect(await findEnvironmentUpdate("1.0.0-preview.20260925.1", signal)).toBeNull();
+  it("uses only the remote platform-aware lookup and compares fork builds", async () => {
+    const lookup = vi.fn().mockResolvedValue({ version: "0.1.0-2" });
+    expect(await findEnvironmentUpdate("0.1.0-1", signal, lookup)).toEqual({
+      targetVersion: "0.1.0-2",
+      manualCheckRequired: false,
+    });
+    expect(lookup).toHaveBeenCalledWith(signal);
+    expect(await findEnvironmentUpdate("0.1.0-2", signal, lookup)).toEqual({
+      targetVersion: null,
+      manualCheckRequired: false,
+    });
+    expect(await findEnvironmentUpdate("0.1.0-3", signal, lookup)).toEqual({
+      targetVersion: null,
+      manualCheckRequired: false,
+    });
+    expect(await findEnvironmentUpdate("0.1.1-t3usage.25-nas.2", signal, lookup)).toEqual({
+      targetVersion: "0.1.0-2",
+      manualCheckRequired: false,
+    });
   });
 
-  it("finds a published preview beyond the ten-entry feed and first API page", async () => {
-    const nightlies = Array.from({ length: 10 }, (_, i) => `v1.0.0-nightly.20260930.${i}`);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url === "https://github.com/pingdotgg/t3code/releases.atom") return feed(...nightlies);
-        if (url === "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=100&page=1") {
-          return Response.json(Array.from({ length: 100 }, () => ({ tag_name: "v2.0.0" })));
-        }
-        if (url === "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=100&page=2") {
-          return Response.json([
-            { tag_name: "v1.0.0-preview.20260925.1", draft: true },
-            { tag_name: "v1.0.0-preview.20260924.3" },
-          ]);
-        }
-        throw new Error(`Unexpected release request: ${url}`);
+  it("never offers a generic or another platform's latest release to legacy hosts", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    expect(await findEnvironmentUpdate("0.1.0-1", signal)).toEqual({
+      targetVersion: null,
+      manualCheckRequired: true,
+    });
+    expect(
+      await findEnvironmentUpdate("1.0.0-nightly.20260923.1", signal, async () => ({
+        version: "1.1.0",
+      })),
+    ).toEqual({
+      targetVersion: null,
+      manualCheckRequired: true,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("preserves no-package and lookup failure states without claiming an update exists", async () => {
+    expect(await findEnvironmentUpdate("0.1.0-1", signal, async () => null)).toEqual({
+      targetVersion: null,
+      manualCheckRequired: false,
+    });
+    await expect(
+      findEnvironmentUpdate("0.1.0-1", signal, async () => {
+        throw new Error("GitHub unavailable");
       }),
-    );
-    expect(await findEnvironmentUpdate("1.0.0-preview.20260923.1", signal)).toBe(
-      "1.0.0-preview.20260924.3",
-    );
-  });
-
-  it("reports failed checks instead of claiming the server is current", async () => {
-    for (const status of [403, 429]) {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status })));
-      await expect(findEnvironmentUpdate("1.0.0", signal)).rejects.toThrow(String(status));
-    }
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) =>
-        url.endsWith(".atom") ? feed("v1.0.0") : Response.json([{ tag_name: "v1.0.0" }]),
-      ),
-    );
-    await expect(findEnvironmentUpdate("1.0.0-nightly.20260923.1", signal)).rejects.toThrow(
-      "No nightly release",
-    );
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: "invalid" })));
-    await expect(findEnvironmentUpdate("1.0.0", signal)).rejects.toThrow();
+    ).rejects.toThrow("GitHub unavailable");
   });
 });

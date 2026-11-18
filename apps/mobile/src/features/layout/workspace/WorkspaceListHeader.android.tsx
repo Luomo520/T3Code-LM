@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigation, useNavigationState } from "@react-navigation/native";
-import { BackHandler, Keyboard } from "react-native";
+import { BackHandler, Keyboard, View } from "react-native";
 
 import { AppBar } from "../../../components/ui/AppBar";
 import { useWorkspaceConnectionState } from "../../../state/workspace";
@@ -60,10 +60,13 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
     <AppBar
       title="T3 Code"
       titleContent={
-        <WorkspaceBrandTitle
-          accessibilityLabel={props.accessibilityLabel}
-          onOpenEnvironments={props.onOpenEnvironments}
-        />
+        <View className="flex-row items-center gap-2">
+          <WorkspaceBrandTitle
+            accessibilityLabel={props.accessibilityLabel}
+            onOpenEnvironments={props.onOpenEnvironments}
+          />
+          {props.titleAccessory}
+        </View>
       }
       search={{
         value: search.value,

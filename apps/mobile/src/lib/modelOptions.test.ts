@@ -649,7 +649,7 @@ describe("mobile model options", () => {
       expect(isModelSelectionUnavailable(configWith(settings), selection, projectId)).toBe(true);
       expect(
         describeUnavailableModelSelection(configWith(settings), selection, projectId).title,
-      ).toBe("Model turned off for this project");
+      ).toBe("此项目已关闭该模型");
       expect(isModelSelectionUnavailable(configWith(settings), selection, null)).toBe(true);
     });
 

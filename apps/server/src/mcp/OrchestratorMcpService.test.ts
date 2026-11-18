@@ -1775,7 +1775,6 @@ describe("OrchestratorMcpService provider resolution", () => {
           }
 
           for (const instanceId of [
-            codexInstanceId,
             ProviderInstanceId.make("claudeAgent"),
             ProviderInstanceId.make("pi"),
             ProviderInstanceId.make("acpRegistry"),
@@ -1791,6 +1790,10 @@ describe("OrchestratorMcpService provider resolution", () => {
             assert.deepEqual(entry!.constraints, []);
           }
 
+          const codex = byId.get(codexInstanceId)!;
+          assert.isFalse(codex.canRunChildTask);
+          assert.isFalse(codex.canRunCrossProviderChildTask);
+          assert.include(codex.constraints.join(" "), "native subagent tools");
           const disabled = byId.get(disabledAntigravityInstanceId);
           assert.isDefined(disabled);
           assert.isFalse(disabled!.canRunChildTask);
@@ -1806,10 +1809,11 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.isDefined(disabledWithoutAdapter);
           assert.isFalse(disabledWithoutAdapter!.canRunChildTask);
           assert.isFalse(disabledWithoutAdapter!.canRunCrossProviderChildTask);
-          assert.deepEqual(disabledWithoutAdapter!.constraints, [
+          assert.deepEqual(disabledWithoutAdapter!.constraints.slice(0, 2), [
             "No V2 provider adapter is registered.",
             "Provider instance is disabled.",
           ]);
+          assert.include(disabledWithoutAdapter!.constraints.at(-1)!, "native subagent tools");
 
           const fork = byId.get(forkOnlyInstanceId);
           assert.isDefined(fork);
@@ -2294,7 +2298,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         parentNodeId,
         origin: "app_owned",
         createdBy: "agent",
-        driver: ProviderDriverKind.make("codex"),
+        driver: ProviderDriverKind.make("claudeAgent"),
         providerInstanceId: altInstanceId,
         providerThreadId: null,
         childThreadId,
@@ -2352,12 +2356,12 @@ describe("OrchestratorMcpService provider resolution", () => {
         providerRegistryLayer([
           providerSnapshot({
             instanceId: codexInstanceId,
-            driver: ProviderDriverKind.make("codex"),
+            driver: ProviderDriverKind.make("claudeAgent"),
             model: "gpt-5.4",
           }),
           providerSnapshot({
             instanceId: altInstanceId,
-            driver: ProviderDriverKind.make("codex"),
+            driver: ProviderDriverKind.make("claudeAgent"),
             model: "gpt-5.4",
           }),
         ]),
@@ -2373,7 +2377,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
         const result = yield* service.delegateTask(scope, {
           task: "Summarize the diff.",
-          target: { driverKind: ProviderDriverKind.make("codex") },
+          target: { driverKind: ProviderDriverKind.make("claudeAgent") },
           mode: "async",
           clientRequestId: "delegate-driver-skip-disabled-1",
         });
@@ -2394,7 +2398,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       Effect.gen(function* () {
         const altInstanceId = ProviderInstanceId.make("codex-alt");
         const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
-        const accepted = yield* Ref.make(false);
+        const accepted = yield* Ref.make(true);
         const everyCandidateDisabled = yield* Ref.make(false);
         const task = {
           id: taskId,
@@ -3064,34 +3068,19 @@ describe("OrchestratorMcpService provider resolution", () => {
               assert.deepEqual(yield* Ref.get(dispatched), [], testCase.name);
               return;
             }
-            const result = yield* service.delegateTask(scope, {
-              task: "Summarize the diff.",
-              target,
-              mode: "async",
-              clientRequestId: `delegate-select-${testCase.name}`,
-            });
-            assert.equal(result.status, "running", testCase.name);
-            const commands = yield* Ref.get(dispatched);
-            assert.equal(commands.length, 1, testCase.name);
-            const request = commands[0] as {
-              type: string;
-              modelSelection: {
-                instanceId: string;
-                model: string;
-                options?: ReadonlyArray<{ id: string; value: unknown }>;
-              };
-            };
-            assert.equal(request.type, "delegated_task.request", testCase.name);
-            assert.equal(
-              request.modelSelection.instanceId,
-              testCase.selectedInstanceId,
-              testCase.name,
-            );
-            if (testCase.name === "healthy-inherited") {
-              assert.deepEqual(request.modelSelection, parentModelSelection, testCase.name);
-            } else {
-              assert.equal(request.modelSelection.model, "codex-alt-model", testCase.name);
-            }
+            // Healthy Codex instances must not create independent children.
+            const error = yield* service
+              .delegateTask(scope, {
+                task: "Summarize the diff.",
+                target,
+                mode: "async",
+                clientRequestId: `delegate-select-${testCase.name}`,
+              })
+              .pipe(Effect.flip);
+            assert.equal(error.code, "invalid_request");
+            assert.include(error.message, "native subagent tools");
+            assert.deepEqual(yield* Ref.get(dispatched), []);
+            return;
           }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
         }
       }),
@@ -3768,7 +3757,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     () =>
       Effect.gen(function* () {
         const peerId = ProviderInstanceId.make("codex-subscription-2");
-        const driver = ProviderDriverKind.make("codex");
+        const driver = ProviderDriverKind.make("claudeAgent");
         const inherited = {
           instanceId: codexInstanceId,
           model: "gpt-5.4",

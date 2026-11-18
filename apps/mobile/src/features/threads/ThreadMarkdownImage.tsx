@@ -254,7 +254,7 @@ function ThreadMarkdownImageLoading() {
       pointerEvents="none"
       style={[StyleSheet.absoluteFill, { alignItems: "center", justifyContent: "center" }]}
     >
-      <Text className="text-xs text-foreground-muted">Loading image…</Text>
+      <Text className="text-xs text-foreground-muted">{"正在加载图片…"}</Text>
     </View>
   );
 }

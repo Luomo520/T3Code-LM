@@ -1,6 +1,7 @@
 import {
   DESKTOP_UPDATE_IN_PROGRESS_MARKER_FILE,
   ServerSelfUpdateError,
+  ServerRestartError,
   type ServerSelfUpdateCapability,
   type ServerSelfUpdateInput,
   type ServerSelfUpdateProgressEvent,
@@ -63,6 +64,10 @@ export function resolveServerSelfUpdateCapability(input: {
 export class ServerSelfUpdate extends Context.Service<
   ServerSelfUpdate,
   {
+    /** Reserves the same maintenance gate as update preparation until shutdown. */
+    readonly withRestart: (
+      restart: Effect.Effect<void, ServerRestartError>,
+    ) => Effect.Effect<void, ServerRestartError>;
     readonly update: (
       input: ServerSelfUpdateInput,
       reportProgress?: (
@@ -190,12 +195,16 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
       const unsafeCrossing = input.channel === undefined ? null : crossesTrackUnsafely(input);
       if (unsafeCrossing !== null) return yield* failWith(unsafeCrossing);
       if (desktopAppUpdate.available) {
-        return yield* desktopAppUpdate.run(
-          reportProgress,
-          input.channel === undefined
-            ? undefined
-            : { channel: input.channel, targetVersion: input.targetVersion },
-        );
+        if (yield* Ref.getAndSet(inFlight, true))
+          return yield* failWith("A server update or restart is already in progress.");
+        return yield* desktopAppUpdate
+          .run(
+            reportProgress,
+            input.channel === undefined
+              ? undefined
+              : { channel: input.channel, targetVersion: input.targetVersion },
+          )
+          .pipe(Effect.onError(() => Ref.set(inFlight, false)));
       }
       return yield* failWith(
         "This server is managed by the T3 Code desktop app on its machine; update the desktop app to update it.",
@@ -216,7 +225,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
       return yield* failWith(`'${targetVersion}' is not an exact t3 version.`);
     }
     if (yield* Ref.getAndSet(inFlight, true)) {
-      return yield* failWith("A server update is already in progress.");
+      return yield* failWith("A server update or restart is already in progress.");
     }
 
     return yield* Effect.gen(function* () {
@@ -361,10 +370,21 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   });
 
   return ServerSelfUpdate.of({
+    withRestart: Effect.fn("ServerSelfUpdate.withRestart")(function* (restart) {
+      if (yield* Ref.getAndSet(inFlight, true)) {
+        return yield* new ServerRestartError({
+          reason: "A server update or restart is already in progress.",
+        });
+      }
+      // Keep the gate reserved after acknowledgement; the supervisor owns shutdown.
+      yield* restart.pipe(Effect.onError(() => Ref.set(inFlight, false)));
+    }),
     update,
     commitDesktopUpdate: Effect.fn("ServerSelfUpdate.commitDesktopUpdate")(
       function (requestId, onHandoffAccepted) {
-        return desktopAppUpdate.commit(requestId, onHandoffAccepted);
+        return desktopAppUpdate
+          .commit(requestId, onHandoffAccepted)
+          .pipe(Effect.onError(() => Ref.set(inFlight, false)));
       },
     ),
   });

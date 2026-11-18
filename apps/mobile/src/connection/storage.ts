@@ -22,6 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as CatalogStore from "./catalog-store";
+import { profileWithRouteHistory, recordSuccessfulRoute } from "./route-history";
 
 function targetPersistenceError(
   operation:
@@ -99,8 +100,14 @@ export const layer = Layer.effectContext(
       put: (profile) =>
         catalog.update((document) => ({
           ...document,
-          profiles: replaceCatalogValue(document.profiles, (value) => value.connectionId, profile),
+          profiles: replaceCatalogValue(
+            document.profiles,
+            (value) => value.connectionId,
+            profileWithRouteHistory(document.profiles, profile),
+          ),
         })),
+      recordSuccess: (profile, connectedAtEpochMs) =>
+        catalog.update((document) => recordSuccessfulRoute(document, profile, connectedAtEpochMs)),
       remove: (connectionId) =>
         catalog.update((document) => ({
           ...document,

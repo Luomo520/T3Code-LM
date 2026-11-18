@@ -276,6 +276,83 @@ const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate
   return threadId;
 });
 
+it.effect.each([
+  ["SQL", layerTest],
+] as const)(
+  "%s shells retain the last conversation message time across metadata updates",
+  ([, layer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const seedId = yield* addRolledBackRecoveryCandidate("conversation-time-seed");
+      const seed = yield* store.getThreadProjection(seedId);
+      const threadId = ThreadId.make("thread:conversation-time-no-run");
+      const createdAt = DateTime.makeUnsafe("2026-10-01T10:00:00.000Z");
+      const userAt = DateTime.add(createdAt, { minutes: 1 });
+      const assistantAt = DateTime.add(createdAt, { minutes: 2 });
+      const assistantUpdatedAt = DateTime.add(createdAt, { minutes: 3 });
+      const metadataAt = DateTime.add(createdAt, { days: 5 });
+      const thread = {
+        ...seed.thread,
+        id: threadId,
+        lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+        createdAt,
+        updatedAt: createdAt,
+      };
+      yield* store.apply({
+        id: EventId.make("event:conversation-time:created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: createdAt,
+        payload: thread,
+      });
+      assert.isNull((yield* store.getThreadShell(threadId))?.latestConversationMessageAt);
+      for (const [role, createdAt, updatedAt] of [
+        ["user", userAt, userAt],
+        ["assistant", assistantAt, assistantUpdatedAt],
+      ] as const) {
+        yield* store.apply({
+          id: EventId.make(`event:conversation-time:${role}`),
+          type: "message.updated",
+          threadId,
+          occurredAt: updatedAt,
+          payload: {
+            createdBy: role === "user" ? "user" : "agent",
+            creationSource: "server",
+            id: MessageId.make(`message:conversation-time:${role}`),
+            threadId,
+            runId: null,
+            nodeId: null,
+            role,
+            text: role,
+            attachments: [],
+            streaming: false,
+            createdAt,
+            updatedAt,
+          },
+        });
+      }
+      yield* store.apply({
+        id: EventId.make("event:conversation-time:metadata"),
+        type: "thread.metadata-updated",
+        threadId,
+        occurredAt: metadataAt,
+        payload: { ...thread, title: "Renamed later", updatedAt: metadataAt },
+      });
+      const projection = yield* store.getThreadProjection(threadId);
+      assert.lengthOf(projection.runs, 0);
+      const listed = (yield* store.getShellSnapshot()).threads.find((row) => row.id === threadId);
+      for (const shell of [
+        yield* store.getThreadShell(threadId),
+        listed,
+        ProjectionStore.threadShellFromProjection(projection),
+      ]) {
+        assert.deepEqual(shell?.latestConversationMessageAt, assistantUpdatedAt);
+        assert.deepEqual(shell?.latestUserMessageAt, userAt);
+        assert.deepEqual(shell?.updatedAt, metadataAt);
+      }
+    }).pipe(Effect.provide(layer)),
+);
+
 it.effect("routes full projection reads to readers and retains uncommitted writer state", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;

@@ -77,6 +77,7 @@ export interface AppBarProps {
   /** Android: replaces the title text, such as the brand title. iOS ignores it. */
   readonly titleContent?: ReactNode;
   readonly subtitle?: string | null;
+  readonly subtitleAccessory?: ReactNode;
   readonly actions?: ReadonlyArray<AppBarAction>;
   /**
    * Pull-to-refresh is the gesture on both platforms. Android also lists this in the overflow

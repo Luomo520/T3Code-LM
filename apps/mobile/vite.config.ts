@@ -4,6 +4,9 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/features/home/AndroidHomeFab.layout.test.tsx",
+  "src/features/layout/workspace/AndroidWorkspaceNavigation.recovery.test.tsx",
+  "src/components/ui/DockGlass.test.tsx",
   "src/features/threads/git/GitBranchesSheet.test.tsx",
   "src/features/threads/new-task-flow-provider.test.tsx",
   "src/features/layout/workspace/workspace-tabs-state.test.ts",
@@ -28,6 +31,9 @@ const reactTests = [
   "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
   "src/features/settings/SettingsScheduledTasksRouteScreen.test.tsx",
   "src/features/settings/components/BranchNamingSettings.test.tsx",
+  "src/features/usage/useHeaderUsageHistory.test.tsx",
+  "src/features/usage/useHeaderUsagePolling.test.tsx",
+  "src/features/usage/HeaderUsageDetailsDialog.test.tsx",
   "src/features/settings/components/SettingsDragHandle.test.tsx",
   "src/features/threads/ThreadMarkdownImage.test.tsx",
   "src/components/ui/FilePreviewSession.test.tsx",
@@ -51,6 +57,7 @@ const reactTests = [
   "src/features/connection/LinkedEnvironmentsSection.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/keyboard/keyboardControllerState.test.tsx",
+  "src/features/keyboard/useSoftKeyboardShowing.test.tsx",
 ];
 
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;

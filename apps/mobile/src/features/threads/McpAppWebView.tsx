@@ -82,7 +82,7 @@ const confirm = (title: string, message: string, action: string) =>
       title,
       message,
       [
-        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        { text: "取消", style: "cancel", onPress: () => resolve(false) },
         { text: action, onPress: () => resolve(true) },
       ],
       // Android dismisses earlier alerts when showing another; decline dismissed requests to release their slots.
@@ -491,9 +491,7 @@ export function ThreadMcpApp(props: {
         style={{ height, marginBottom: ROW_BOTTOM_MARGIN }}
         className="items-center justify-center rounded-lg border border-border"
       >
-        <Text className="text-sm text-foreground-muted">
-          The {app.server} app is open full screen
-        </Text>
+        <Text className="text-sm text-foreground-muted">{""}{app.server}{"应用已全屏打开"}</Text>
       </View>
     );
   }
@@ -504,10 +502,10 @@ export function ThreadMcpApp(props: {
         style={{ height, marginBottom: ROW_BOTTOM_MARGIN }}
         className="items-center justify-center gap-2 rounded-lg border border-border"
       >
-        <Text className="text-sm text-foreground-muted">The {app.server} app was closed</Text>
+        <Text className="text-sm text-foreground-muted">{""}{app.server}{"应用已关闭"}</Text>
         <View className="items-center">
           <Button
-            label="Show app"
+            label="显示应用"
             tone="secondary"
             onPress={() => {
               reopenDocument();
@@ -523,9 +521,7 @@ export function ThreadMcpApp(props: {
     <View style={fullscreen ? { flex: 1 } : { height, marginBottom: ROW_BOTTOM_MARGIN }}>
       {navigatedAway ? (
         <View className="flex-1 items-center justify-center">
-          <Text className="text-sm text-foreground-muted">
-            The {app.server} app left its page and was stopped
-          </Text>
+          <Text className="text-sm text-foreground-muted">{""}{app.server}{"应用离开了原页面，已停止"}</Text>
         </View>
       ) : uri !== null && !crashed ? (
         <WebView<object>
@@ -570,7 +566,7 @@ export function ThreadMcpApp(props: {
         />
       ) : asset._tag === "Failure" || crashed ? (
         <View className="flex-1 items-center justify-center">
-          <Text className="text-sm text-foreground-muted">Unable to load the {app.server} app</Text>
+          <Text className="text-sm text-foreground-muted">{"无法加载"}{app.server} app</Text>
         </View>
       ) : null}
       {uri !== null && !loaded && !crashed && !navigatedAway ? (

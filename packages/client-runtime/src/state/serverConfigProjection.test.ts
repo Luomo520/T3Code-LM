@@ -41,7 +41,7 @@ describe("applyServerConfigProjection settingsUpdated", () => {
       },
     };
     const current = Option.some({
-      config: { settings } as unknown as ServerConfig,
+      config: { settings, environment: { capabilities: {} } } as unknown as ServerConfig,
       latestEvent: {} as ServerConfigStreamEvent,
       source: "live" as const,
     });
@@ -112,7 +112,7 @@ describe("applyServerConfigProjection provider catalogs", () => {
 
     const reconnected = apply(projection([held]), {
       type: "snapshot",
-      config: { providers: [sent({ checkedAt: "b" })] },
+      config: { environment: { capabilities: {} }, providers: [sent({ checkedAt: "b" })] },
     });
     expect(reconnected).toMatchObject({ checkedAt: "b", loadedCatalogDigest: "d1" });
     expect(reconnected.slashCommands).toBe(slashCommands);
@@ -134,5 +134,36 @@ describe("applyServerConfigProjection provider catalogs", () => {
     });
     expect(legacy.slashCommands).toBe(slashCommands);
     expect(legacy.loadedCatalogDigest).toBeUndefined();
+  });
+});
+
+describe("configurable file upload limit projection", () => {
+  it.each([true, false])("updates immediately only on a capable server (%s)", (supported) => {
+    const config = {
+      settings: { attachmentMaxFileSizeMiB: 50 },
+      environment: {
+        capabilities: {
+          configurableAttachmentLimit: supported,
+          fileAttachments: { maxUploadBytes: 50 * 1024 * 1024 },
+        },
+      },
+    } as unknown as ServerConfig;
+    const next = applyServerConfigProjection(
+      Option.some({
+        config,
+        latestEvent: {} as ServerConfigStreamEvent,
+        source: "live",
+      }),
+      {
+        version: 1,
+        type: "settingsUpdated",
+        payload: {
+          settings: { ...config.settings, attachmentMaxFileSizeMiB: 256 },
+        },
+      },
+    );
+    expect(
+      Option.getOrThrow(next).config.environment.capabilities.fileAttachments?.maxUploadBytes,
+    ).toBe((supported ? 256 : 50) * 1024 * 1024);
   });
 });

@@ -310,7 +310,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
           {
             environmentId: target.environmentId,
             projectTitle: "",
-            message: cause instanceof Error ? cause.message : "Couldn't load pull requests.",
+            message: cause instanceof Error ? cause.message : "无法加载拉取请求。",
           },
         ];
       }),

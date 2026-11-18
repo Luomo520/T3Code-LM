@@ -1008,6 +1008,7 @@ function RightPanelTab(
   return (
     <div
       data-active-tab={props.active}
+      data-titlebar-no-drag=""
       onMouseDown={preventTabMiddleButtonDefault}
       onMouseUp={preventTabMiddleButtonDefault}
       onAuxClick={(event) => onAuxClick(event, surface)}

@@ -5,6 +5,7 @@ import {
   ATTACHMENT_UPLOAD_URL_TTL_MS,
   type AttachmentCreateUploadUrlInput,
   AttachmentUploadSigningKeyError,
+  AttachmentUploadLimitError,
 } from "@t3tools/contracts";
 import { isSvgAttachment } from "@t3tools/shared/image";
 import * as Clock from "effect/Clock";
@@ -31,6 +32,7 @@ import { base64UrlDecodeUtf8, base64UrlEncode } from "../auth/utils.ts";
 import * as AssetSigner from "./AssetSigner.ts";
 import * as ServerConfig from "../config.ts";
 import { inferImageExtension } from "../imageMime.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 
 export const ATTACHMENT_UPLOAD_ROUTE_PREFIX = "/api/attachments/upload";
@@ -67,6 +69,13 @@ function decodeClaims(encodedPayload: string): AttachmentUploadClaims | null {
 export const issueAttachmentUploadUrl = Effect.fn("AttachmentUpload.issueUrl")(function* (
   input: AttachmentCreateUploadUrlInput,
 ) {
+  if (input.type === "file") {
+    const settings = yield* (yield* ServerSettingsService).getSettings;
+    const maxUploadBytes = settings.attachmentMaxFileSizeMiB * 1024 * 1024;
+    if (input.sizeBytes > maxUploadBytes) {
+      return yield* new AttachmentUploadLimitError({ maxUploadBytes });
+    }
+  }
   const config = yield* ServerConfig.ServerConfig;
   const nowMs = yield* Clock.currentTimeMillis;
   const previousSweep = lastPendingSweepByDirectory.get(config.attachmentsDir);
@@ -151,6 +160,17 @@ export const storeAttachmentUpload = Effect.fn("AttachmentUpload.store")(functio
   claims: AttachmentUploadClaims,
   body: Uint8Array | HttpServerRequest.HttpServerRequest["stream"],
 ) {
+  if (claims.type === "file") {
+    const settings = yield* (yield* ServerSettingsService).getSettings;
+    const maxUploadBytes = settings.attachmentMaxFileSizeMiB * 1024 * 1024;
+    if (claims.sizeBytes > maxUploadBytes) {
+      return {
+        ok: false,
+        status: 413,
+        detail: new AttachmentUploadLimitError({ maxUploadBytes }).message,
+      };
+    }
+  }
   if (body instanceof Uint8Array && body.byteLength !== claims.sizeBytes) {
     return {
       ok: false,

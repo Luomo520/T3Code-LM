@@ -1,3 +1,4 @@
+import { DockGlassCapture } from "../../components/ui/DockGlass";
 import {
   WorkspaceColumnsRendererContext,
   WorkspacePresentationHostContext,
@@ -1026,23 +1027,26 @@ function AdaptiveWorkspaceLayoutContent(
           ]}
         >
           <Animated.View className="flex-1" style={listPaneAnimatedStyle}>
-            <PaneContext value="sidebar">
-              <RenderErrorBoundary
-                renderFallback={(fallback) => (
-                  <RenderFailureView
-                    {...fallback}
-                    title="The sidebar couldn't be displayed"
-                    exit={{ label: "Open settings", onPress: handleOpenSettings }}
-                  />
-                )}
-              >
-                {/* Without a sidebar route (iPadOS before 26) the columns draw the thread list. */}
-                {sidebar ?? <WorkspaceThreadSidebar />}
-              </RenderErrorBoundary>
-            </PaneContext>
+            <DockGlassCapture scope="sidebar" style={{ flex: 1 }}>
+              <PaneContext value="sidebar">
+                <RenderErrorBoundary
+                  renderFallback={(fallback) => (
+                    <RenderFailureView
+                      {...fallback}
+                      title="无法显示侧栏"
+                      exit={{ label: "打开设置", onPress: handleOpenSettings }}
+                    />
+                  )}
+                >
+                  {/* Without a sidebar route (iPadOS before 26) the columns draw the thread list. */}
+                  {sidebar ?? <WorkspaceThreadSidebar />}
+                </RenderErrorBoundary>
+              </PaneContext>
+            </DockGlassCapture>
             {/* Keep the pill under the content throughout the sidebar's clipping animation. */}
             {floatingTabsEnabled && !workspacePage ? (
               <FloatingWorkspaceTabs
+                glassScope="sidebar"
                 paneWidth={layout.listPaneWidth}
                 onNewThread={handleStartNewTask}
                 onSelect={revealPrimarySidebar}
@@ -1102,11 +1106,11 @@ function AdaptiveWorkspaceLayoutContent(
                       : safeAreaInsets
                 }
               >
-                <View className="flex-1">
+                <DockGlassCapture scope="workspace" style={{ flex: 1 }}>
                   <PaneContext value="content">
                     <SettingsWorkspaceLayout>{children}</SettingsWorkspaceLayout>
                   </PaneContext>
-                </View>
+                </DockGlassCapture>
               </SafeAreaInsetsContext>
               {floatingTabsEnabled &&
               (compactAndroidSettings || (layout.usesSplitView && workspacePage)) ? (

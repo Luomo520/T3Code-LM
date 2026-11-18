@@ -91,9 +91,9 @@ async function sendFilesToPage(chooser: PreviewStreamFileChooser, pick: boolean)
 
 function offerDownload(download: PreviewStreamDownload) {
   Dialog.alert(`Downloaded ${download.fileName}`, undefined, [
-    { text: "Not now", style: "cancel" },
+    { text: "暂不设置", style: "cancel" },
     {
-      text: "Save or share",
+      text: "保存或分享",
       onPress: () =>
         void downloadAndShareAttachment({
           url: download.url,
@@ -150,7 +150,7 @@ export function PreviewStreamWebView(
           </AppText>
           {error && (
             <View className="items-center">
-              <Button label="Retry" tone="secondary" onPress={refresh} />
+              <Button label="重试" tone="secondary" onPress={refresh} />
             </View>
           )}
         </>
@@ -430,13 +430,12 @@ function PreviewStreamDocumentView({
       </View>
       {!compact && fileChooser && control?.controller === "you" ? (
         <View className="absolute inset-x-3 top-16 gap-3 rounded-xl border border-secondary-border bg-secondary p-4">
-          <AppText className="text-sm text-secondary-foreground">
-            The page asks for {fileChooser.multiple ? "files" : "a file"}.
+          <AppText className="text-sm text-secondary-foreground">{"此页面请求"}{fileChooser.multiple ? "files" : "a file"}.
           </AppText>
           <View className="flex-row justify-end gap-3">
-            <Button label="Cancel" tone="text" onPress={() => answerFileChooser(false)} />
+            <Button label="取消" tone="text" onPress={() => answerFileChooser(false)} />
             <Button
-              label={`Choose ${fileChooser.multiple ? "files" : "file"}`}
+              label={`Choose ${fileChooser.multiple ? "个文件" : "file"}`}
               tone="secondary"
               onPress={() => answerFileChooser(true)}
             />
@@ -450,7 +449,7 @@ function PreviewStreamDocumentView({
             <>
               {control.dialog.type === "prompt" ? (
                 <TextInput
-                  accessibilityLabel="Dialog response"
+                  accessibilityLabel="对话框回复"
                   className="rounded-lg border border-input-border bg-input px-3 py-2 text-foreground"
                   placeholderTextColorClassName="accent-placeholder"
                   selectionColorClassName="accent-focus/32"
@@ -460,12 +459,12 @@ function PreviewStreamDocumentView({
               ) : null}
               <View className="flex-row justify-end gap-3">
                 <Button
-                  label="Dismiss"
+                  label="关闭"
                   tone="text"
                   onPress={() => command({ type: "dialog", accept: false })}
                 />
                 <Button
-                  label="Accept"
+                  label="接受"
                   tone="secondary"
                   onPress={() =>
                     command({
@@ -478,7 +477,7 @@ function PreviewStreamDocumentView({
               </View>
             </>
           ) : (
-            <AppText className="text-xs text-foreground-muted">Take control to respond.</AppText>
+            <AppText className="text-xs text-foreground-muted">{"接管控制后可回复。"}</AppText>
           )}
         </View>
       ) : null}
@@ -508,7 +507,7 @@ function PreviewStreamDocumentView({
               <AppText selectable className="flex-1 font-mono text-sm text-secondary-foreground">
                 {hostSetup.command}
               </AppText>
-              <AppText className="text-xs text-foreground-muted">Copy</AppText>
+              <AppText className="text-xs text-foreground-muted">{"复制"}</AppText>
             </Pressable>
           ) : null}
           {status === "error" && !gone && !compact ? (

@@ -113,7 +113,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const threadId = props.threadId;
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
-  const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? "Detached HEAD";
+  const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? "分离 HEAD";
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
@@ -122,7 +122,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const quickAction = (() => {
     if (!isRepo) {
       return {
-        label: "Git unavailable",
+        label: "Git 不可用",
         disabled: true,
         kind: "show_hint" as const,
         hint: "This workspace is not a git repository.",
@@ -251,7 +251,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 export function threadTerminalMenu(props: ThreadGitControlsProps): AppBarMenu | null {
   if (!props.canOpenTerminal) return null;
   return {
-    title: "Terminal",
+    title: "终端",
     icon: "terminal",
     separateBackground: false,
     items: [
@@ -267,9 +267,9 @@ export function threadTerminalMenu(props: ThreadGitControlsProps): AppBarMenu | 
         : [
             {
               id: "script-none",
-              title: "No project scripts",
+              title: "没有项目脚本",
               icon: "play",
-              subtitle: "This project has no saved scripts yet",
+              subtitle: "此项目尚未保存脚本",
               disabled: true,
               onPress: () => {},
             },
@@ -291,9 +291,9 @@ export function threadTerminalMenu(props: ThreadGitControlsProps): AppBarMenu | 
       })),
       {
         id: "terminal-new",
-        title: "Open new terminal",
+        title: "打开新终端",
         icon: "plus",
-        subtitle: "Start another shell for this thread",
+        subtitle: "为此任务打开另一个 Shell",
         disabled: !props.canOperateTerminal,
         onPress: props.onOpenNewTerminal,
       },
@@ -305,7 +305,7 @@ export function threadTerminalMenu(props: ThreadGitControlsProps): AppBarMenu | 
 export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMenu | null {
   const model = useThreadGitControlModel(props);
   return {
-    title: "Git controls",
+    title: "Git 控件",
     icon: "point.topleft.down.curvedto.point.bottomright.up",
     separateBackground: false,
     items: [
@@ -329,35 +329,35 @@ export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMen
       },
       {
         id: "git-review",
-        title: "Review changes",
+        title: "检查更改",
         icon: "text.bubble",
         disabled: !model.isRepo || props.hasThread === false,
         subtitle:
           props.hasThread === false
             ? "Available after the first message"
-            : "Turn diffs and worktree changes",
+            : "轮次差异与工作树更改",
         onPress: model.openReview,
       },
       ...(props.onMergeBack
         ? [
             {
               id: "git-merge-back",
-              title: "Merge back to source",
+              title: "合并回来源分支",
               icon: PullRequestGlyph.merged,
-              subtitle: "Bring this thread's latest turn into its source",
+              subtitle: "将此任务的最新轮次合并回来源",
               onPress: props.onMergeBack,
             },
           ]
         : []),
       {
         id: "git-more",
-        title: "More",
+        title: "更多",
         icon: "ellipsis",
         disabled: props.hasThread === false,
         subtitle:
           props.hasThread === false
             ? "Available after the first message"
-            : "Commit, files, branches",
+            : "提交、文件与分支",
         onPress: model.openGitInspector,
       },
     ],

@@ -71,20 +71,20 @@ export function pullRequestAgentActions(pr: PullRequestDetail, canWatch: boolean
   return [
     {
       task: "ask",
-      title: "Ask a question",
+      title: "提问",
       icon: "bubble.left.and.text.bubble.right",
       disabled: false,
     },
     { task: "explain", title: `Explain this ${shortLabel}`, icon: "book", disabled: false },
     {
       task: "feedback",
-      title: "Address feedback",
+      title: "处理反馈",
       icon: "wrench.and.screwdriver",
       disabled: pr.state !== "open",
     },
     {
       task: "conflicts",
-      title: "Resolve conflicts",
+      title: "解决冲突",
       icon: "arrow.triangle.branch",
       disabled: pr.state !== "open" || pr.mergeability !== "conflicting",
     },

@@ -43,7 +43,7 @@ import {
   normalizeDesktopUpdateReleaseNotes,
   releaseNotesOfOfferedVersion,
 } from "./releaseNotes.ts";
-import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
+import { desktopUpdateChannelOf, FORK_RELEASE_FEED_URL } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import {
   createInitialDesktopUpdateState,
@@ -463,7 +463,10 @@ export const make = Effect.gen(function* () {
   const hasUpdateFeedConfig = Ref.get(appUpdateYmlConfigRef).pipe(
     Effect.map(
       (appUpdateYmlConfig) =>
-        Option.isSome(appUpdateYmlConfig) || mockUpdates || policy.feedUrl !== undefined,
+        Option.isSome(appUpdateYmlConfig) ||
+        mockUpdates ||
+        policy.feedUrl !== undefined ||
+        FORK_RELEASE_FEED_URL.length > 0,
     ),
   );
 
@@ -522,17 +525,17 @@ export const make = Effect.gen(function* () {
     channel: DesktopUpdateChannel,
   ) {
     yield* Effect.annotateCurrentSpan({ channel });
-    const allowsPrerelease = channel === "nightly";
+    const allowsPrerelease = true; // Product-build versions (0.1.0-1) are semver prereleases.
     yield* electronUpdater.setChannel(channel);
     yield* electronUpdater.setAllowPrerelease(allowsPrerelease);
     // An older build can lack migrations this one ran. Only a guarded track switch's own check
     // may offer one.
     yield* electronUpdater.setAllowDowngrade(false);
-    yield* electronUpdater.setFullChangelog(allowsPrerelease);
+    yield* electronUpdater.setFullChangelog(false);
     yield* logUpdaterInfo("using update channel", {
       channel,
       allowPrerelease: allowsPrerelease,
-      fullChangelog: allowsPrerelease,
+      fullChangelog: false,
     });
   });
 
@@ -1190,7 +1193,13 @@ export const make = Effect.gen(function* () {
         } as ElectronUpdater.ElectronUpdaterFeedUrl);
       }
 
-      const settings = yield* desktopSettings.get;
+      if (!mockUpdates && policy.feedUrl === undefined) {
+        yield* electronUpdater.setFeedURL({
+          provider: "generic",
+          url: FORK_RELEASE_FEED_URL,
+        } as ElectronUpdater.ElectronUpdaterFeedUrl);
+      }
+      const settings = { ...(yield* desktopSettings.get), updateChannel: "latest" as const };
       const disabledReason = yield* resolveDisabledReason;
       // A blocked nightly channel still lets the user switch back to stable, so it stays updatable.
       yield* Ref.set(desktopState.canInstallUpdates, Option.isNone(disabledReason));
@@ -1247,6 +1256,9 @@ export const make = Effect.gen(function* () {
       nextChannel: DesktopUpdateChannel,
       options?: { readonly minimumVersion?: string | undefined },
     ) {
+      // Keep the old IPC method usable for old clients without allowing it to select
+      // a second feed or poison the release floor with a Nightly version.
+      if (nextChannel !== "latest") return yield* Ref.get(updateStateRef);
       yield* Effect.annotateCurrentSpan({ channel: nextChannel });
       if (Option.isSome(channelBlockedReason(nextChannel))) {
         return yield* new DesktopUpdateChannelManagedError({

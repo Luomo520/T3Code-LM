@@ -32,6 +32,8 @@ import { toastManager } from "~/components/ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
+import { startFileDownload } from "~/lib/fileDownload";
+import { FileDownloadFallback } from "./FileDownloadFallback";
 
 import { BinaryFilePreview } from "./BinaryFilePreview";
 import { PreviewImage } from "./PreviewImage";
@@ -41,7 +43,6 @@ import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import {
   FILE_SURFACE_SUBHEADER_CLASS,
   FileSurfaceAction,
-  FileSurfaceFailure,
   FileSurfaceLoading,
   FileSurfaceNotice,
 } from "./fileSurfaceChrome";
@@ -95,6 +96,7 @@ export function AttachmentFilePreview(props: {
   name: string;
   mimeType: string;
   sizeBytes: number;
+  relativePath?: string | undefined;
   file?: Blob | null;
   asset?:
     | { environmentId: EnvironmentId; attachmentId: string }
@@ -137,11 +139,7 @@ export function AttachmentFilePreview(props: {
             disposition: "inline" as const,
           }
         : null;
-  const downloadResource = resource
-    ? resource._tag === "draft-workspace-file"
-      ? resource
-      : { ...resource, disposition: "attachment" as const }
-    : null;
+  const downloadResource = resource ? { ...resource, disposition: "attachment" as const } : null;
   const refresh = useAssetUrlRefresh(
     props.file ? null : (props.asset?.environmentId ?? null),
     props.file ? null : resource,
@@ -167,7 +165,7 @@ export function AttachmentFilePreview(props: {
   }, [props.file]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- authorizes a remote attachment URL from the server and ignores the result after cleanup
   useEffect(() => {
-    if (props.file) return;
+    if (props.file || kind === "unsupported") return;
     let cancelled = false;
     // oxlint-disable-next-line react/set-state-in-effect -- A new preview request clears its previous URL and error.
     setRemoteUrl(null);
@@ -187,7 +185,7 @@ export function AttachmentFilePreview(props: {
       cancelled = true;
     };
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reauthorize the remote file.
-  }, [props.file, refresh, revision]);
+  }, [props.file, refresh, revision, kind]);
   const url = props.file ? localUrl : remoteUrl;
   const streamsText =
     kind === "text" &&
@@ -243,15 +241,15 @@ export function AttachmentFilePreview(props: {
     !((kind === "markdown" || kind === "mermaid") && rendered);
 
   const save = () => {
+    if (saving) return;
     setSaving(true);
     void settlePromise(async () => {
-      let file = props.file;
+      const file = props.file;
       if (!file) {
         const target = await prepareDownload();
         if (!target) throw new Error("Reconnect to the environment and try again.");
-        const response = await fetch(target);
-        if (!response.ok) throw new Error("The file could not be loaded. Try again.");
-        file = await response.blob();
+        await startFileDownload({ url: target, fileName: props.name });
+        return;
       }
       // Blob downloads keep desktop's custom app scheme from navigating to an external browser.
       const downloadUrl = URL.createObjectURL(file);
@@ -274,117 +272,127 @@ export function AttachmentFilePreview(props: {
     });
   };
 
-  const body = failure ? (
-    <FileSurfaceFailure
-      message={failure}
-      onRetry={() => {
-        setError(null);
-        setRevision((value) => value + 1);
-      }}
-    />
-  ) : streamsText && url ? (
-    <Suspense fallback={<FileSurfaceLoading />}>
-      <LargeTextViewer
-        key={`${url}:${rendered}:${revision}`}
+  const body =
+    kind === "unsupported" || failure ? (
+      <FileDownloadFallback
         name={props.name}
-        src={url}
-        sizeBytes={props.sizeBytes}
-        onRetry={() => setRevision((value) => value + 1)}
-        delimiter={rendered ? delimiter : null}
-        copyContents={copyContents}
-        wordWrap={wordWrap}
+        sizeBytes={props.sizeBytes > 0 ? props.sizeBytes : undefined}
+        relativePath={props.relativePath}
+        reason={failure ?? undefined}
+        downloading={saving}
+        onDownload={save}
+        onRetry={
+          failure
+            ? () => {
+                setError(null);
+                setRevision((value) => value + 1);
+              }
+            : undefined
+        }
       />
-    </Suspense>
-  ) : !url || (needsText && !content) ? (
-    <FileSurfaceLoading />
-  ) : needsText && content ? (
-    delimiter && rendered ? (
-      <DelimitedTablePreview name={props.name} text={content.text} delimiter={delimiter} />
-    ) : kind === "mermaid" && rendered ? (
+    ) : streamsText && url ? (
       <Suspense fallback={<FileSurfaceLoading />}>
-        <MermaidFilePreview text={content.text} />
-      </Suspense>
-    ) : kind === "markdown" && rendered ? (
-      <ScrollArea className="min-h-0 flex-1">
-        <ChatMarkdown
-          text={maskMarkdownFrontmatter(content.text)}
-          cwd={undefined}
-          className="mx-auto max-w-4xl px-6 py-5"
+        <LargeTextViewer
+          key={`${url}:${rendered}:${revision}`}
+          name={props.name}
+          src={url}
+          sizeBytes={props.sizeBytes}
+          onRetry={() => setRevision((value) => value + 1)}
+          delimiter={rendered ? delimiter : null}
+          copyContents={copyContents}
+          wordWrap={wordWrap}
         />
-      </ScrollArea>
-    ) : (
-      <ReadOnlySourcePreview name={props.name} text={content.text} wordWrap={wordWrap} />
-    )
-  ) : kind === "archive" || kind === "sqlite" ? (
-    <BinaryFilePreview
-      key={revision}
-      src={url}
-      name={props.name}
-      kind={kind}
-      onRetry={() => setRevision((value) => value + 1)}
-    />
-  ) : kind === "font" ? (
-    <Suspense fallback={<FileSurfaceLoading />}>
-      <FontFilePreview src={url} name={props.name} />
-    </Suspense>
-  ) : officeKind ? (
-    <Suspense fallback={<FileSurfaceLoading />}>
-      <OfficeFilePreview
+      </Suspense>
+    ) : !url || (needsText && !content) ? (
+      <FileSurfaceLoading />
+    ) : needsText && content ? (
+      delimiter && rendered ? (
+        <DelimitedTablePreview name={props.name} text={content.text} delimiter={delimiter} />
+      ) : kind === "mermaid" && rendered ? (
+        <Suspense fallback={<FileSurfaceLoading />}>
+          <MermaidFilePreview text={content.text} />
+        </Suspense>
+      ) : kind === "markdown" && rendered ? (
+        <ScrollArea className="min-h-0 flex-1">
+          <ChatMarkdown
+            text={maskMarkdownFrontmatter(content.text)}
+            cwd={undefined}
+            className="mx-auto max-w-4xl px-6 py-5"
+          />
+        </ScrollArea>
+      ) : (
+        <ReadOnlySourcePreview name={props.name} text={content.text} wordWrap={wordWrap} />
+      )
+    ) : kind === "archive" || kind === "sqlite" ? (
+      <BinaryFilePreview
+        key={revision}
         src={url}
         name={props.name}
-        kind={officeKind}
-        sizeBytes={props.sizeBytes}
+        kind={kind}
+        onRetry={() => setRevision((value) => value + 1)}
       />
-    </Suspense>
-  ) : kind === "pdf" || kind === "html" ? (
-    <BrowserDocumentFrame
-      src={url}
-      title={props.name}
-      pdf={kind === "pdf"}
-      htmlRender={props.htmlRender === true}
-      threadRef={props.threadRef}
-      // Each mount signs or creates a new URL, so the URL cannot identify the file across visits.
-      // A draft keeps its Blob key after upload, so finishing the upload does not reload the PDF.
-      documentKey={
-        kind !== "pdf"
-          ? undefined
-          : props.file
-            ? blobKey(props.file)
-            : props.asset && "attachmentId" in props.asset
-              ? `${props.asset.environmentId}:${props.asset.attachmentId}`
-              : undefined
-      }
-    />
-  ) : kind === "audio" ? (
-    <AudioPreview src={url} name={props.name} onError={() => setError("Unable to load audio.")} />
-  ) : kind === "video" ? (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
-      <video
-        controls
-        playsInline
+    ) : kind === "font" ? (
+      <Suspense fallback={<FileSurfaceLoading />}>
+        <FontFilePreview src={url} name={props.name} />
+      </Suspense>
+    ) : officeKind ? (
+      <Suspense fallback={<FileSurfaceLoading />}>
+        <OfficeFilePreview
+          src={url}
+          name={props.name}
+          kind={officeKind}
+          sizeBytes={props.sizeBytes}
+        />
+      </Suspense>
+    ) : kind === "pdf" || kind === "html" ? (
+      <BrowserDocumentFrame
         src={url}
-        aria-label={props.name}
-        className="max-h-full max-w-full"
-        onError={() => setError("Unable to load video.")}
+        title={props.name}
+        pdf={kind === "pdf"}
+        htmlRender={props.htmlRender === true}
+        threadRef={props.threadRef}
+        // Each mount signs or creates a new URL, so the URL cannot identify the file across visits.
+        // A draft keeps its Blob key after upload, so finishing the upload does not reload the PDF.
+        documentKey={
+          kind !== "pdf"
+            ? undefined
+            : props.file
+              ? blobKey(props.file)
+              : props.asset && "attachmentId" in props.asset
+                ? `${props.asset.environmentId}:${props.asset.attachmentId}`
+                : undefined
+        }
       />
-    </div>
-  ) : kind === "image" ? (
-    <PreviewImage
-      key={url}
-      src={url}
-      name={props.name}
-      mimeType={props.mimeType}
-      onError={() => setError("Unable to load image.")}
-    />
-  ) : (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
-      <p className="text-sm font-medium">No preview for this file</p>
-      <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
-        Save it to open in an app that supports {props.name.split(".").at(-1) || "this format"}{" "}
-        files.
-      </p>
-    </div>
-  );
+    ) : kind === "audio" ? (
+      <AudioPreview src={url} name={props.name} onError={() => setError("Unable to load audio.")} />
+    ) : kind === "video" ? (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
+        <video
+          controls
+          playsInline
+          src={url}
+          aria-label={props.name}
+          className="max-h-full max-w-full"
+          onError={() => setError("Unable to load video.")}
+        />
+      </div>
+    ) : kind === "image" ? (
+      <PreviewImage
+        key={url}
+        src={url}
+        name={props.name}
+        mimeType={props.mimeType}
+        onError={() => setError("Unable to load image.")}
+      />
+    ) : (
+      <FileDownloadFallback
+        name={props.name}
+        sizeBytes={props.sizeBytes > 0 ? props.sizeBytes : undefined}
+        relativePath={props.relativePath}
+        downloading={saving}
+        onDownload={save}
+      />
+    );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">

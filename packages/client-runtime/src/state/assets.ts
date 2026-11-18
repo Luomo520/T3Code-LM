@@ -297,6 +297,13 @@ export function createAssetEnvironmentAtoms<R, E>(
     refreshTrigger: ({ input }) =>
       input.resource._tag === "media-file" ? localMediaEnvironment : undefined,
   });
+  // Downloads are user actions. Never attach preview URL refresh scheduling.
+  const createDownloadUrl = createEnvironmentQueryAtomFamily(runtime, {
+    label: "environment-data:assets:create-download-url",
+    execute,
+    staleTimeMs: 0,
+    idleTtlMs: 0,
+  });
   const createUrlsFamily = Atom.family((key: string) => {
     const [environmentId, resources] = parseAssetCollectionKey(key);
     return Atom.make((get) =>
@@ -316,6 +323,7 @@ export function createAssetEnvironmentAtoms<R, E>(
 
   return {
     createUrl,
+    createDownloadUrl,
     createUrls: (target: {
       readonly environmentId: EnvironmentId;
       readonly resources: ReadonlyArray<AssetResource>;

@@ -13,6 +13,11 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
 import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
+import { installTitlebarPointerDrag } from "./window/TitlebarPointerDrag.ts";
+
+installTitlebarPointerDrag(document, (phase) => {
+  void ipcRenderer.invoke(IpcChannels.WINDOW_DRAG_CHANNEL, phase).catch(() => {});
+});
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -254,6 +259,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   cancelProviderAuthCallback: (url: string) =>
     ipcRenderer.invoke(IpcChannels.CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
+  downloadFile: (input: { url: string; fileName: string }) =>
+    ipcRenderer.invoke("desktop:download-file", input),
+  cancelFileDownload: (id: string) => ipcRenderer.invoke("desktop:cancel-file-download", id),
+  onFileDownload: (listener) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: import("@t3tools/contracts").DesktopFileDownloadEvent,
+    ) => listener(data);
+    ipcRenderer.on("desktop:file-download-event", handler);
+    return () => ipcRenderer.removeListener("desktop:file-download-event", handler);
+  },
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   readMedia: (url: string) => ipcRenderer.invoke(IpcChannels.READ_MEDIA_CHANNEL, url),
   checkSystemPermission: (pane: string) =>

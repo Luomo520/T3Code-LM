@@ -109,6 +109,7 @@ import {
   AttachmentCreateUploadUrlResult,
   AttachmentDeleteInput,
   AttachmentUploadSigningKeyError,
+  AttachmentUploadLimitError,
 } from "./assets.ts";
 import {
   PersistChatAttachmentsError,
@@ -356,10 +357,18 @@ import {
   ProviderConsumeResetCreditInput,
   ProviderConsumeResetCreditResult,
 } from "./providerUsageLimits.ts";
-import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
+import {
+  HeaderUsageInput,
+  HeaderUsageSummary,
+  UsagePricing,
+  UsageReadError,
+  UsageSummary,
+  UsageSummaryInput,
+} from "./usage.ts";
 import {
   StorageCleanupReport,
   DatabaseReclaimError,
+  ServerRestartError,
   DatabaseStorageStatus,
   ServerSettings,
   ServerSettingsError,
@@ -519,6 +528,7 @@ export const WS_METHODS = {
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverReclaimDatabaseSpace: "server.reclaimDatabaseSpace",
+  serverRestart: "server.restart",
   peerLinksList: "peerLinks.list",
   peerLinksLink: "peerLinks.link",
   peerLinksUnlink: "peerLinks.unlink",
@@ -548,6 +558,7 @@ export const WS_METHODS = {
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
+  serverGetHeaderUsage: "server.getHeaderUsage",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
@@ -841,6 +852,11 @@ const WsServerReclaimDatabaseSpaceRpc = Rpc.make(WS_METHODS.serverReclaimDatabas
   error: Schema.Union([DatabaseReclaimError, EnvironmentAuthorizationError]),
 });
 
+const WsServerRestartRpc = Rpc.make(WS_METHODS.serverRestart, {
+  payload: Schema.Struct({}),
+  error: Schema.Union([ServerRestartError, EnvironmentAuthorizationError]),
+});
+
 const WsPeerLinksListRpc = Rpc.make(WS_METHODS.peerLinksList, {
   payload: Schema.Struct({}),
   success: Schema.Struct({ links: Schema.Array(PeerLinkSummary) }),
@@ -1000,6 +1016,12 @@ const WsServerCheckOtlpEndpointRpc = Rpc.make(WS_METHODS.serverCheckOtlpEndpoint
   payload: OtlpEndpointCheckInput,
   success: OtlpEndpointCheckResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsServerGetHeaderUsageRpc = Rpc.make(WS_METHODS.serverGetHeaderUsage, {
+  payload: HeaderUsageInput,
+  success: HeaderUsageSummary,
+  error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
 });
 
 const WsServerListTextGeneratorModelsRpc = Rpc.make(WS_METHODS.serverListTextGeneratorModels, {
@@ -1473,7 +1495,12 @@ const WsAssetsPersistChatAttachmentsRpc = Rpc.make(WS_METHODS.assetsPersistChatA
 const WsAttachmentsCreateUploadUrlRpc = Rpc.make(WS_METHODS.attachmentsCreateUploadUrl, {
   payload: AttachmentCreateUploadUrlInput,
   success: AttachmentCreateUploadUrlResult,
-  error: Schema.Union([AttachmentUploadSigningKeyError, EnvironmentAuthorizationError]),
+  error: Schema.Union([
+    AttachmentUploadSigningKeyError,
+    AttachmentUploadLimitError,
+    ServerSettingsError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 const WsAttachmentsDeleteRpc = Rpc.make(WS_METHODS.attachmentsDelete, {
@@ -2133,6 +2160,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetStorageCleanupReportRpc,
   WsServerGetDatabaseStorageRpc,
   WsServerReclaimDatabaseSpaceRpc,
+  WsServerRestartRpc,
   WsServerUpdateSettingsRpc,
   WsPeerLinksListRpc,
   WsPeerLinksLinkRpc,
@@ -2158,6 +2186,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerCheckOtlpEndpointRpc,
+  WsServerGetHeaderUsageRpc,
   WsServerListTextGeneratorModelsRpc,
   WsServerPrepareTriageRpc,
   WsServerGetUsageSummaryRpc,

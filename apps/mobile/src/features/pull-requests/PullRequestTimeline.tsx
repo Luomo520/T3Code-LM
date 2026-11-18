@@ -256,7 +256,7 @@ export function pullRequestTimelineRows(
               <Text className="font-t3-medium">
                 {thread.comments[0]?.author?.login ?? "Unknown author"}
               </Text>
-              <Text className="text-foreground-muted"> started a discussion</Text>
+              <Text className="text-foreground-muted">{"发起了讨论"}</Text>
             </Text>
             {thread.comments[0] ? (
               <Text className="text-2xs text-foreground-tertiary">
@@ -327,9 +327,7 @@ export function pullRequestTimelineRows(
       key: "truncated",
       date: "",
       content: (
-        <Text className="py-3 text-xs text-foreground-muted">
-          More activity is available on the provider.
-        </Text>
+        <Text className="py-3 text-xs text-foreground-muted">{"可在托管平台中查看更多活动。"}</Text>
       ),
     });
   return events;

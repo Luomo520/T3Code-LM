@@ -3369,6 +3369,7 @@ export default function ChatView(props: ChatViewProps) {
             <ChatHeader
               activeThreadEnvironmentId={activeThread.environmentId}
               activeThreadId={activeThread.id}
+              activeProviderInstanceId={activeProviderInstanceId ?? undefined}
               isServerThread={isServerThread}
               activeThreadTitle={activeThread.title}
               activeThreadLinkOrigin={activeThreadShell?.linkOrigin?.label ?? null}

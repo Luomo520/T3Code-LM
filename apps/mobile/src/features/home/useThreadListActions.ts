@@ -270,7 +270,7 @@ export function useThreadListActions(): {
                   return pinThread(thread, step.orderKey);
                 case "snooze": {
                   const failureTitle =
-                    action === "Unpinned" ? "Could not undo unpin" : "Could not undo settle";
+                    action === "Unpinned" ? "无法撤销取消置顶" : "无法撤销完成";
                   if (!checkThreadOperationPermission(thread, failureTitle)) return false;
                   const result = await snoozeMutation({
                     environmentId: thread.environmentId,
@@ -583,7 +583,7 @@ export function useThreadListActions(): {
     };
 
     Dialog.prompt({
-      title: "Rename thread",
+      title: "重命名任务",
       initialValue: thread.title,
       confirmText: "Rename",
       onConfirm: commit,

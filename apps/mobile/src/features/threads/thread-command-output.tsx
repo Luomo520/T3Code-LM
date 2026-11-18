@@ -71,7 +71,7 @@ export function ThreadCommandOutput(props: {
         }}
       >
         {data?.output.truncated ? (
-          <Text className="pb-0.5 text-3xs text-foreground-subtle">Earlier output not shown</Text>
+          <Text className="pb-0.5 text-3xs text-foreground-subtle">{"更早的输出未显示"}</Text>
         ) : null}
         <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
           {spans.map((span, index) =>

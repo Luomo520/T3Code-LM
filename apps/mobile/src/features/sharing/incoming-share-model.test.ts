@@ -340,7 +340,7 @@ describe("incoming native shares", () => {
       type: "file" as const,
       name: "report.pdf",
       mimeType: "application/pdf",
-      sizeBytes: 6 * 1024 * 1024,
+      sizeBytes: 60 * 1024 * 1024,
       fileUri: "file:///documents/report.pdf",
     };
 
@@ -371,7 +371,7 @@ describe("incoming native shares", () => {
         serverConfig: {
           environment: {
             capabilities: {
-              fileAttachments: { maxUploadBytes: 10 * 1024 * 1024 },
+              fileAttachments: { maxUploadBytes: 100 * 1024 * 1024 },
             },
           },
         },
@@ -570,4 +570,27 @@ describe("share cleanup ownership", () => {
       ),
     ).toBe(false);
   });
+});
+
+it("stages a shared file above 50 MiB before choosing an environment without base64", async () => {
+  const size = 60 * 1024 * 1024;
+  const readBase64 = vi.fn(async () => {
+    throw new Error("Generic files must not use base64");
+  });
+  const result = await buildIncomingShareDraft({
+    id: "large-file",
+    createdAt: "2026-11-12T12:00:00.000Z",
+    payloads: [
+      { shareType: "file", value: "file:///shared/large.zip", mimeType: "application/zip" },
+    ],
+    resolvedPayloads: [],
+    fileReader: {
+      readBase64,
+      readSize: async () => size,
+      persistFile: async () => "file:///documents/large.zip",
+      removeOwnedFile: async () => {},
+    },
+  });
+  expect(result.attachments[0]).toMatchObject({ type: "file", sizeBytes: size });
+  expect(readBase64).not.toHaveBeenCalled();
 });

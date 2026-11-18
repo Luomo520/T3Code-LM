@@ -1,3 +1,4 @@
+import { DockGlassCapture } from "../../components/ui/DockGlass";
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import { useOpenThreadInspector } from "./thread-inspector-navigation";
 import { useSidebarWorkspaceTabs } from "../layout/workspace/useSystemWorkspaceTabBar";
@@ -812,7 +813,7 @@ function ThreadDetailBody(
       if (props.worktreeSetup) return null;
       return {
         kind: "preparing",
-        label: props.creationState.preparingWorktree ? "Setting up worktree…" : "Starting…",
+        label: props.creationState.preparingWorktree ? "正在设置工作树…" : "正在启动…",
       };
     }
     if (props.creationState?.kind === "failed") {
@@ -826,7 +827,7 @@ function ThreadDetailBody(
       return {
         kind: "child-input",
         label: childThreadInputsTitle(childThreadInputs),
-        accessibilityLabel: `Open ${childInput.hasPendingApprovals ? "approval" : "question"} from ${childInput.title}`,
+        accessibilityLabel: `打开${childInput.hasPendingApprovals ? "审批" : "问题"}，来自 ${childInput.title}`,
         onPress: () => {
           Keyboard.dismiss();
           openLinkedThread({ environmentId: childInput.environmentId, threadId: childInput.id });
@@ -859,8 +860,8 @@ function ThreadDetailBody(
           });
         },
         action: {
-          label: statusPending ? "Stopping..." : "Stop",
-          accessibilityLabel: "Stop background work",
+          label: statusPending ? "正在停止…" : "停止",
+          accessibilityLabel: "停止后台工作",
           disabled: !props.canOperateThread || statusPending,
           onPress: () => void runStatusAction("stop"),
         },
@@ -874,7 +875,7 @@ function ThreadDetailBody(
           : settled
             ? "Settled"
             : "Woke from snooze";
-      const actionLabel = lifecycleSnoozed ? "Wake now" : settled ? "Un-settle" : "Dismiss";
+      const actionLabel = lifecycleSnoozed ? "立即唤醒" : settled ? "恢复任务" : "关闭";
       return {
         kind: "lifecycle",
         state,
@@ -882,10 +883,10 @@ function ThreadDetailBody(
         action: {
           label: statusPending
             ? lifecycleSnoozed
-              ? "Waking..."
+              ? "正在唤醒..."
               : settled
-                ? "Un-settling..."
-                : "Dismissing..."
+                ? "正在恢复..."
+                : "正在关闭…"
             : actionLabel,
           accessibilityLabel: actionLabel,
           disabled: !props.canOperateThread || statusPending,
@@ -1453,97 +1454,99 @@ function ThreadDetailBody(
   return (
     <View className="flex-1" onLayout={handleScreenLayout}>
       {!usesNativeWorkspaceColumns ? <NativeLayoutObserver onChange={setScreenMetrics} /> : null}
-      {props.draftMode ? (
-        props.draftMode.content(
-          navigationHeaderHeight,
-          liveKeyboardHeight + estimatedOverlayHeight + 24,
-          draftViewportHeight,
-        )
-      ) : showContent ? (
-        <View
-          style={{ flex: 1 }}
-          onTouchStart={handleFeedTouchStart}
-          onTouchMove={handleFeedTouchMove}
-          onTouchEnd={handleFeedTouchEnd}
-          onTouchCancel={handleFeedTouchCancel}
-        >
+      <DockGlassCapture scope="thread" style={{ flex: 1 }}>
+        {props.draftMode ? (
+          props.draftMode.content(
+            navigationHeaderHeight,
+            liveKeyboardHeight + estimatedOverlayHeight + 24,
+            draftViewportHeight,
+          )
+        ) : showContent ? (
           <View
-            pointerEvents="none"
-            className={
-              Platform.OS === "android"
-                ? "absolute inset-0 bg-thread-canvas"
-                : "absolute inset-0 bg-screen"
-            }
-          />
-          <RenderErrorBoundary
-            key={selectedThreadKey}
-            resetKeys={[props.threadCwd]}
-            renderFallback={(fallback) => (
-              <RenderFailureView
-                {...fallback}
-                title="The conversation couldn't be displayed"
-                bottomInset={estimatedOverlayHeight}
-              />
-            )}
+            style={{ flex: 1 }}
+            onTouchStart={handleFeedTouchStart}
+            onTouchMove={handleFeedTouchMove}
+            onTouchEnd={handleFeedTouchEnd}
+            onTouchCancel={handleFeedTouchCancel}
           >
-            <WorkspaceMutationIdProvider threadRef={props.selectedThreadDetailRef}>
-              <ColumnWidth width={columnWidth}>
-                <ThreadFeed
-                  toolCallVisibility={toolCallVisibility}
-                  environmentId={props.environmentId}
-                  threadId={props.selectedThread.id}
-                  detailRef={props.selectedThreadDetailRef}
-                  workspaceRoot={props.threadCwd}
-                  feed={props.selectedThreadFeed}
-                  pendingHandoff={props.pendingHandoff}
-                  worktreeSetup={props.worktreeSetup}
-                  setupWorkingStartedAt={props.setupWorkingStartedAt}
-                  queuedMessages={props.queuedMessages}
-                  dispatchingMessageId={props.dispatchingMessageId}
-                  // A native subagent has no composer to edit a pending message in;
-                  // Cancel on the edit banner would discard it.
-                  onEditPendingMessage={
-                    isProviderSubagent || pendingMessageEditBlocked
-                      ? null
-                      : handleEditPendingMessage
-                  }
-                  contentPresentation={props.contentPresentation}
-                  threadTitle={props.selectedThread.title}
-                  latestRun={props.activityRun}
-                  activeWorkStartedAt={props.activeWorkStartedAt}
-                  runlessWorkActive={props.runlessWorkActive ?? false}
-                  listRef={listRef}
-                  freeze={freeze}
-                  anchorMessageId={anchorMessageId}
-                  jumpToMessageId={jumpMessageLoaded ? jumpMessageId : null}
-                  onJumpedToMessage={() => finishThreadMessageJump(selectedThreadKey)}
-                  contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
-                  keyboardOffset={composerKeyboardOffset}
-                  sendingWithKeyboard={sendingWithKeyboard}
-                  fitShortFeedToViewport={questionInFlow && !isKeyboardVisible}
-                  contentBottomInset={
-                    questionInFlow
-                      ? 0
-                      : estimatedOverlayHeight +
-                        (showFloatingStatus ? FLOATING_WORKING_CONTROL_COVERAGE : 0)
-                  }
-                  contentMaxWidth={contentMaxWidth}
-                  historyControls={props.historyControls}
-                  contentSideInsets={deriveContentSideInsets(nativeMetrics)}
-                  layoutVariant={layoutVariant}
-                  usesAutomaticContentInsets={props.usesAutomaticContentInsets}
-                  onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
-                  onIsAtEndChange={setIsAtEnd}
-                  skills={selectedProviderSkills}
-                  onUseArtifactTemplate={handleUseArtifactTemplate}
+            <View
+              pointerEvents="none"
+              className={
+                Platform.OS === "android"
+                  ? "absolute inset-0 bg-thread-canvas"
+                  : "absolute inset-0 bg-screen"
+              }
+            />
+            <RenderErrorBoundary
+              key={selectedThreadKey}
+              resetKeys={[props.threadCwd]}
+              renderFallback={(fallback) => (
+                <RenderFailureView
+                  {...fallback}
+                  title="无法显示对话"
+                  bottomInset={estimatedOverlayHeight}
                 />
-              </ColumnWidth>
-            </WorkspaceMutationIdProvider>
-          </RenderErrorBoundary>
-        </View>
-      ) : (
-        <View className="flex-1" />
-      )}
+              )}
+            >
+              <WorkspaceMutationIdProvider threadRef={props.selectedThreadDetailRef}>
+                <ColumnWidth width={columnWidth}>
+                  <ThreadFeed
+                    toolCallVisibility={toolCallVisibility}
+                    environmentId={props.environmentId}
+                    threadId={props.selectedThread.id}
+                    detailRef={props.selectedThreadDetailRef}
+                    workspaceRoot={props.threadCwd}
+                    feed={props.selectedThreadFeed}
+                    pendingHandoff={props.pendingHandoff}
+                    worktreeSetup={props.worktreeSetup}
+                    setupWorkingStartedAt={props.setupWorkingStartedAt}
+                    queuedMessages={props.queuedMessages}
+                    dispatchingMessageId={props.dispatchingMessageId}
+                    // A native subagent has no composer to edit a pending message in;
+                    // Cancel on the edit banner would discard it.
+                    onEditPendingMessage={
+                      isProviderSubagent || pendingMessageEditBlocked
+                        ? null
+                        : handleEditPendingMessage
+                    }
+                    contentPresentation={props.contentPresentation}
+                    threadTitle={props.selectedThread.title}
+                    latestRun={props.activityRun}
+                    activeWorkStartedAt={props.activeWorkStartedAt}
+                    runlessWorkActive={props.runlessWorkActive ?? false}
+                    listRef={listRef}
+                    freeze={freeze}
+                    anchorMessageId={anchorMessageId}
+                    jumpToMessageId={jumpMessageLoaded ? jumpMessageId : null}
+                    onJumpedToMessage={() => finishThreadMessageJump(selectedThreadKey)}
+                    contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
+                    keyboardOffset={composerKeyboardOffset}
+                    sendingWithKeyboard={sendingWithKeyboard}
+                    fitShortFeedToViewport={questionInFlow && !isKeyboardVisible}
+                    contentBottomInset={
+                      questionInFlow
+                        ? 0
+                        : estimatedOverlayHeight +
+                          (showFloatingStatus ? FLOATING_WORKING_CONTROL_COVERAGE : 0)
+                    }
+                    contentMaxWidth={contentMaxWidth}
+                    historyControls={props.historyControls}
+                    contentSideInsets={deriveContentSideInsets(nativeMetrics)}
+                    layoutVariant={layoutVariant}
+                    usesAutomaticContentInsets={props.usesAutomaticContentInsets}
+                    onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
+                    onIsAtEndChange={setIsAtEnd}
+                    skills={selectedProviderSkills}
+                    onUseArtifactTemplate={handleUseArtifactTemplate}
+                  />
+                </ColumnWidth>
+              </WorkspaceMutationIdProvider>
+            </RenderErrorBoundary>
+          </View>
+        ) : (
+          <View className="flex-1" />
+        )}
+      </DockGlassCapture>
 
       {showContent ? (
         <ThreadBrowserFloat

@@ -30,8 +30,8 @@ import { moveDraftToThread, unbindDraftFromThread } from "./scheduledTaskDraft";
 
 function MissingTaskDraft() {
   return (
-    <SettingsScreen title="Scheduled task">
-      <Text className="p-5 text-base text-foreground-muted">Open a scheduled task form first.</Text>
+    <SettingsScreen title="定时任务">
+      <Text className="p-5 text-base text-foreground-muted">{"请先打开定时任务表单。"}</Text>
     </SettingsScreen>
   );
 }
@@ -145,7 +145,7 @@ export function ScheduledTaskBranchPickerRouteScreen() {
 
   return (
     <BranchPickerScreen
-      title="Base branch"
+      title="基础分支"
       project={project}
       branches={visibleBranches}
       selectedBranchName={editor.draft.baseRef}

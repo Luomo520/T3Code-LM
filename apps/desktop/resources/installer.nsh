@@ -1,33 +1,73 @@
-!include "StrFunc.nsh"
-!ifdef BUILD_UNINSTALLER
-  ${UnStrRep}
-  !define T3StrRep '${UnStrRep}'
-!else
-  ${StrRep}
-  !define T3StrRep '${StrRep}'
+!ifndef BUILD_UNINSTALLER
+  !include "${PROJECT_DIR}\apps\desktop\resources\detect-install.nsh"
 !endif
 
-!macro customAppRunningMessages
-  Push $0
-  Push $1
-  ${If} $IsPowerShellAvailable == 0
-    System::Call 'kernel32::SetEnvironmentVariable(t "T3CODE_INSTALL_DIR", t "$INSTDIR")'
-    nsExec::ExecToStack `"$PowerShellPath" -NoProfile -NonInteractive -C "Get-CimInstance -ClassName Win32_Process | Where-Object { $$_.ExecutablePath -and [IO.Path]::GetDirectoryName($$_.ExecutablePath) -eq $$env:T3CODE_INSTALL_DIR } | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($$_.ExecutablePath) } | Where-Object { $$_ -in 'T3 Code (Alpha)', 'T3 Code (Beta)', 'T3 Code (Nightly)' } | Select-Object -First 1 | ForEach-Object { [Console]::Write($$_) }"`
-    Pop $0
-    Pop $1
-    System::Call 'kernel32::SetEnvironmentVariable(t "T3CODE_INSTALL_DIR", p 0)'
-    ${If} $0 == 0
-      ${If} $1 == "T3 Code (Alpha)"
-      ${OrIf} $1 == "T3 Code (Beta)"
-      ${OrIf} $1 == "T3 Code (Nightly)"
-        ${T3StrRep} $appRunningMessage $appRunningMessage "${PRODUCT_NAME}" $1
-        ${T3StrRep} $appClosingMessage $appClosingMessage "${PRODUCT_NAME}" $1
-        ${T3StrRep} $appCannotBeClosedMessage $appCannotBeClosedMessage "${PRODUCT_NAME}" $1
-      ${EndIf}
+; Keep edits compatible with electron-builder 26.16.1's installer and uninstaller.
+; A live T3 session must be closed by its user, never killed by the installer.
+!macro assertNoPortableData ROOT
+  ${If} ${FileExists} "${ROOT}\userdata\."
+  ${OrIf} ${FileExists} "${ROOT}\data\."
+  ${OrIf} ${FileExists} "${ROOT}\.t3\."
+    ${IfNot} ${Silent}
+      MessageBox MB_ICONEXCLAMATION|MB_OK "程序目录内存在便携数据。请先备份并移出 userdata、data 或 .t3 文件夹，再重试。"
+    ${EndIf}
+    SetErrorLevel 3
+    Quit
+  ${EndIf}
+!macroend
+
+!macro customCheckAppRunning
+  !insertmacro assertNoPortableData "$INSTDIR"
+  ReadRegStr $R2 HKCU "Software\${APP_GUID}" "InstallLocation"
+  ${If} $R2 != ""
+    !insertmacro assertNoPortableData "$R2"
+  ${EndIf}
+  nsProcess::_FindProcess "${APP_EXECUTABLE_FILENAME}"
+  Pop $R0
+  ${If} $R0 == 0
+    ${IfNot} ${Silent}
+      MessageBox MB_ICONEXCLAMATION|MB_OK "请先正常退出 T3 Code，再重新运行安装或卸载程序。当前会话不会被安装程序强制结束。"
+    ${EndIf}
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+!macroend
+
+; Apply the discovered location before the directory page and skip the scope page.
+!macro customHeader
+  !ifndef BUILD_UNINSTALLER
+    !insertmacro T3DefineDetector
+  !endif
+!macroend
+
+!macro customInit
+  Call T3DetectInstall
+!macroend
+
+!macro customInstallMode
+  !ifndef BUILD_UNINSTALLER
+  Call T3DetectInstall
+  ${If} $T3DetectedScope == "all"
+    ${IfNot} ${UAC_IsAdmin}
+      !insertmacro UAC_RunElevated
+      Quit
     ${EndIf}
   ${EndIf}
-  Pop $1
-  Pop $0
+  Abort
+  !endif
+!macroend
+
+; Keep an existing nonstandard folder intact; retain the upstream guard for new paths.
+!macro customPageAfterChangeDir
+  !undef MUI_PAGE_CUSTOMFUNCTION_PRE
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE T3InstFilesPre
+  Function T3InstFilesPre
+    ${If} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+    ${AndIf} ${FileExists} "$INSTDIR\resources\app.asar"
+      Return
+    ${EndIf}
+    Call instFilesPre
+  FunctionEnd
 !macroend
 
 !macro customInstall

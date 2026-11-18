@@ -106,13 +106,13 @@ type ScheduledTaskRoutes = {
 };
 
 const DAYS = [
-  { index: 1, label: "Mon" },
-  { index: 2, label: "Tue" },
-  { index: 3, label: "Wed" },
-  { index: 4, label: "Thu" },
-  { index: 5, label: "Fri" },
-  { index: 6, label: "Sat" },
-  { index: 0, label: "Sun" },
+  { index: 1, label: "周一" },
+  { index: 2, label: "周二" },
+  { index: 3, label: "周三" },
+  { index: 4, label: "周四" },
+  { index: 5, label: "周五" },
+  { index: 6, label: "周六" },
+  { index: 0, label: "周日" },
 ] as const;
 
 const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
@@ -284,7 +284,7 @@ function WebhookFilterRows(props: {
       {props.filters.map((filter, index) => (
         <View key={filter.id}>
           <View className="flex-row items-center gap-3 border-t border-border-subtle px-4 pt-3">
-            <Text className="min-w-0 flex-1 text-sm text-foreground-muted">Filter {index + 1}</Text>
+            <Text className="min-w-0 flex-1 text-sm text-foreground-muted">{"筛选"}{index + 1}</Text>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Remove filter ${index + 1}`}
@@ -299,14 +299,14 @@ function WebhookFilterRows(props: {
             </Pressable>
           </View>
           <FormField
-            label="Path"
+            label="路径"
             value={filter.path}
             placeholder="body.action"
             disabled={props.disabled}
             onChange={(path) => update(filter.id, { path })}
           />
           <SelectRow
-            label="Test"
+            label="测试"
             value={WEBHOOK_FILTER_OPS.find((option) => option.op === filter.op)?.label ?? ""}
             actions={WEBHOOK_FILTER_OPS.map((option) => ({
               id: option.op,
@@ -349,10 +349,7 @@ function WebhookFilterRows(props: {
         </Pressable>
       ) : null}
       {props.filters.length > 0 ? (
-        <Text className="px-4 pb-3 text-sm text-foreground-muted">
-          Runs only when every filter matches. Other requests are logged as filtered. Separate “is
-          one of” values with commas; a value can't contain a comma.
-        </Text>
+        <Text className="px-4 pb-3 text-sm text-foreground-muted">{"仅在所有筛选条件均匹配时运行，其他请求将记录为已过滤。“属于以下之一”的值用逗号分隔，单个值不能包含逗号。"}</Text>
       ) : null}
     </>
   );
@@ -434,7 +431,7 @@ export function SettingsScheduledTasksRouteScreen() {
       title="Scheduled tasks"
       actions={[
         {
-          accessibilityLabel: "New task",
+          accessibilityLabel: "新建定时任务",
           icon: "plus",
           disabled: visibleEnvironments.length === 0,
           onPress: newTask,
@@ -491,11 +488,11 @@ export function SettingsScheduledTasksRouteScreen() {
 // The "New task" action and takeScheduledTaskNewLink clear the editor before
 // this screen opens, so it starts from the default target.
 export function SettingsScheduledTaskNewRouteScreen() {
-  return <SettingsScheduledTaskEditorScreen title="New scheduled task" />;
+  return <SettingsScheduledTaskEditorScreen title="新建定时任务" />;
 }
 
 export function SettingsScheduledTaskEditRouteScreen() {
-  return <SettingsScheduledTaskEditorScreen title="Edit scheduled task" />;
+  return <SettingsScheduledTaskEditorScreen title="编辑定时任务" />;
 }
 
 function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }) {
@@ -554,9 +551,9 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
       return;
     }
     Dialog.alert("Discard changes?", "Your unsaved changes will be lost.", [
-      { text: "Keep editing", style: "cancel" },
+      { text: "继续编辑", style: "cancel" },
       {
-        text: "Discard changes",
+        text: "放弃更改",
         style: "destructive",
         onPress: () => {
           if (voiceInput.isBusy) voiceInput.cancel();
@@ -847,17 +844,15 @@ function TaskForm({
         importantForAccessibility={saving ? "no-hide-descendants" : "auto"}
       >
         {taskMissing ? (
-          <Text className="px-1 text-base text-danger-foreground">This task no longer exists.</Text>
+          <Text className="px-1 text-base text-danger-foreground">{"此任务已不存在。"}</Text>
         ) : null}
 
         {environmentUnavailable ? (
-          <Text className="px-1 text-base text-danger-foreground">
-            This environment is disconnected. Reconnect before saving.
-          </Text>
+          <Text className="px-1 text-base text-danger-foreground">{"此环境已断开，请重新连接后再保存。"}</Text>
         ) : null}
         <SettingsSection>
           <SelectRow
-            label="Runs on"
+            label="运行于"
             value={environmentLabel}
             valueIcon={
               <EnvironmentMachineSymbol
@@ -885,20 +880,20 @@ function TaskForm({
             }}
           />
         </SettingsSection>
-        <SettingsSection title="Task">
+        <SettingsSection title="任务">
           <FormField
-            label="Name"
+            label="名称"
             disabled={saving}
             value={draft.title}
-            placeholder="Check for issues"
+            placeholder="检查问题"
             onChange={(title) => setDraft((current) => ({ ...current, title }))}
           />
           {promptField}
         </SettingsSection>
 
-        <SettingsSection title="Context">
+        <SettingsSection title="场景">
           <SelectRow
-            label="Project"
+            label="项目"
             value={
               projects.find((project) => project.id === draft.projectId)?.title ??
               (projects.length ? "Choose project" : "No projects available")
@@ -932,7 +927,7 @@ function TaskForm({
             }}
           />
           <PickerRow
-            label="Model"
+            label="模型"
             borderTop
             value={
               modelOptions.find(
@@ -999,9 +994,9 @@ function TaskForm({
           ) : null}
         </SettingsSection>
 
-        <SettingsSection title="Workspace">
+        <SettingsSection title="工作区">
           <SelectRow
-            label="Run in"
+            label="运行位置"
             value={
               draft.workspace === "worktree"
                 ? "New worktree"
@@ -1012,17 +1007,17 @@ function TaskForm({
             actions={[
               {
                 id: "worktree",
-                title: "New worktree",
+                title: "新建工作树",
                 state: draft.workspace === "worktree" ? "on" : undefined,
               },
               {
                 id: "root",
-                title: "Project checkout",
+                title: "项目检出目录",
                 state: draft.workspace === "root" ? "on" : undefined,
               },
               {
                 id: "existing_worktree",
-                title: "Specific checkout",
+                title: "指定检出目录",
                 state: draft.workspace === "existing_worktree" ? "on" : undefined,
               },
             ]}
@@ -1033,7 +1028,7 @@ function TaskForm({
           />
           {draft.workspace === "worktree" ? (
             <PickerRow
-              label="Base branch"
+              label="基础分支"
               value={resolveNewTaskBranchLabel({
                 branchName: draft.baseRef,
                 startFromOrigin: draft.startFromOrigin,
@@ -1046,7 +1041,7 @@ function TaskForm({
           ) : null}
           {draft.workspace === "existing_worktree" ? (
             <FormField
-              label="Checkout path"
+              label="检出目录路径"
               disabled={saving}
               value={draft.checkoutPath}
               borderTop
@@ -1060,19 +1055,19 @@ function TaskForm({
           ) : null}
         </SettingsSection>
 
-        <SettingsSection title="Schedule">
+        <SettingsSection title="运行计划">
           <View className="px-4 py-3">
             <SegmentedControl
               variant="card"
               options={[
-                { value: "fixed_time", label: "At a time" },
+                { value: "fixed_time", label: "定时" },
                 // Older servers reject one-time schedules on save.
                 ...(offersOnce || draft.schedule.mode === "once"
                   ? [{ value: "once" as const, label: "Once" }]
                   : []),
-                { value: "interval", label: "Interval" },
+                { value: "interval", label: "间隔" },
                 ...(webhookDenial === undefined || draft.schedule.mode === "webhook"
-                  ? [{ value: "webhook" as const, label: "On webhook" }]
+                  ? [{ value: "webhook" as const, label: "Webhook 触发" }]
                   : []),
               ]}
               selected={draft.schedule.mode}
@@ -1140,18 +1135,18 @@ function TaskForm({
                 />
               ) : null}
               <SelectRow
-                label="Repeat"
+                label="重复"
                 value={repeatLabel(draft.schedule.weekdays)}
                 borderTop
                 actions={[
                   {
                     id: "every_day",
-                    title: "Every day",
+                    title: "每天",
                     state: draft.schedule.weekdays.length === 7 ? "on" : undefined,
                   },
                   {
                     id: "weekdays",
-                    title: "Weekdays",
+                    title: "工作日",
                     state: repeatLabel(draft.schedule.weekdays) === "Weekdays" ? "on" : undefined,
                   },
                   ...DAYS.map((day) => ({
@@ -1247,9 +1242,9 @@ function TaskForm({
                 disabled={!canOperate || saving || environmentUnavailable}
               />
               <FormField
-                label="Skip requests older than (minutes)"
+                label="跳过超过以下时间的请求（分钟）"
                 value={draft.schedule.maxDeliveryAgeMinutes}
-                placeholder="Run every request"
+                placeholder="每个请求都运行"
                 keyboardType="number-pad"
                 disabled={saving}
                 borderTop
@@ -1287,7 +1282,7 @@ function TaskForm({
                 Requests with the same key run only once within 7 days.
               </Text>
               <FormField
-                label="Coalesce key template"
+                label="合并键模板"
                 value={draft.schedule.coalesceKey}
                 placeholder="{{body.id}}"
                 disabled={saving}
@@ -1300,7 +1295,7 @@ function TaskForm({
                 }
               />
               <FormField
-                label="Coalesce window (seconds, 10–3600)"
+                label="合并时间窗口（秒，10–3600）"
                 value={draft.schedule.coalesceWindowSeconds}
                 placeholder="120"
                 keyboardType="number-pad"
@@ -1321,7 +1316,7 @@ function TaskForm({
           ) : (
             <>
               <FormField
-                label="Minutes between runs"
+                label="运行间隔（分钟）"
                 value={draft.schedule.intervalMinutes}
                 keyboardType="decimal-pad"
                 disabled={saving}
@@ -1334,15 +1329,10 @@ function TaskForm({
                 }
               />
               {!(parseIntervalMinutes(draft.schedule.intervalMinutes) >= 1) ? (
-                <Text className="px-4 pb-3 text-sm text-danger-foreground">
-                  Intervals must be at least 1 minute. Update this interval before saving.
-                </Text>
+                <Text className="px-4 pb-3 text-sm text-danger-foreground">{"运行间隔至少为 1 分钟，请修改后保存。"}</Text>
               ) : draft.task?.schedule.type === "interval" &&
                 draft.task.schedule.everyMs < 60_000 ? (
-                <Text className="px-4 pb-3 text-sm text-foreground-muted">
-                  This task previously ran more than once per minute. Saving requires an interval of
-                  at least 1 minute.
-                </Text>
+                <Text className="px-4 pb-3 text-sm text-foreground-muted">{"此任务此前的运行频率高于每分钟一次，保存时须将间隔设为至少 1 分钟。"}</Text>
               ) : null}
             </>
           )}
@@ -1351,16 +1341,14 @@ function TaskForm({
               Enabled
             </Text>
             <ThemedSwitch
-              accessibilityLabel="Task enabled"
+              accessibilityLabel="任务已启用"
               value={draft.enabled}
               onValueChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
             />
           </View>
         </SettingsSection>
         {draft.schedule.mode === "fixed_time" ? (
-          <Text className="px-2 text-sm text-foreground-muted">
-            Time uses the environment's time zone, which may differ from your phone's.
-          </Text>
+          <Text className="px-2 text-sm text-foreground-muted">{"使用环境所在时区，可能与手机时区不同。"}</Text>
         ) : null}
       </View>
       <Button
@@ -1406,18 +1394,16 @@ function WebhookScheduleDetails({
   return (
     <View className="gap-2 border-t border-border-subtle px-4 py-3">
       <Text className="text-sm text-foreground-muted">
-        {
-          "The prompt can use {{body.a.b}}, {{headers.name}}, {{query.name}}, {{body}} and {{request}}. The filled-in prompt is all the agent sees."
-        }
+        {"提示词可使用 {{body.a.b}}、{{headers.name}}、{{query.name}}、{{body}} 和 {{request}}。智能体只会看到替换后的提示词。"}
       </Text>
       {task === null || resolved === null ? (
-        <Text className="text-sm text-foreground-muted">Save the task to get its webhook URL.</Text>
+        <Text className="text-sm text-foreground-muted">{"保存任务后可获取 Webhook 地址。"}</Text>
       ) : (
         <>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Copy webhook URL"
-            accessibilityHint="Copies the URL to the clipboard"
+            accessibilityLabel="复制 Webhook 地址"
+            accessibilityHint="将地址复制到剪贴板"
             disabled={!resolved.copyable}
             onPress={() => void tryCopyTextWithHaptic(resolved.address)}
             className="gap-1 active:opacity-70"
@@ -1438,9 +1424,9 @@ function WebhookScheduleDetails({
             disabled={disabled || rotating}
             onPress={() =>
               Dialog.alert("Rotate URL?", "The current URL stops working immediately.", [
-                { text: "Cancel", style: "cancel" },
+                { text: "取消", style: "cancel" },
                 {
-                  text: "Rotate",
+                  text: "旋转",
                   style: "destructive",
                   onPress: () => {
                     setRotating(true);
@@ -1462,9 +1448,7 @@ function WebhookScheduleDetails({
         </>
       )}
       {signatureConfigured ? (
-        <Text className="text-sm text-foreground-muted">
-          Signature check configured on desktop/web.
-        </Text>
+        <Text className="text-sm text-foreground-muted">{"签名验证在桌面或网页端配置。"}</Text>
       ) : null}
     </View>
   );
@@ -1537,7 +1521,7 @@ function EnvironmentTasks({
       {tasks.error ? (
         <Text className="p-4 text-base text-danger-foreground">{tasks.error}</Text>
       ) : !tasks.data ? (
-        <Text className="p-4 text-base text-foreground-muted">Loading tasks…</Text>
+        <Text className="p-4 text-base text-foreground-muted">{"正在加载任务…"}</Text>
       ) : visibleTasks?.length === 0 ? (
         <Text className="p-4 text-base text-foreground-muted">
           {projectIds === null ? "No scheduled tasks yet." : "No tasks in this project."}
@@ -1577,28 +1561,27 @@ function EnvironmentTasks({
                 </Text>
               ) : null}
               {task.lastRunError ? (
-                <Text className="text-sm text-danger-foreground" numberOfLines={2}>
-                  Last run failed: {task.lastRunError}
+                <Text className="text-sm text-danger-foreground" numberOfLines={2}>{"上次运行失败："}{task.lastRunError}
                 </Text>
               ) : null}
             </Pressable>
             <Menu
               actions={[
-                { id: "edit", title: "Edit" },
+                { id: "edit", title: "编辑" },
                 ...(task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread"
                   ? [{ id: "thread", title: "Open thread" }]
                   : []),
                 {
                   id: "toggle",
-                  title: task.enabled ? "Pause" : "Resume",
+                  title: task.enabled ? "暂停" : "继续",
                   attributes: { disabled: !canOperate },
                 },
                 ...(task.schedule.type === "webhook"
                   ? []
-                  : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
+                  : [{ id: "run", title: "立即运行", attributes: { disabled: !canOperate } }]),
                 {
                   id: "delete",
-                  title: "Delete",
+                  title: "删除",
                   attributes: { destructive: true, disabled: !canOperate },
                 },
               ]}
@@ -1616,9 +1599,9 @@ function EnvironmentTasks({
                   });
                 } else if (action === "delete") {
                   Dialog.alert("Delete task?", task.title, [
-                    { text: "Cancel", style: "cancel" },
+                    { text: "取消", style: "cancel" },
                     {
-                      text: "Delete",
+                      text: "删除",
                       style: "destructive",
                       onPress: () => void act(task, "delete"),
                     },

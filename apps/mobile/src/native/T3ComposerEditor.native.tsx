@@ -216,7 +216,7 @@ export function ComposerEditor({
               : model
                 ? model.label
                 : token.type === "context"
-                  ? `${token.label}${props.context?.records.some((record) => record.contextId === token.contextId) ? "" : " · unavailable"}`
+                  ? `${token.label}${props.context?.records.some((record) => record.contextId === token.contextId) ? "" : " · 不可用"}`
                   : basename(token.value),
           detail: token.type === "context" ? composerChipSizeSuffix(record) : "",
           iconUri: model ? modelChipIconUri(model) : contextChipIconUri(icon),

@@ -1,32 +1,38 @@
+// The RPC name is retained for old clients; fork releases come only from GitHub.
 import {
   ServerNpmReleaseError,
   ServerNpmReleaseInput,
   type ServerNpmRelease,
 } from "@t3tools/contracts";
-import { npmReleaseDatabaseMigration } from "@t3tools/shared/cliRelease";
-import { resolveCommandPath } from "@t3tools/shared/shell";
+import {
+  cliReleaseIndexPageUrl,
+  decodeForkReleaseManifest,
+  forkReleaseManifestUrl,
+} from "@t3tools/shared/cliRelease";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient } from "effect/http";
 
-import * as ProcessRunner from "../processRunner.ts";
-
-const Version = Schema.String.check(Schema.isPattern(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/));
-const Manifest = Schema.Struct({ version: Version, t3code: Schema.optionalKey(Schema.Unknown) });
-// npm prints a bare version string when the release has no `t3code` field.
-const decodeManifest = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Union([Manifest, Schema.Tuple([Manifest]), Version])),
-);
-const decodeError = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ code: Schema.String }) })),
-);
+const MAX_RELEASE_METADATA_BYTES = 2 * 1024 * 1024;
 const decodeInput = Schema.decodeUnknownEffect(ServerNpmReleaseInput);
+const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeIndex = Schema.decodeUnknownEffect(
+  Schema.Array(
+    Schema.Struct({
+      tag_name: Schema.String,
+      draft: Schema.optionalKey(Schema.Boolean),
+      prerelease: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+);
+const isReleaseError = Schema.is(ServerNpmReleaseError);
 
 export class NpmRelease extends Context.Service<
   NpmRelease,
@@ -37,96 +43,91 @@ export class NpmRelease extends Context.Service<
   }
 >()("t3/cloud/npmRelease") {}
 
-function toRelease(spec: string, json: string) {
-  const decoded = Option.getOrUndefined(decodeManifest(json));
-  const manifest =
-    typeof decoded === "string"
-      ? { version: decoded }
-      : decoded && ("version" in decoded ? decoded : decoded[0]);
-  if (!manifest || (spec !== "latest" && spec !== "nightly" && manifest.version !== spec)) {
-    return Effect.fail(
-      new ServerNpmReleaseError({ reason: "npm returned invalid release metadata." }),
-    );
-  }
-  const databaseMigration = npmReleaseDatabaseMigration(manifest);
-  return Effect.succeed({
-    version: manifest.version,
-    ...(databaseMigration === undefined ? {} : { databaseMigration }),
-  });
-}
-
 export const make = Effect.fn("NpmRelease.make")(function* () {
-  const runner = yield* ProcessRunner.ProcessRunner;
   const http = yield* HttpClient.HttpClient;
-  const lookupPublic = Effect.fn("NpmRelease.lookupPublic")(function* (spec: string) {
-    const unreachable = new ServerNpmReleaseError({
-      reason: "npm is not installed and the public npm registry could not be reached.",
-    });
-    const json = yield* Effect.gen(function* () {
-      const response = yield* http.get(`https://registry.npmjs.org/t3/${spec}`);
-      if (response.status === 404) return Option.none<string>();
-      if (response.status < 200 || response.status >= 300) return yield* unreachable;
-      return Option.some(yield* response.text);
-    }).pipe(
-      Effect.timeout(Duration.seconds(15)),
-      Effect.mapError(() => unreachable),
+  const platform = yield* HostProcess.Platform;
+  const arch = yield* HostProcess.Architecture;
+  const unavailable = () =>
+    new ServerNpmReleaseError({ reason: "无法读取 GitHub 发布信息，请检查网络后重试。" });
+  const read = Effect.fn("ForkRelease.read")(function* (url: string) {
+    const response = yield* http.get(url);
+    if (response.status === 404) return undefined;
+    if (response.status < 200 || response.status >= 300) return yield* unavailable();
+    let received = 0;
+    const chunks = yield* response.stream.pipe(
+      Stream.tap((chunk) => {
+        received += chunk.byteLength;
+        return received > MAX_RELEASE_METADATA_BYTES ? Effect.fail(unavailable()) : Effect.void;
+      }),
+      Stream.runCollect,
     );
-    return Option.isNone(json) ? null : yield* toRelease(spec, json.value);
+    const bytes = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return yield* decodeJson(new TextDecoder().decode(bytes)).pipe(Effect.mapError(unavailable));
   });
-  // npm loads the whole package history per lookup, so a burst of specs must not spawn one each.
-  const npmPermits = yield* Semaphore.make(2);
-  const cache = yield* Cache.make({
-    capacity: 32,
-    timeToLive: Duration.minutes(1),
-    lookup: Effect.fn("NpmRelease.lookup")(function* (spec: string) {
-      // Without npm there is no configured registry to honor, so use the public one.
-      const npmPath = yield* resolveCommandPath("npm");
-      if (npmPath === null) return yield* lookupPublic(spec);
-      const output = yield* npmPermits
-        .withPermits(1)(
-          runner.run({
-            command: npmPath,
-            // Named fields keep the output small; the full package document grows with every release.
-            args: ["view", "--global", "--json", `t3@${spec}`, "version", "t3code"],
-            timeout: Duration.seconds(15),
-            maxOutputBytes: 256 * 1024,
-          }),
-        )
-        .pipe(
-          Effect.tapError((error) =>
-            Effect.logInfo("npm release lookup failed", { tag: error._tag }),
-          ),
-          Effect.mapError(
-            () => new ServerNpmReleaseError({ reason: "npm could not complete the lookup." }),
-          ),
-        );
-      if (output.timedOut || output.stdoutTruncated || output.stdoutInvalidUtf8) {
-        return yield* new ServerNpmReleaseError({ reason: "npm returned an incomplete response." });
-      }
-      if (output.code !== 0) {
-        const error = Option.getOrUndefined(decodeError(output.stdout));
-        if (error?.error.code === "E404") return null;
-        yield* Effect.logInfo("npm release lookup failed", {
-          exitCode: output.code,
-          npmErrorCode: error?.error.code,
-        });
-        return yield* new ServerNpmReleaseError({ reason: "npm could not read release metadata." });
-      }
-      return yield* toRelease(spec, output.stdout);
-    }),
+  const lookupTag = Effect.fn("ForkRelease.lookupTag")(function* (tag: string) {
+    const json = yield* read(forkReleaseManifestUrl(tag));
+    if (json === undefined) return null;
+    const manifest = decodeForkReleaseManifest(json, tag);
+    if (manifest === undefined)
+      return yield* new ServerNpmReleaseError({ reason: "GitHub 发布清单无效，未发起更新。" });
+    // A Windows-only release must not make an unchanged Linux server appear updatable.
+    const target = manifest.assets.find(
+      (asset) =>
+        asset.platform === (platform === "win32" ? "windows" : platform) &&
+        asset.arch === arch &&
+        asset.kind === (platform === "win32" ? "installer" : "server"),
+    );
+    return target === undefined ? null : { version: `${target.productVersion}-${target.build}` };
   });
+  const lookup = Effect.fn("ForkRelease.lookup")(
+    function* (spec: string) {
+      if (spec !== "latest")
+        return /^\d+\.\d+\.\d+-[1-9]\d*$/.test(spec) ? yield* lookupTag(`v${spec}`) : null;
+      const tags = new Set<string>();
+      for (let page = 1; page <= 5; page += 1) {
+        const json = yield* read(cliReleaseIndexPageUrl(page));
+        if (json === undefined) break;
+        const releases = yield* decodeIndex(json).pipe(Effect.mapError(unavailable));
+        for (const release of releases) {
+          if (
+            release.draft ||
+            release.prerelease ||
+            !/^v\d+\.\d+\.\d+-[1-9]\d*$/.test(release.tag_name)
+          )
+            continue;
+          tags.add(release.tag_name);
+        }
+        if (releases.length < 100) break;
+      }
+      // GitHub orders releases by commit creation, not by the user's product/build sequence.
+      const orderedTags = [...tags].sort((left, right) =>
+        compareSemverVersions(right.slice(1), left.slice(1)),
+      );
+      for (const tag of orderedTags) {
+        const found = yield* lookupTag(tag);
+        if (found !== null) return found;
+      }
+      return null;
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.timeout(Duration.seconds(30)),
+        Effect.mapError((cause) => (isReleaseError(cause) ? cause : unavailable())),
+      ),
+  );
+  const cache = yield* Cache.make({ capacity: 32, timeToLive: Duration.minutes(1), lookup });
   return NpmRelease.of({
     get: Effect.fn("NpmRelease.get")(function* (input) {
       const { spec } = yield* decodeInput(input).pipe(
-        Effect.mapError(
-          () => new ServerNpmReleaseError({ reason: "Invalid release version or track." }),
-        ),
+        Effect.mapError(() => new ServerNpmReleaseError({ reason: "版本号无效。" })),
       );
       return yield* Cache.get(cache, spec);
     }),
   });
 });
-
-export const layer = Layer.effect(NpmRelease, make()).pipe(
-  Layer.provide([ProcessRunner.layer, FetchHttpClient.layer]),
-);
+export const layer = Layer.effect(NpmRelease, make()).pipe(Layer.provide(FetchHttpClient.layer));

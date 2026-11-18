@@ -1050,7 +1050,21 @@ export type DesktopMediaRead = typeof DesktopMediaReadSchema.Type;
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+export interface DesktopFileDownloadEvent {
+  readonly id: string;
+  readonly fileName: string;
+  readonly state: "progressing" | "completed" | "cancelled" | "interrupted";
+  readonly receivedBytes: number;
+  readonly totalBytes: number;
+}
+
 export interface DesktopBridge {
+  downloadFile?: (input: {
+    url: string;
+    fileName: string;
+  }) => Promise<{ method: "idm" | "electron" | "cancelled"; id?: string }>;
+  cancelFileDownload?: (id: string) => Promise<void>;
+  onFileDownload?: (listener: (event: DesktopFileDownloadEvent) => void) => () => void;
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled: () => boolean;
   getPathForFile: (file: File) => string;

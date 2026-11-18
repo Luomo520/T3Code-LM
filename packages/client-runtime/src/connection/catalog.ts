@@ -23,6 +23,7 @@ export class BearerConnectionProfile extends Schema.TaggedClass<BearerConnection
     httpBaseUrl: Schema.String,
     wsBaseUrl: Schema.String,
     learned: Schema.optionalKey(Schema.Literal(true)),
+    lastConnectedAtEpochMs: Schema.optionalKey(Schema.Number),
     authorization: Schema.optionalKey(Schema.Literal("t3-connect")),
     /**
      * "tailscale" on a learned route the server found on its Tailscale

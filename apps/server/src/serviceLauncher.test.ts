@@ -1960,3 +1960,69 @@ setInterval(() => {}, 1_000);
     }),
   );
 });
+
+it.effect(
+  "acknowledges an explicit restart, waits for graceful exit, and starts the same runtime",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-user-restart-" });
+      const countPath = path.join(root, "starts");
+      yield* writeFakeRuntime(
+        fs,
+        path,
+        path.join(root, "runtime", "versions", "1.0.0"),
+        `
+const fs = require("node:fs");
+const file = ${JSON.stringify(countPath)};
+const count = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) + 1 : 1;
+fs.writeFileSync(file, String(count));
+const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+if (context.restart !== true) throw new Error("restart capability missing");
+process.on("message", (message) => {
+  if (message.type === "restart-accepted") {
+    fs.writeFileSync(file + ".accepted", message.requestId);
+    process.send({ type: "request-restart", requestId: "duplicate" });
+  }
+  if (message.type === "restart-rejected") fs.writeFileSync(file + ".rejected", message.requestId);
+});
+process.on("SIGTERM", () => {
+  fs.writeFileSync(file + ".graceful", String(count));
+  process.exit(0);
+});
+if (count === 1) process.send({ type: "request-restart", requestId: "explicit-request" });
+if (count === 2) process.send({ type: "test-restarted" });
+setInterval(() => {}, 1000);
+`,
+      );
+      const launcher = new Launcher(root, {
+        protocol: SERVICE_LAUNCHER_PROTOCOL,
+        activeVersion: "1.0.0",
+      });
+      const restarted = Promise.withResolvers<void>();
+      spawnHook.current = (child) => {
+        child.on("message", (message) => {
+          if (
+            typeof message === "object" &&
+            message !== null &&
+            "type" in message &&
+            message.type === "test-restarted"
+          )
+            restarted.resolve();
+        });
+      };
+      const running = launcher.run();
+      try {
+        yield* Effect.promise(() => restarted.promise);
+        expect(yield* fs.readFileString(countPath)).toBe("2");
+        expect(yield* fs.readFileString(countPath + ".accepted")).toBe("explicit-request");
+        expect(yield* fs.readFileString(countPath + ".rejected")).toBe("duplicate");
+        expect(yield* fs.readFileString(countPath + ".graceful")).toBe("1");
+      } finally {
+        spawnHook.current = undefined;
+        yield* Effect.promise(() => launcher.stop("SIGTERM"));
+        yield* Effect.promise(() => running);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

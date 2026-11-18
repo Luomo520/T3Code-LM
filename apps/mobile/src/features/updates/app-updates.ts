@@ -379,8 +379,8 @@ async function defaultConfirmInstallNow(): Promise<boolean> {
       "Update ready",
       "A new version has been downloaded and installs automatically the next time you leave the app. Install it now instead?",
       [
-        { onPress: () => resolve(false), style: "cancel", text: "Later" },
-        { onPress: () => resolve(true), text: "Install Now" },
+        { onPress: () => resolve(false), style: "cancel", text: "稍后" },
+        { onPress: () => resolve(true), text: "立即安装" },
       ],
       { cancelable: true, onDismiss: () => resolve(false) },
     );

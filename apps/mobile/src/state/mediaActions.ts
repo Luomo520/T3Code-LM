@@ -151,7 +151,7 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
             ? [
                 {
                   id: "copy-full-path" as const,
-                  title: "Copy full path",
+                  title: "复制完整路径",
                   run: () => copyTextWithHaptic(formatFilePathForClipboard(reference.path)),
                 },
               ]
@@ -160,7 +160,7 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
             ? [
                 {
                   id: "copy-relative-path" as const,
-                  title: "Copy relative path",
+                  title: "复制相对路径",
                   run: () =>
                     copyTextWithHaptic(formatFilePathForClipboard(relativePath, reference.path)),
                 },
@@ -170,7 +170,7 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
             ? [
                 {
                   id: "copy-url" as const,
-                  title: "Copy URL",
+                  title: "复制 URL",
                   run: () => copyTextWithHaptic(reference.url),
                 },
               ]
@@ -179,7 +179,7 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
             ? [
                 {
                   id: "open-file" as const,
-                  title: "Open in file viewer",
+                  title: "在文件查看器中打开",
                   disabled: !canReadMedia,
                   run: () => {
                     if (!canReadHostMedia(hostEnvironmentId)) return;
@@ -207,10 +207,10 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
             id: "save" as const,
             title:
               busy === "share"
-                ? "Opening share sheet…"
+                ? "正在打开分享面板…"
                 : canSaveImageToLibrary(source.mimeType)
                   ? "Share"
-                  : "Save or share",
+                  : "保存或分享",
             run: share,
             disabled: busy !== null || !canReadMedia,
           },

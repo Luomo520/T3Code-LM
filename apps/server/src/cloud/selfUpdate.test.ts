@@ -42,14 +42,36 @@ const releaseHttpClient = (order: string[], urls: string[], beforeDownload?: Eff
   HttpClient.make((request) =>
     Effect.gen(function* () {
       urls.push(request.url);
-      if (request.url.endsWith("/SHA256SUMS")) {
+      if (request.url.endsWith("/T3Code-LM-release.json")) {
         const digest = yield* Effect.promise(() => crypto.subtle.digest("SHA-256", archiveBytes));
         const hex = Array.from(new Uint8Array(digest), (byte) =>
           byte.toString(16).padStart(2, "0"),
         ).join("");
         return HttpClientResponse.fromWeb(
           request,
-          new Response(`${hex}  t3-1.1.0-linux-x64.tar.gz\n`),
+          new Response(
+            JSON.stringify({
+              schemaVersion: 1,
+              product: "T3Code-LM",
+              repository: "Luomo520/T3Code-LM",
+              channel: "release",
+              tag: "v1.1.0-1",
+              sourceCommit: "a".repeat(40),
+              assets: [
+                {
+                  platform: "linux",
+                  arch: "x64",
+                  kind: "server",
+                  productVersion: "1.1.0",
+                  build: 1,
+                  fileName: "T3Code-LM-1.1.0-1-linux-x64-server.tar.gz",
+                  sizeBytes: archiveBytes.byteLength,
+                  sha256: hex,
+                  url: "https://github.com/Luomo520/T3Code-LM/releases/download/v1.1.0-1/T3Code-LM-1.1.0-1-linux-x64-server.tar.gz",
+                },
+              ],
+            }),
+          ),
         );
       }
       if (beforeDownload) yield* beforeDownload;
@@ -120,8 +142,8 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
         preflightProtocols.push(named);
         const result =
           options.preflight === "blocked"
-            ? { status: "blocked", version: "1.1.0", reason: "local update required" }
-            : { status: "ready", version: "1.1.0", launcherProtocol: Number(named) };
+            ? { status: "blocked", version: "1.1.0-1", reason: "local update required" }
+            : { status: "ready", version: "1.1.0-1", launcherProtocol: Number(named) };
         return {
           stdout: JSON.stringify(result),
           stderr: "",
@@ -177,10 +199,35 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
 });
 
 it.layer(NodeServices.layer)("server self update", (it) => {
+  it.effect("holds one maintenance gate across update preparation and acknowledged restart", () =>
+    Effect.gen(function* () {
+      const downloading = yield* Deferred.make<void>();
+      const finishDownload = yield* Deferred.make<void>();
+      const { selfUpdate } = yield* makeHarness({
+        beforeDownload: Deferred.succeed(downloading, undefined).pipe(
+          Effect.andThen(Deferred.await(finishDownload)),
+        ),
+      });
+      const prepared = yield* selfUpdate
+        .update({ targetVersion: "1.1.0-1", stageOnly: true })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(downloading);
+      const refused = yield* selfUpdate
+        .withRestart(Effect.die("must not stop during preparation"))
+        .pipe(Effect.flip);
+      expect(refused.reason).toContain("already in progress");
+      yield* Deferred.succeed(finishDownload, undefined);
+      yield* Fiber.join(prepared);
+      yield* selfUpdate.withRestart(Effect.void);
+      const duplicate = yield* selfUpdate.update({ targetVersion: "1.1.0-1" }).pipe(Effect.flip);
+      expect(duplicate.reason).toContain("already in progress");
+    }),
+  );
+
   it.effect.each([
-    { asset: "checksums", status: 504 },
+    { asset: "manifest", status: 504 },
     { asset: "archive", status: 503 },
-    { asset: "checksums", status: 403 },
+    { asset: "manifest", status: 403 },
   ])("reports an HTTP $status downloading $asset and allows retry", ({ asset, status }) =>
     Effect.gen(function* () {
       let failDownload = true;
@@ -188,7 +235,10 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       const { selfUpdate, order, baseDir } = yield* makeHarness({
         httpClient: releaseHttpClient([], []).pipe(
           HttpClient.transform((response, request) => {
-            if (!failDownload || request.url.endsWith("/SHA256SUMS") !== (asset === "checksums"))
+            if (
+              !failDownload ||
+              request.url.endsWith("/T3Code-LM-release.json") !== (asset === "manifest")
+            )
               return response;
             Deferred.doneUnsafe(downloadFailed, Effect.void);
             return Effect.succeed(
@@ -201,21 +251,21 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         ),
       });
       const failing = yield* selfUpdate
-        .update({ targetVersion: "1.1.0" })
+        .update({ targetVersion: "1.1.0-1" })
         .pipe(Effect.flip, Effect.forkScoped);
       yield* Deferred.await(downloadFailed);
       // A 5xx is retried after 2, 4, then 8 seconds before the update gives up.
       yield* TestClock.adjust("14 seconds");
       const error = yield* Fiber.join(failing);
       expect(error.reason).toBe(
-        `Could not prepare t3@1.1.0 while downloading the t3 release ${asset} (HTTP ${status} from cdn.example).`,
+        `Could not prepare t3@1.1.0-1 while downloading the t3 release ${asset} (HTTP ${status} from cdn.example).`,
       );
       expect(order).toEqual([]);
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       expect(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions"))).toEqual([]);
       failDownload = false;
-      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.0-1" })).updateId).toBe("launcher-id");
       expect(order).toEqual(["extract", "preflight", "accept"]);
     }),
   );
@@ -227,7 +277,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         launcherProtocol: 3,
       });
       yield* TestClock.setTime(5_000);
-      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.0-1" })).updateId).toBe("launcher-id");
       expect(preflightProtocols).toEqual(["3"]);
       // That launcher holds no lock between its servers; SSH launches wait on this marker instead.
       const fs = yield* FileSystem.FileSystem;
@@ -249,7 +299,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       ).toBe("'latest' is not an exact t3 version.");
       const desktop = yield* makeHarness({ mode: "desktop" });
       expect(
-        (yield* desktop.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
+        (yield* desktop.selfUpdate.update({ targetVersion: "1.1.0-1" }).pipe(Effect.flip)).reason,
       ).toContain("desktop app");
       expect([...web.order, ...desktop.order]).toEqual([]);
     }),
@@ -274,7 +324,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       });
       for (const harness of [service, desktop]) {
         expect(
-          (yield* harness.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
+          (yield* harness.selfUpdate.update({ targetVersion: "1.1.0-1" }).pipe(Effect.flip)).reason,
         ).toBe("Example Corp manages T3 Code updates.");
       }
       expect([...service.order, ...desktop.order]).toEqual([]);
@@ -301,15 +351,15 @@ it.layer(NodeServices.layer)("server self update", (it) => {
           .reason,
       ).toBe("Example Corp manages T3 Code updates. Only stable releases can be installed.");
       expect(order).toEqual([]);
-      // The mirror lists only 1.1.0's archive.
+      // The mirror lists only 1.1.0-1's archive.
       expect((yield* selfUpdate.update({ targetVersion: "1.2.0" }).pipe(Effect.flip)).reason).toBe(
         "Example Corp's update mirror has no t3@1.2.0 for this machine.",
       );
-      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.0-1" })).updateId).toBe("launcher-id");
       // The release comes from the policy's mirror, not GitHub.
       expect(urls.length).toBeGreaterThan(0);
       for (const url of urls)
-        expect(url).toMatch(/^https:\/\/updates\.example\.com\/t3code\/v1\.[12]\.0\//);
+        expect(url).toMatch(/^https:\/\/updates\.example\.com\/t3code\/v1\.[12]\.0(?:-1)?\//);
     }),
   );
 
@@ -328,7 +378,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
           commit: () => Effect.never,
         },
       });
-      const result = yield* selfUpdate.update({ targetVersion: "1.1.0" }, (stage) =>
+      const result = yield* selfUpdate.update({ targetVersion: "1.1.0-1" }, (stage) =>
         Effect.sync(() => void stages.push(stage)),
       );
       expect(result).toEqual({ targetVersion: "1.2.0", method: "desktop-app" });
@@ -345,14 +395,17 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         requestUpdate: () =>
           Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(accepted))),
       });
-      const first = yield* Effect.forkChild(selfUpdate.update({ targetVersion: "1.1.0" }), {
+      const first = yield* Effect.forkChild(selfUpdate.update({ targetVersion: "1.1.0-1" }), {
         startImmediately: true,
       });
-      yield* Deferred.await(requested);
-      expect((yield* selfUpdate.update({ targetVersion: "1.1.1" }).pipe(Effect.flip)).reason).toBe(
-        "A server update is already in progress.",
-      );
-      yield* Deferred.succeed(accepted, "launcher-id");
+      try {
+        yield* Deferred.await(requested);
+        expect(
+          (yield* selfUpdate.update({ targetVersion: "1.1.1" }).pipe(Effect.flip)).reason,
+        ).toBe("A server update or restart is already in progress.");
+      } finally {
+        yield* Deferred.succeed(accepted, "launcher-id");
+      }
       expect((yield* Fiber.join(first)).updateId).toBe("launcher-id");
     }),
   );
@@ -360,12 +413,12 @@ it.layer(NodeServices.layer)("server self update", (it) => {
   it.effect("stages the runtime without asking the launcher to restart", () =>
     Effect.gen(function* () {
       const { selfUpdate, order } = yield* makeHarness();
-      expect(yield* selfUpdate.update({ targetVersion: "1.1.0", stageOnly: true })).toEqual({
-        targetVersion: "1.1.0",
+      expect(yield* selfUpdate.update({ targetVersion: "1.1.0-1", stageOnly: true })).toEqual({
+        targetVersion: "1.1.0-1",
         method: "boot-service",
       });
       expect(order).toEqual(["download", "extract", "preflight"]);
-      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.0-1" })).updateId).toBe("launcher-id");
       expect(order).toEqual(["download", "extract", "preflight", "preflight", "accept"]);
     }),
   );
@@ -378,7 +431,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         preflightDuration: "60 seconds",
         preflightStarted,
       });
-      const update = yield* Effect.forkChild(selfUpdate.update({ targetVersion: "1.1.0" }), {
+      const update = yield* Effect.forkChild(selfUpdate.update({ targetVersion: "1.1.0-1" }), {
         startImmediately: true,
       });
       yield* Deferred.await(preflightStarted);
@@ -405,7 +458,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       });
 
       const consumed = yield* ServerSelfUpdate.updateProgressStream(selfUpdate, {
-        targetVersion: "1.1.0",
+        targetVersion: "1.1.0-1",
       }).pipe(
         Stream.tap((event) =>
           event.type === "progress" && event.stage === "downloading"
@@ -418,16 +471,18 @@ it.layer(NodeServices.layer)("server self update", (it) => {
 
       yield* Deferred.await(sawDownloading);
       yield* Fiber.interrupt(consumed);
-      expect((yield* selfUpdate.update({ targetVersion: "1.2.0" }).pipe(Effect.flip)).reason).toBe(
-        "A server update is already in progress.",
-      );
-
-      yield* Deferred.succeed(releaseDownload, undefined);
+      try {
+        expect(
+          (yield* selfUpdate.update({ targetVersion: "1.2.0" }).pipe(Effect.flip)).reason,
+        ).toBe("A server update or restart is already in progress.");
+      } finally {
+        yield* Deferred.succeed(releaseDownload, undefined);
+      }
       yield* Deferred.await(accepted);
       expect(order).toEqual(["download", "extract", "preflight", "accept"]);
-      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason).toBe(
-        "A server update is already in progress.",
-      );
+      expect(
+        (yield* selfUpdate.update({ targetVersion: "1.1.0-1" }).pipe(Effect.flip)).reason,
+      ).toBe("A server update or restart is already in progress.");
     }),
   );
 });

@@ -1,3 +1,16 @@
+import { SidebarTaskViewControls } from "./sidebar/SidebarTaskViewControls";
+import {
+  type SidebarTaskView,
+  sortSidebarTasks,
+  sidebarTaskActivityAt,
+  sidebarTaskHistoryIsVisible,
+  shouldKeepSidebarProjectFolder,
+  sidebarTaskHistoryVisibleCount,
+  nextSidebarTaskHistoryCount,
+  SIDEBAR_HISTORY_INITIAL_COUNT as SETTLED_TAIL_INITIAL_COUNT,
+  SIDEBAR_HISTORY_PAGE_COUNT as SETTLED_TAIL_PAGE_COUNT,
+} from "./sidebar/sidebarTaskView";
+const sidebarTaskViewSchema = Schema.Literals(["recent", "project", "status"]);
 import { attachSidebarTree } from "../lib/sidebarTree";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
@@ -328,8 +341,6 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 
-const SETTLED_TAIL_INITIAL_COUNT = 10;
-const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
@@ -426,6 +437,7 @@ function useSidebarThreads(input: {
   // Set in boring mode: the project groups to fold active threads into, in order.
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
+  readonly taskView: SidebarTaskView;
   readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
 }) {
   const {
@@ -451,18 +463,24 @@ function useSidebarThreads(input: {
   // Minute-quantized clocks would delay second-precise snooze wakes by up to a minute.
   const snoozeWakeClock = useSnoozeWakeClock(threads);
   const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
-    SETTLED_SHELF_EXPANDED_KEY,
-    false,
+    input.taskView === "status"
+      ? `${SETTLED_SHELF_EXPANDED_KEY}:status`
+      : SETTLED_SHELF_EXPANDED_KEY,
+    input.taskView === "status",
     Schema.Boolean,
   );
   const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useLocalStorage(
-    SNOOZED_SHELF_EXPANDED_KEY,
-    false,
+    input.taskView === "status"
+      ? `${SNOOZED_SHELF_EXPANDED_KEY}:status`
+      : SNOOZED_SHELF_EXPANDED_KEY,
+    input.taskView === "status",
     Schema.Boolean,
   );
   const [workingShelfExpanded, setWorkingShelfExpanded] = useLocalStorage(
-    WORKING_SHELF_EXPANDED_KEY,
-    false,
+    input.taskView === "status"
+      ? `${WORKING_SHELF_EXPANDED_KEY}:status`
+      : WORKING_SHELF_EXPANDED_KEY,
+    input.taskView === "status",
     Schema.Boolean,
   );
   // Shared with the old per-project sidebar, so folders keep their open state.
@@ -475,8 +493,10 @@ function useSidebarThreads(input: {
   if (settledTail.scopeKey !== projectScopeKey) {
     setSettledTail({ scopeKey: projectScopeKey, count: SETTLED_TAIL_INITIAL_COUNT });
   }
-  const settledVisibleCount =
-    settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
+  const settledVisibleCount = sidebarTaskHistoryVisibleCount(
+    input.taskView,
+    settledTail.scopeKey === projectScopeKey ? settledTail.count : 0,
+  );
 
   const partition = partitionSidebarThreads({
     threads,
@@ -495,7 +515,7 @@ function useSidebarThreads(input: {
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
-    expanded: settledShelfExpanded,
+    expanded: sidebarTaskHistoryIsVisible(input.taskView, settledShelfExpanded),
     visibleCount: settledVisibleCount,
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
@@ -515,7 +535,7 @@ function useSidebarThreads(input: {
     }
     return visible.length === settledThreads.length ? settledThreads : visible;
   })();
-  const renderedSettledThreads = settledShelfExpanded
+  const renderedSettledThreads = sidebarTaskHistoryIsVisible(input.taskView, settledShelfExpanded)
     ? visibleSettledThreads
     : routeThreadOnly(visibleSettledThreads, routeRowThreadKey);
   const visibleSnoozedThreads = snoozedShelfExpanded
@@ -544,7 +564,7 @@ function useSidebarThreads(input: {
               : EMPTY_THREADS,
           };
         });
-  const orderedThreads = [
+  const sectionOrderedThreads = [
     ...pinnedThreads,
     ...(projectFolders === null
       ? activeThreads
@@ -553,6 +573,16 @@ function useSidebarThreads(input: {
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
   ];
+  const orderedThreads =
+    input.taskView === "recent"
+      ? sortSidebarTasks([
+          ...pinnedThreads,
+          ...activeThreads,
+          ...workingThreads,
+          ...snoozedThreads,
+          ...visibleSettledThreads,
+        ])
+      : sectionOrderedThreads;
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const [list, section] of [
     [pinnedThreads, "pinned"],
@@ -581,7 +611,7 @@ function useSidebarThreads(input: {
     showMoreSettled: () =>
       setSettledTail((current) => ({
         scopeKey: current.scopeKey,
-        count: current.count + SETTLED_TAIL_PAGE_COUNT,
+        count: nextSidebarTaskHistoryCount(input.taskView, current.count),
       })),
     settledShelfExpanded,
     toggleSettledShelf: () => setSettledShelfExpanded((value) => !value),
@@ -975,7 +1005,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       );
     },
   });
-  const boringSidebarEnabled = useClientSettings((settings) => settings.boringSidebarEnabled);
+  const [taskView, setTaskView] = useLocalStorage<SidebarTaskView, string>(
+    "t3.sidebar.task-view.v1",
+    "recent",
+    sidebarTaskViewSchema,
+  );
+  const folderSetting = useClientSettings((settings) => settings.boringSidebarEnabled);
+  const boringSidebarEnabled = taskView === "project" || (taskView === "status" && folderSetting);
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -1331,6 +1367,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     pinnedKeysById,
     activeKeysById,
   } = useSidebarThreads({
+    taskView,
     projectScopeKey,
     scopedProjectKeys,
     serverConfigs,
@@ -1346,7 +1383,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         : scopedProjectGroups
       : null,
     keepEmptyFolders: (group) =>
-      scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
+      shouldKeepSidebarProjectFolder({
+        view: taskView,
+        scopedProjectCount: scopedProjectGroups.length,
+        pinned: group.pinned,
+        archived: group.archived,
+      }),
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -1930,6 +1972,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
   const hasProjectFolders = projectFolders !== null && projectFolders.length > 0;
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
+    if (taskView === "recent")
+      return orderedThreadKeys.map((key) => ({
+        kind: "thread",
+        key,
+        section: sectionByThreadKey.get(key)!,
+      }));
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
       section: SidebarSection,
@@ -3191,6 +3239,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         }
       >
         <SidebarGroup className="flex-1" role="presentation">
+          <SidebarTaskViewControls view={taskView} onViewChange={setTaskView} />
+          {scopedProjectGroups.length > 0 ? (
+            <div className="mx-2 mt-1 flex min-w-0 items-center gap-2 text-xs text-sidebar-muted-foreground">
+              <span
+                className="min-w-0 flex-1 truncate"
+                aria-label={`仅显示：${scopedProjectGroups.map((project) => project.displayName).join("、")}`}
+              >
+                仅显示：{scopedProjectGroups.map((project) => project.displayName).join("、")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setProjectScopeKeys([])}
+                className="min-h-8 shrink-0 cursor-pointer rounded-md px-2 text-sidebar-foreground outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              >
+                显示全部
+              </button>
+            </div>
+          ) : null}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
@@ -3358,13 +3424,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
-                        const rowVariant = folderRow
-                          ? folderRowsMultiline
-                            ? "folder-multiline"
-                            : "folder"
-                          : isCard
-                            ? "card"
-                            : "slim";
+                        const rowVariant =
+                          taskView === "recent"
+                            ? "slim"
+                            : folderRow
+                              ? folderRowsMultiline
+                                ? "folder-multiline"
+                                : "folder"
+                              : isCard
+                                ? "card"
+                                : "slim";
                         return (
                           <SortableThreadRow
                             key={threadKey}
@@ -3377,6 +3446,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
+                            activityTimestamp={
+                              taskView === "recent" ? sidebarTaskActivityAt(thread) : undefined
+                            }
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -3622,7 +3694,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       }
                       return items;
                     })()}
-                    {settledShelfExpanded && hiddenSettledCount > 0 ? (
+                    {sidebarTaskHistoryIsVisible(taskView, settledShelfExpanded) &&
+                    hiddenSettledCount > 0 ? (
                       <li className="list-none">
                         <button
                           type="button"

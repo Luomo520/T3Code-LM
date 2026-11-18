@@ -1,3 +1,4 @@
+import { AttachmentLimitSetting } from "./components/AttachmentLimitSetting";
 import { useNavigation } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
@@ -24,6 +25,8 @@ import {
 import { SettingsScreen } from "./components/SettingsScreen";
 import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilterHeader";
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
+import { AndroidAppUpdateSection } from "./components/AndroidAppUpdateSection";
+import { BackendRestartSection } from "./components/BackendRestartSection";
 import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -82,16 +85,16 @@ const SUBMODULE_CHOICES: ReadonlyArray<{
 }> = [
   {
     mode: null,
-    label: "Inherit",
-    description: "Use the repository's t3.json, or initialize recursively.",
+    label: "继承",
+    description: "使用仓库中的 t3.json，或递归初始化。",
   },
-  { mode: "recursive", label: "Recursive", description: "Initialize nested submodules too." },
+  { mode: "recursive", label: "递归初始化", description: "同时初始化嵌套子模块。" },
   {
     mode: "top-level",
-    label: "Top level only",
-    description: "Skip submodules declared inside other submodules.",
+    label: "仅顶层",
+    description: "跳过其他子模块中的嵌套子模块。",
   },
-  { mode: "none", label: "Skip", description: "Leave submodules empty for a setup script." },
+  { mode: "none", label: "跳过", description: "将子模块留空，交由初始化脚本处理。" },
 ];
 
 const WORKSPACE_CHOICES: ReadonlyArray<{
@@ -101,18 +104,18 @@ const WORKSPACE_CHOICES: ReadonlyArray<{
 }> = [
   {
     mode: null,
-    label: "Inherit",
-    description: "Use the repository's t3.json, or the current checkout.",
+    label: "继承",
+    description: "使用仓库中的 t3.json，或当前检出目录。",
   },
   {
     mode: "local",
-    label: "Current checkout",
-    description: "Start new threads in the existing workspace.",
+    label: "当前检出目录",
+    description: "在现有工作区中启动新任务。",
   },
   {
     mode: "worktree",
-    label: "New worktree",
-    description: "Give each new thread a separate checkout.",
+    label: "新建工作树",
+    description: "为每个新任务创建独立检出目录。",
   },
 ];
 
@@ -123,13 +126,13 @@ const STREAMING_CHOICES: ReadonlyArray<{
 }> = [
   {
     mode: "turn",
-    label: "After the turn",
-    description: "Show the answer when the agent finishes.",
+    label: "轮次结束后",
+    description: "智能体完成后显示回答。",
   },
   {
     mode: "paragraph",
-    label: "Finished paragraphs",
-    description: "Show each paragraph or code block as it completes.",
+    label: "已完成的段落",
+    description: "每个段落或代码块完成后立即显示。",
   },
 ];
 
@@ -291,6 +294,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        {props.page === "maintenance" ? <AndroidAppUpdateSection /> : null}
         {!hasConnectedSelection || reference === null ? (
           <Text className="px-2 text-base text-foreground-muted">
             {projectSelected
@@ -530,13 +534,37 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
 
             {props.page === "maintenance" ? (
               <>
-                {!projectSelected ? (
-                  <DatabaseStorageNotice
-                    targets={selectedTargets.filter(
+                <AttachmentLimitSetting
+                  key={targetsKey + ":" + String(uniform("attachmentMaxFileSizeMiB"))}
+                  value={uniform("attachmentMaxFileSizeMiB")}
+                  supported={
+                    targets.length > 0 &&
+                    targets.every(
                       (target) =>
-                        target.serverConfig.environment.capabilities.databaseStorage === true,
-                    )}
-                  />
+                        target.environment.serverConfig?.environment.capabilities
+                          .configurableAttachmentLimit === true,
+                    )
+                  }
+                  disabled={
+                    disabledFor("attachmentMaxFileSizeMiB") ||
+                    !targets.every(
+                      (target) =>
+                        target.environment.serverConfig?.environment.capabilities
+                          .configurableAttachmentLimit === true,
+                    )
+                  }
+                  onSave={(size) => write({ attachmentMaxFileSizeMiB: size })}
+                />
+                {!projectSelected ? (
+                  <>
+                    <BackendRestartSection targets={selectedTargets} />
+                    <DatabaseStorageNotice
+                      targets={selectedTargets.filter(
+                        (target) =>
+                          target.serverConfig.environment.capabilities.databaseStorage === true,
+                      )}
+                    />
+                  </>
                 ) : null}
                 {!projectSelected ? (
                   <SettingsSection title="Manage environments">
@@ -617,7 +645,7 @@ function MixedValuesLabel(props: { readonly projectSelected: boolean }) {
       }
       className="px-2 text-sm text-foreground-muted android:px-4"
     >
-      Mixed
+      {"混合"}
     </Text>
   );
 }

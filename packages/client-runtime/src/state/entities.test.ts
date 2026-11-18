@@ -22,6 +22,36 @@ import { canSnooze, effectiveSnoozed } from "./threadSettled.ts";
 const environmentId = EnvironmentId.make("environment-v2");
 
 describe("V2 client presentation", () => {
+  it("keeps imported history without a T3 run out of Working", () => {
+    const imported = {
+      ...v2ThreadShell,
+      historyOrigin: "v1_import" as const,
+      latestRunId: null,
+      activeRunId: null,
+      activeProviderThreadId: ProviderThreadId.make("imported-provider-thread"),
+      status: "idle" as const,
+      pendingBackgroundTasks: [],
+    };
+    const shell = presentThreadShell(environmentId, imported);
+    expect(shell.runtime).toBeNull();
+    expect(isThreadWorking(shell)).toBe(false);
+
+    const watched = presentThreadShell(environmentId, {
+      ...imported,
+      pendingBackgroundTasks: [{ taskId: "active-subagent", kind: "subagent" }],
+    });
+    expect(watched.runtime?.status).toBe("idle");
+    expect(isThreadWorking(watched)).toBe(true);
+
+    const running = presentThreadShell(environmentId, {
+      ...imported,
+      latestRunId: RunId.make("imported-new-run"),
+      activeRunId: RunId.make("imported-new-run"),
+      status: "running",
+    });
+    expect(isThreadWorking(running)).toBe(true);
+  });
+
   it("an async question allows snooze and wakes an older snooze", () => {
     const runId = RunId.make("run-async-question");
     const running = {

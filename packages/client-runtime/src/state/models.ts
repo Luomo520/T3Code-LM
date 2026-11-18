@@ -161,6 +161,7 @@ export interface EnvironmentThreadShell {
   readonly runtime: ThreadRuntimeSummary | null;
   readonly blockedOnThreadWait?: boolean;
   readonly latestUserMessageAt: string | null;
+  readonly latestConversationMessageAt?: string | null;
   readonly latestUserAuthoredMessageAt?: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
@@ -231,7 +232,17 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   const parkAtIdle =
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
     thread.status !== "failed";
-  if (thread.latestRunId === null && !parkAtIdle) {
+  // An imported provider reference preserves resume identity, not live work.
+  if (
+    thread.historyOrigin === "v1_import" &&
+    thread.latestRunId === null &&
+    thread.activeRunId === null &&
+    thread.status === "idle" &&
+    !parkAtIdle
+  ) {
+    return null;
+  }
+  if (thread.latestRunId === null && thread.activeProviderThreadId === null && !parkAtIdle) {
     return null;
   }
   const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
@@ -310,6 +321,9 @@ export function presentThreadShell(
     runtime,
     blockedOnThreadWait: thread.blockedOnThreadWait ?? false,
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
+    ...(thread.latestConversationMessageAt === undefined
+      ? {}
+      : { latestConversationMessageAt: nullableIso(thread.latestConversationMessageAt) }),
     ...(thread.latestUserAuthoredMessageAt === undefined
       ? {}
       : { latestUserAuthoredMessageAt: nullableIso(thread.latestUserAuthoredMessageAt) }),

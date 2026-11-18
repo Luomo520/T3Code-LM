@@ -33,7 +33,7 @@ export function resolveComposerSendPresentation(input: {
 }): ComposerSendPresentation {
   if (input.editingQueuedMessage) {
     return {
-      label: "Update queued message",
+      label: "更新排队消息",
       icon: "checkmark",
       action: null,
       alternate: null,
@@ -42,7 +42,7 @@ export function resolveComposerSendPresentation(input: {
   }
   if (!input.running) {
     return {
-      label: input.deliveryDeferred ? "Queue" : "Send",
+      label: input.deliveryDeferred ? "加入队列" : "发送",
       icon: input.deliveryDeferred ? "tray.and.arrow.up" : "arrow.up",
       action: null,
       alternate: null,

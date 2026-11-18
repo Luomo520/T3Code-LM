@@ -37,7 +37,7 @@ export function TerminalContextSheet(props: {
       version: 1 as const,
       kind: "terminal" as const,
       contextId: ComposerContextId.make(uuidv4()),
-      label: `${props.terminalLabel} · visible lines ${range.start + 1}–${range.end + 1}`,
+      label: `${props.terminalLabel} · 可见行 ${range.start + 1}–${range.end + 1}`,
       terminalId: props.terminalId,
       terminalLabel: `${props.terminalLabel} (visible output)`,
       lineStart: range.start + 1,
@@ -56,16 +56,14 @@ export function TerminalContextSheet(props: {
     props.onAttach();
   };
   return (
-    <Sheet title="Terminal output" onClose={props.onClose}>
+    <Sheet title="终端输出" onClose={props.onClose}>
       <ScrollView
         nestedScrollEnabled
         className="flex-1"
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20 }}
       >
-        <Text className="pb-4 text-sm text-foreground-muted">
-          Tap the first and last line to select a range.
-        </Text>
+        <Text className="pb-4 text-sm text-foreground-muted">{"轻触首行和末行以选择范围。"}</Text>
         <View className="overflow-hidden rounded-xl bg-card-alt">
           {lines.map(
             (line, index) => (
@@ -111,12 +109,10 @@ export function TerminalContextSheet(props: {
         style={{ paddingBottom: Math.max(16, insets.bottom) }}
       >
         {tooLarge ? (
-          <Text className="text-sm text-foreground-muted">
-            Select fewer lines to fit the context limit.
-          </Text>
+          <Text className="text-sm text-foreground-muted">{"请减少选择的行数，以符合上下文限制。"}</Text>
         ) : null}
         <Button
-          label="Attach selected output"
+          label="添加选中的输出"
           tone="primary"
           fullWidth
           disabled={!selectedText.trim() || tooLarge}

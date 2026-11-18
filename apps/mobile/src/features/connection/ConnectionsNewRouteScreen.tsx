@@ -116,8 +116,8 @@ function PairingForm({
       "Camera access needed",
       "Camera access was denied for this app. Open Settings to enable it.",
       [
-        { text: "Cancel", style: "cancel" },
-        { text: "Open Settings", onPress: () => void Linking.openSettings() },
+        { text: "取消", style: "cancel" },
+        { text: "打开设置", onPress: () => void Linking.openSettings() },
       ],
     );
   };
@@ -176,10 +176,10 @@ function PairingForm({
 
   return (
     <SettingsScreen
-      title="Add environment"
+      title="添加环境"
       actions={[
         {
-          accessibilityLabel: connecting ? "Connecting" : "Add environment",
+          accessibilityLabel: connecting ? "正在连接" : "添加环境",
           loading: connecting,
           icon: "checkmark",
           tintColor: headerIconColor,
@@ -212,7 +212,7 @@ function PairingForm({
           />
 
           <View collapsable={false} className="gap-2">
-            <Text className="px-4 text-sm font-t3-medium text-foreground-muted">Or enter it</Text>
+            <Text className="px-4 text-sm font-t3-medium text-foreground-muted">{"或手动输入"}</Text>
             <View
               collapsable={false}
               className={cn(
@@ -221,7 +221,7 @@ function PairingForm({
               )}
             >
               <PairingInputRow
-                label="Address"
+                label="地址"
                 keyboardType="url"
                 placeholder="192.168.1.100:3773"
                 value={hostInput}
@@ -229,8 +229,8 @@ function PairingForm({
               />
               <View className="ml-4 border-t border-border-subtle" />
               <PairingInputRow
-                label="Code"
-                placeholder="Pairing code"
+                label="代码"
+                placeholder="配对码"
                 returnKeyType="go"
                 value={codeInput}
                 onChangeText={handleCodeChange}
@@ -336,15 +336,11 @@ function PairingScanCard(props: {
               />
               <Text
                 className={cn("font-t3-medium text-sm", light ? "text-black/70" : "text-white/80")}
-              >
-                Tap to scan
-              </Text>
+              >{"轻触扫描"}</Text>
             </>
           )}
         </View>
-        <Text className={cn("text-center text-sm", light ? "text-black/70" : "text-white/80")}>
-          Scan the code from t3 pair or desktop Connections settings
-        </Text>
+        <Text className={cn("text-center text-sm", light ? "text-black/70" : "text-white/80")}>{"扫描 t3 pair 命令或桌面端连接设置中的二维码"}</Text>
       </View>
     </Pressable>
   );
@@ -362,9 +358,7 @@ function T3ConnectSection() {
 
   return (
     <View collapsable={false} className="gap-2">
-      <Text className="px-4 text-sm font-t3-medium text-foreground-muted">
-        Or use the managed relay
-      </Text>
+      <Text className="px-4 text-sm font-t3-medium text-foreground-muted">{"或使用托管中继"}</Text>
       {isSignedIn ? (
         <CloudEnvironmentRows
           connectedCloudEnvironments={connectedCloudEnvironments}
@@ -374,8 +368,8 @@ function T3ConnectSection() {
         />
       ) : (
         <ListRow
-          label="Sign in to T3 Connect"
-          description="Reach your machines from anywhere, no network setup."
+          label="登录 T3 Connect"
+          description="无需配置网络，即可随时连接你的电脑。"
           disabled={!isLoaded}
           onPress={() => navigation.navigate("SettingsAuth")}
         />

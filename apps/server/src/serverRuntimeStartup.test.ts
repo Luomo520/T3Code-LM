@@ -53,6 +53,8 @@ it.effect.each([
   "launch-failure",
   "project-failure",
   "project-refused",
+  "project-deleted",
+  "existing-project-with-deleted-thread",
 ] as const)("keeps bootstrap launch failures separate from project failures: %s", (scenario) =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("bootstrap-project");
@@ -68,6 +70,19 @@ it.effect.each([
       requeuedEffects: 0,
     };
     const imports = { importedThreadCount: 0, importedMessageCount: 0 };
+    const project = {
+      id: projectId,
+      title: "Project",
+      workspaceRoot: "/bootstrap-project",
+      repositoryIdentity: null,
+      faviconPath: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      deletedAt: null,
+      defaultModelSelection:
+        scenario === "disabled-default" ? { instanceId, model: "custom-model" } : null,
+    };
     const dependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Path.layer,
@@ -153,31 +168,23 @@ it.effect.each([
       }),
       Layer.mock(ProjectStore.ProjectStoreV2)({}),
       Layer.mock(ProjectService.ProjectService)({
+        getByWorkspaceRoot: (_workspaceRoot, options) =>
+          scenario === "project-deleted" && options?.includeDeleted
+            ? Effect.succeedSome({ ...project, deletedAt: "2026-01-02T00:00:00Z" })
+            : Effect.succeedNone,
         bootstrap: () =>
-          scenario === "project-failure"
-            ? Effect.die("project bootstrap failed")
-            : scenario === "project-refused"
-              ? Effect.fail(
-                  new ProjectService.ProjectInvalidError({ projectId, detail: "refused folder" }),
-                )
-              : Effect.succeed({
-                  created: true,
-                  project: {
-                    id: projectId,
-                    title: "Project",
-                    workspaceRoot: "/bootstrap-project",
-                    repositoryIdentity: null,
-                    faviconPath: null,
-                    scripts: [],
-                    createdAt: "2026-01-01T00:00:00Z",
-                    updatedAt: "2026-01-01T00:00:00Z",
-                    deletedAt: null,
-                    defaultModelSelection:
-                      scenario === "disabled-default"
-                        ? { instanceId, model: "custom-model" }
-                        : null,
-                  },
-                }),
+          scenario === "project-deleted"
+            ? Effect.die("startup must not recreate the deleted workspace")
+            : scenario === "project-failure"
+              ? Effect.die("project bootstrap failed")
+              : scenario === "project-refused"
+                ? Effect.fail(
+                    new ProjectService.ProjectInvalidError({ projectId, detail: "refused folder" }),
+                  )
+                : Effect.succeed({
+                    created: scenario !== "existing-project-with-deleted-thread",
+                    project,
+                  }),
       }),
       Layer.mock(ThreadManagement.ThreadManagementService)({
         countThreads: () => Effect.succeed(0),
@@ -185,6 +192,9 @@ it.effect.each([
       }),
       Layer.mock(ThreadLaunch.ThreadLaunchService)({
         launch: (input) => {
+          if (scenario === "existing-project-with-deleted-thread") {
+            return Effect.die("startup must not recreate the deleted welcome thread");
+          }
           assert.equal(input.modelSelection.instanceId, instanceId);
           return scenario === "launch-failure"
             ? Effect.fail(
@@ -232,7 +242,11 @@ it.effect.each([
         if (welcome?.type === "welcome") {
           assert.equal(
             welcome.payload.bootstrapProjectId,
-            scenario === "project-refused" ? undefined : projectId,
+            scenario === "project-refused" ||
+              scenario === "project-deleted" ||
+              scenario === "existing-project-with-deleted-thread"
+              ? undefined
+              : projectId,
           );
           assert.isUndefined(welcome.payload.bootstrapThreadId);
         }

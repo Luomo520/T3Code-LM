@@ -5,7 +5,13 @@ import type {
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildHomeProjectScopes, findHomeProjectScope } from "./homeThreadList";
+import {
+  buildHomeProjectScopes,
+  buildHomeThreadList,
+  findHomeProjectScope,
+  selectHomeCatalog,
+} from "./homeThreadList";
+import { arrangeHomeList, homeConversationTimestamp } from "./homeListView";
 import { makeThreadShellFixture } from "../../test-fixtures";
 import { buildThreadListV2Items } from "../threads/threadListV2";
 
@@ -45,6 +51,134 @@ function makeThread(
 }
 
 describe("home project scopes", () => {
+  it("includes all unarchived history across collapsed shelves and sorts both views by conversation time", () => {
+    const environmentId = EnvironmentId.make("local");
+    const projects = ["one", "two"].map((id) =>
+      makeProject({ environmentId, id: ProjectId.make(id), title: id }),
+    );
+    const threads = Array.from({ length: 16 }, (_, index) =>
+      makeThread({
+        environmentId,
+        projectId: projects[index % 2]!.id,
+        id: ThreadId.make(`thread-${index}`),
+        title: `${index}`,
+        latestUserMessageAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+        updatedAt: `2026-07-${String(20 - index).padStart(2, "0")}T00:00:00.000Z`,
+        settledOverride: index < 13 ? "settled" : "active",
+        pinnedAt: index === 13 ? "2026-06-01T00:00:00.000Z" : null,
+        snoozedUntil: index === 14 ? "2026-08-01T00:00:00.000Z" : null,
+      }),
+    );
+    const layout = buildHomeThreadList({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: "2026-07-01T00:00:00.000Z",
+      settledLimit: 1,
+      settledShelfExpanded: false,
+      snoozedShelfExpanded: false,
+    });
+    expect(layout.items).toHaveLength(16);
+    expect(layout.hiddenSettledCount).toBe(0);
+    const rows = layout.items.map(({ thread }) => ({ key: thread.id, thread }));
+    const describe = (row: (typeof rows)[number]) => ({
+      projectKey: row.thread.projectId,
+      title: row.thread.projectId,
+      timestamp: homeConversationTimestamp(row.thread),
+      pinned: row.thread.pinnedAt !== null,
+    });
+    expect(
+      arrangeHomeList({ rows, describe, mode: "time", collapsed: new Set() }).map((row) => row.key),
+    ).toEqual(threads.toReversed().map((thread) => thread.id));
+    const grouped = arrangeHomeList({ rows, describe, mode: "projects", collapsed: new Set() });
+    expect(grouped.map((row) => row.key)).toEqual([
+      "home-project:0:two",
+      ...threads
+        .toReversed()
+        .filter((thread) => thread.projectId === projects[1]!.id)
+        .map((thread) => thread.id),
+      "home-project:0:one",
+      ...threads
+        .toReversed()
+        .filter((thread) => thread.projectId === projects[0]!.id)
+        .map((thread) => thread.id),
+    ]);
+    const search = buildHomeThreadList({
+      threads,
+      environmentId: null,
+      searchQuery: "15",
+      now: "2026-07-01T00:00:00.000Z",
+    });
+    expect(search.items.map((item) => item.thread.id)).toEqual([threads[15]!.id]);
+  });
+  it("derives the catalog from existing unarchived conversations and keeps environments separate", () => {
+    const local = EnvironmentId.make("local");
+    const remote = EnvironmentId.make("remote");
+    const activeProject = makeProject({
+      environmentId: local,
+      id: ProjectId.make("active"),
+      title: "active",
+    });
+    const archivedProject = makeProject({
+      environmentId: local,
+      id: ProjectId.make("archived"),
+      title: "archived",
+    });
+    const remoteProject = makeProject({
+      environmentId: remote,
+      id: activeProject.id,
+      title: "remote",
+    });
+    const active = makeThread({
+      environmentId: local,
+      projectId: activeProject.id,
+      id: ThreadId.make("active"),
+      title: "active",
+    });
+    const archived = makeThread({
+      environmentId: local,
+      projectId: archivedProject.id,
+      id: ThreadId.make("archived"),
+      title: "archived",
+      archivedAt: "2026-06-02T00:00:00.000Z",
+    });
+    const deleted = makeThread({
+      environmentId: local,
+      projectId: activeProject.id,
+      id: ThreadId.make("deleted"),
+      title: "deleted",
+      deletedAt: "2026-06-02T00:00:00.000Z",
+    });
+    const orphan = makeThread({
+      environmentId: local,
+      projectId: ProjectId.make("removed"),
+      id: ThreadId.make("orphan"),
+      title: "orphan",
+    });
+    const subagent = makeThread({
+      environmentId: remote,
+      projectId: remoteProject.id,
+      id: ThreadId.make("child"),
+      title: "child",
+      lineage: { ...active.lineage, relationshipToParent: "subagent" },
+    });
+    const result = selectHomeCatalog({
+      projects: [activeProject, archivedProject, remoteProject],
+      threads: [archived, deleted, orphan, subagent, active],
+    });
+    expect(result.projects).toEqual([activeProject]);
+    expect(result.threads).toEqual([active]);
+    expect(
+      selectHomeCatalog({
+        projects: [activeProject],
+        threads: [{ ...active, archivedAt: "2026-06-03T00:00:00.000Z" }],
+      }),
+    ).toEqual({ projects: [], threads: [] });
+    expect(selectHomeCatalog({ projects: [activeProject], threads: [active] })).toEqual({
+      projects: [activeProject],
+      threads: [active],
+    });
+  });
   it("filters threads across both scratch hosts while retaining the selected environment boundary", () => {
     const localEnvironmentId = EnvironmentId.make("local");
     const remoteEnvironmentId = EnvironmentId.make("remote");

@@ -37,7 +37,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
       : null,
   );
 
-  const currentBranchLabel = gitStatus.data?.refName ?? selectedThread?.branch ?? "Detached HEAD";
+  const currentBranchLabel = gitStatus.data?.refName ?? selectedThread?.branch ?? "分离 HEAD";
   const currentWorktreePath = selectedThreadCwd;
   const availableBranches = gitState.selectedThreadBranches;
   const branchesLoading = gitState.selectedThreadBranchesLoading;
@@ -60,7 +60,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
 
   return (
     <FitSheet
-      header={<SheetHeader title="Branches & worktrees" onClose={() => navigation.goBack()} />}
+      header={<SheetHeader title="分支与工作树" onClose={() => navigation.goBack()} />}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
@@ -69,11 +69,11 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
           value={newBranchName}
           onChangeText={setNewBranchName}
           placeholder="feature/mobile-polish"
-          accessibilityLabel="New branch name"
+          accessibilityLabel="新分支名称"
         />
         <SheetActionButton
           icon="plus"
-          label="Create & checkout"
+          label="创建并检出"
           tone="primary"
           disabled={!canChangeThreadBranch || busy || newBranchName.trim().length === 0}
           onPress={() => {
@@ -94,18 +94,18 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
           value={worktreeBaseBranch}
           onChangeText={setWorktreeBaseBranchOverride}
           placeholder="main"
-          accessibilityLabel="Worktree base branch"
+          accessibilityLabel="工作树基础分支"
         />
         <FormField
           label="New branch"
           value={worktreeBranchName}
           onChangeText={setWorktreeBranchName}
           placeholder="feature/mobile-thread"
-          accessibilityLabel="Worktree branch name"
+          accessibilityLabel="工作树分支名称"
         />
         <SheetActionButton
           icon="square.split.2x1"
-          label="Create worktree"
+          label="创建工作树"
           tone="primary"
           disabled={
             !canChangeThreadBranch ||

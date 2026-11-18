@@ -84,14 +84,14 @@ export function ThreadFileNavigatorPane(props: {
   return (
     <SheetPane>
       <AppBar
-        title="Files"
+        title="文件"
         subtitle={props.projectName}
         search={{
           value: searchQuery,
           onChangeText: setSearchQuery,
-          placeholder: "Search files",
+          placeholder: "搜索文件",
         }}
-        refresh={{ accessibilityLabel: "Refresh files", onPress: entriesQuery.refresh }}
+        refresh={{ accessibilityLabel: "刷新文件", onPress: entriesQuery.refresh }}
       />
       <ScreenContent insetHorizontal>{fileTree}</ScreenContent>
     </SheetPane>

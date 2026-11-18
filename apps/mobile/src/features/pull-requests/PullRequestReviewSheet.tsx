@@ -55,11 +55,11 @@ function useActionSubmission(params: PullRequestParams) {
 }
 
 const VERDICTS = [
-  { value: "comment", title: "Comment" },
-  { value: "approve", title: "Approve" },
+  { value: "comment", title: "评论" },
+  { value: "approve", title: "批准" },
   {
     value: "request-changes",
-    title: "Request changes",
+    title: "要求修改",
   },
 ] as const;
 
@@ -151,9 +151,9 @@ export function PullRequestReviewSheet({
               ? "Submitting…"
               : reviewing
                 ? verdict?.value === "approve"
-                  ? "Approve"
+                  ? "批准"
                   : verdict?.value === "request-changes"
-                    ? "Request changes"
+                    ? "要求修改"
                     : "Submit review"
                 : "Post comment"
           }
@@ -184,7 +184,7 @@ export function PullRequestReviewSheet({
         selection={completions.selection}
         onSelectionChange={completions.onSelectionChange}
         onBlur={completions.onBlur}
-        accessibilityLabel={reviewing ? "Review summary" : "Comment"}
+        accessibilityLabel={reviewing ? "Review summary" : "评论"}
         placeholder={
           reviewing
             ? summaryRequired
@@ -203,7 +203,7 @@ export function PullRequestReviewSheet({
       {reviewing && store.draft.comments.length ? (
         <View className="gap-2">
           <Text className="text-sm font-t3-medium">
-            {store.draft.comments.length} pending line{" "}
+            {store.draft.comments.length}{"待处理行"}{" "}
             {store.draft.comments.length === 1 ? "comment" : "comments"}
           </Text>
           {store.draft.comments.map((draft) => (
@@ -248,9 +248,7 @@ export function PullRequestReviewSheet({
         </View>
       ) : null}
       {reviewing && stale ? (
-        <Text className="text-sm text-danger-foreground">
-          The branch changed since you wrote a comment. Choose its current line before submitting.
-        </Text>
+        <Text className="text-sm text-danger-foreground">{"编写评论后分支已更改，请在提交前选择当前对应的行。"}</Text>
       ) : null}
       {reviewing && !canSubmitComments ? (
         <Text className="text-sm text-danger-foreground">

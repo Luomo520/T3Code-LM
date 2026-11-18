@@ -68,7 +68,7 @@ export function buildShowcaseAgentActivity(
   }
   return {
     title: "T3 Code",
-    subtitle: "Agent work in progress",
+    subtitle: "智能体正在工作",
     activeCount: rows.filter((row) => ACTIVE_PHASES.has(row.phase)).length,
     updatedAt: new Date(now).toISOString(),
     activities: rows,

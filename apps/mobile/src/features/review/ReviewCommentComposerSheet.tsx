@@ -70,11 +70,11 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
   const selectionLabel =
     selectedLines.length === 1
       ? firstNumber !== null
-        ? `Line ${firstNumber}`
-        : "File comment"
+        ? `第 ${firstNumber}已选择 `
+        : "文件评论"
       : firstNumber !== null && lastNumber !== null
-        ? `Lines ${firstNumber}-${lastNumber}`
-        : `${selectedLines.length} lines selected`;
+        ? `第 ${firstNumber}–${lastNumber}已选择 `
+        : `已选择 ${selectedLines.length} 行`;
   const previewHeight = Math.max(
     Math.min(selectedLines.length, REVIEW_COMMENT_PREVIEW_MAX_LINES) * codeSurface.rowHeight,
     codeSurface.rowHeight,
@@ -134,15 +134,15 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
           target ? (
             <>
               <ControlPill
-                accessibilityLabel="Add image"
+                accessibilityLabel="添加图片"
                 icon="plus"
                 onPress={() => void handlePickImages()}
               />
               <View className="flex-1" />
               <ControlPill
-                accessibilityLabel="Comment"
+                accessibilityLabel="评论"
                 icon="arrow.up"
-                label="Comment"
+                label="评论"
                 variant="primary"
                 disabled={!canSubmit}
                 onPress={handleSubmit}
@@ -153,7 +153,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
       >
         {!target ? (
           <View className="rounded-[22px] border border-border bg-card px-4 py-5">
-            <Text className="text-base font-t3-bold text-foreground">No selection</Text>
+            <Text className="text-base font-t3-bold text-foreground">{"未选择内容"}</Text>
             <Text className="mt-1 text-sm leading-normal text-foreground-muted">
               Select a diff line or range first.
             </Text>
@@ -222,7 +222,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
             </View>
 
             <View className="min-h-0 flex-1 gap-2">
-              <Text className="text-sm font-t3-bold text-foreground">Comment</Text>
+              <Text className="text-sm font-t3-bold text-foreground">{"评论"}</Text>
               <View className="min-h-[132px] flex-1 overflow-hidden rounded-[20px] border border-border bg-card">
                 <View className="min-h-0 flex-1 px-4 pt-3.5">
                   <TextInputWrapper onPaste={handleNativePaste} style={{ flex: 1, minHeight: 0 }}>
@@ -230,7 +230,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
                       autoFocus
                       multiline
                       scrollEnabled
-                      placeholder="Leave a comment..."
+                      placeholder="发表评论…"
                       textAlignVertical="top"
                       value={commentText}
                       onChangeText={setCommentText}

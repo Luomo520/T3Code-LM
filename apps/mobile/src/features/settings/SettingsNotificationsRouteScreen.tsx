@@ -120,14 +120,12 @@ function useNotificationsReady(): boolean {
 export function SettingsNotificationsRouteScreen() {
   if (!hasCloudPublicConfig()) {
     return (
-      <SettingsScreen title="Notifications">
+      <SettingsScreen title="通知">
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
           contentContainerClassName="px-5 pt-4"
         >
-          <Text className="text-base text-foreground-muted">
-            Notifications require T3 Connect in this app build.
-          </Text>
+          <Text className="text-base text-foreground-muted">{"此构建版本的通知功能需要 T3 Connect。"}</Text>
         </ScrollView>
       </SettingsScreen>
     );
@@ -227,8 +225,8 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       "Notifications disabled",
       "Notifications were denied for this app. Open Settings to enable them.",
       [
-        { text: "Cancel", style: "cancel" },
-        { text: "Open Settings", onPress: () => void Linking.openSettings() },
+        { text: "取消", style: "cancel" },
+        { text: "打开设置", onPress: () => void Linking.openSettings() },
       ],
     );
   };
@@ -238,9 +236,9 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       "Sign in to T3 Connect",
       "Live Activity updates require T3 Connect so relay can deliver updates to this device.",
       [
-        { text: "Cancel", style: "cancel" },
+        { text: "取消", style: "cancel" },
         {
-          text: "Continue",
+          text: "继续",
           onPress: () => navigation.navigate("SettingsAuth"),
         },
       ],
@@ -273,8 +271,8 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           "Notification permission needed",
           "Enable notifications in system Settings to show ongoing agent activity.",
           [
-            { text: "Cancel", style: "cancel" },
-            { text: "Open Settings", onPress: () => void Linking.openSettings() },
+            { text: "取消", style: "cancel" },
+            { text: "打开设置", onPress: () => void Linking.openSettings() },
           ],
         );
         return;
@@ -355,8 +353,8 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       "Disable notifications",
       "Open system Settings to disable notifications for T3 Code.",
       [
-        { text: "Cancel", style: "cancel" },
-        { text: "Open Settings", onPress: () => void Linking.openSettings() },
+        { text: "取消", style: "cancel" },
+        { text: "打开设置", onPress: () => void Linking.openSettings() },
       ],
     );
   };
@@ -420,7 +418,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   };
 
   return (
-    <SettingsScreen title="Notifications">
+    <SettingsScreen title="通知">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -430,10 +428,10 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
-        <SettingsSection title="Agent activity">
+        <SettingsSection title="智能体活动">
           <SettingsSwitchRow
             icon="bell.badge"
-            label="Device Notifications"
+            label="设备通知"
             disabled={
               !agentAwarenessPlatform.supported ||
               !agentAwarenessPushAvailable ||
@@ -473,14 +471,14 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           {liveActivityStatus === "signed-out" && canClearLiveActivitiesPreference ? (
             <SettingsRow
               icon="bolt.circle"
-              label="Turn off Live Activity preference"
+              label="关闭实时活动偏好"
               onPress={() => void handleLiveActivitiesChange(false)}
             />
           ) : null}
           {supportsAndroidLiveUpdateSettings() ? (
             <SettingsRow
               icon="bolt.circle"
-              label="Live Update Settings"
+              label="实时更新设置"
               onPress={() => {
                 void openAndroidLiveUpdateSettings().catch(() => {
                   Dialog.alert(

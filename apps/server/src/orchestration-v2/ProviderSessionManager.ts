@@ -66,6 +66,9 @@ import {
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
+import { CODEX_NATIVE_SUBAGENTS_ONLY, isIndependentCodexChild } from "./codexSubagentPolicy.ts";
+const isProviderAdapterProtocolError = Schema.is(ProviderAdapter.ProviderAdapterProtocolError);
+
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
@@ -2296,6 +2299,40 @@ export const layerWithOptions = (
         >,
       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
+        const assertNativeCodexChild = Effect.fn("ProviderSessionManager.assertNativeCodexChild")(
+          function* (threadId: ThreadId) {
+            if (runtime.driver !== "codex") return;
+            const thread = yield* projectionStore.getThread(threadId);
+            if (thread.lineage.relationshipToParent !== "subagent") return;
+            const parentId = thread.lineage.parentThreadId;
+            const parent =
+              parentId === null
+                ? undefined
+                : yield* projectionStore.getThreadRecords(parentId, ["subagents"]);
+            const task = parent?.subagents.find((task) => task.childThreadId === threadId);
+            if (
+              isIndependentCodexChild({
+                driver: runtime.driver,
+                relationshipToParent: thread.lineage.relationshipToParent,
+                origin: task?.origin,
+              })
+            ) {
+              return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                driver: runtime.driver,
+                detail: CODEX_NATIVE_SUBAGENTS_ONLY,
+              });
+            }
+          },
+          Effect.mapError((cause) =>
+            isProviderAdapterProtocolError(cause)
+              ? cause
+              : new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: runtime.driver,
+                  detail: "Cannot verify Codex child ownership before attaching",
+                  cause,
+                }),
+          ),
+        );
         const subscribeEvents = makeEventSubscription(eventSubscribers);
         const turnMetrics = (operation: string, model?: string) =>
           withMetrics({
@@ -2318,14 +2355,15 @@ export const layerWithOptions = (
             subscribeEvents.pipe(Effect.map((subscription) => subscription.events)),
           ),
           ensureThread: (input) =>
-            observeActivity(
+            assertNativeCodexChild(input.threadId).pipe(
+              Effect.andThen(() => observeActivity(
               providerSessionId,
               ensureThreadAttached({
                 providerSessionId,
                 threadId: input.threadId,
                 providerInstanceId: runtime.instanceId,
               }),
-            ).pipe(
+              )),
               Effect.andThen(loadNatively(runtime.ensureThread(input))),
               Effect.tap(({ loaded: providerThread, linkedEnvironments }) =>
                 markProviderThreadLoaded({
@@ -2355,14 +2393,15 @@ export const layerWithOptions = (
                 : { modelSelection: input.modelSelection }),
               ...(input.runtimePolicy === undefined ? {} : { runtimePolicy: input.runtimePolicy }),
             });
-            return observeActivity(
+            return assertNativeCodexChild(threadId).pipe(
+              Effect.andThen(() => observeActivity(
               providerSessionId,
               ensureThreadAttached({
                 providerSessionId,
                 threadId,
                 providerInstanceId: runtime.instanceId,
               }),
-            ).pipe(
+              )),
               Effect.andThen(
                 holdThreadLoaded({
                   providerSessionId,

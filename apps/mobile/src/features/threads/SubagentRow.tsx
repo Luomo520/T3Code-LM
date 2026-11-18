@@ -74,8 +74,7 @@ export function SubagentRow(props: {
               {presentation.statusLabel}
             </Text>
             {presentation.runsOn !== null ? (
-              <Text numberOfLines={1} className="shrink text-xs text-foreground-muted">
-                on {presentation.runsOn}
+              <Text numberOfLines={1} className="shrink text-xs text-foreground-muted">{"于"}{presentation.runsOn}
               </Text>
             ) : null}
           </View>

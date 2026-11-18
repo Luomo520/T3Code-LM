@@ -520,7 +520,7 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
     const activity = startAgentLiveActivity(
       {
         title: "T3 Code",
-        subtitle: "Agent work in progress",
+        subtitle: "智能体正在工作",
         activeCount: 1,
         updatedAt: nowIso,
         activities: [
@@ -731,7 +731,7 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
       deviceId,
       label:
         Constants.deviceName?.trim() ||
-        (Platform.OS === "android" ? "Android device" : "iOS device"),
+        (Platform.OS === "android" ? "安卓设备" : "iOS 设备"),
       ...(Platform.OS === "android"
         ? {
             platform: "android" as const,

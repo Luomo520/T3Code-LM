@@ -77,6 +77,55 @@ const stableUpdateInfo = (
 };
 
 describe("DesktopUpdates", () => {
+  it.effect("offers numeric fork builds while download and install remain user actions", () => {
+    const harness = makeHarness({ appVersion: "0.1.0-1", savedChannel: "nightly" });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        assert.equal((yield* updates.getState).channel, "latest");
+        assert.isFalse(harness.autoDownload());
+        assert.isFalse(harness.autoInstallOnAppQuit());
+        harness.emit("update-available", { version: "0.1.0-2", releaseNotes: "- fix: fork build" });
+        yield* flushCallbacks;
+        assert.equal((yield* updates.getState).availableVersion, "0.1.0-2");
+        assert.equal(harness.downloadCount(), 0);
+        assert.equal(harness.quitAndInstalls(), 0);
+        const downloaded = yield* updates.download;
+        assert.isTrue(downloaded.accepted);
+        assert.equal(harness.downloadCount(), 1);
+        harness.emit("update-downloaded", { version: "0.1.0-2" });
+        yield* flushCallbacks;
+        assert.equal(harness.quitAndInstalls(), 0);
+        yield* updates.install;
+        assert.equal(harness.quitAndInstalls(), 1);
+      }),
+    ).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("uses the fork feed even when an old package has no app-update.yml", () => {
+    const harness = makeHarness({
+      env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" },
+      platform: "win32",
+      appVersion: "0.1.0-1",
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        assert.isTrue((yield* updates.getState).enabled);
+        assert.deepEqual(harness.feedUrls(), [
+          {
+            provider: "generic",
+            url: "https://github.com/Luomo520/T3Code-LM/releases/latest/download",
+          },
+        ]);
+        assert.isFalse(harness.autoDownload());
+        assert.isFalse(harness.autoInstallOnAppQuit());
+      }),
+    ).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("updates Linux .deb installs and leaves other non-AppImage installs off", () =>
     Effect.gen(function* () {
       const linuxState = (packageType: string | undefined) =>
@@ -115,7 +164,7 @@ describe("DesktopUpdates", () => {
         assert.equal(configured.message, reason);
 
         const changed = yield* updates.setChannel("nightly");
-        assert.equal(changed.channel, "nightly");
+        assert.equal(changed.channel, "latest");
         assert.equal(changed.enabled, false);
         assert.equal(changed.status, "disabled");
         assert.equal(changed.message, reason);
@@ -441,7 +490,7 @@ describe("DesktopUpdates", () => {
         assert.equal(failedState.message, "Desktop update download action failed unexpectedly.");
 
         const changedState = yield* updates.setChannel("nightly");
-        assert.equal(changedState.channel, "nightly");
+        assert.equal(changedState.channel, "latest");
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
@@ -537,7 +586,7 @@ describe("DesktopUpdates", () => {
         assert.equal(failedState.message, "Desktop update install action failed unexpectedly.");
 
         const changedState = yield* updates.setChannel("nightly");
-        assert.equal(changedState.channel, "nightly");
+        assert.equal(changedState.channel, "latest");
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
@@ -849,23 +898,21 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("persists channel changes through the settings service", () => {
+  it.effect("ignores legacy Nightly requests without changing the saved fork channel", () => {
     const harness = makeHarness();
-
     return Effect.scoped(
       Effect.gen(function* () {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
         const updates = yield* DesktopUpdates.DesktopUpdates;
         yield* updates.configure;
-
         const state = yield* updates.setChannel("nightly");
-        const persistedSettings = yield* settings.get;
-
-        assert.equal(state.channel, "nightly");
-        assert.equal(persistedSettings.updateChannel, "nightly");
-        assert.equal(persistedSettings.updateChannelConfiguredByUser, true);
+        const persisted = yield* settings.get;
+        assert.equal(state.channel, "latest");
+        assert.equal(persisted.updateChannel, "latest");
+        assert.isFalse(persisted.updateChannelConfiguredByUser);
+        assert.equal(harness.checkCount(), 0);
       }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    ).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("ignores a finished download from a track it no longer follows", () => {
@@ -888,23 +935,19 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("offers older releases only to checks that leave the running build's track", () => {
-    const harness = makeHarness({ beforeSetUpdateChannel: Effect.void });
-
+  it.effect("does not start a check or allow downgrades for a legacy Nightly request", () => {
+    const harness = makeHarness();
     return Effect.scoped(
       Effect.gen(function* () {
         const updates = yield* DesktopUpdates.DesktopUpdates;
         yield* updates.configure;
-        const before = harness.checkAllowedDowngrade.length;
         yield* updates.setChannel("nightly");
         yield* updates.setChannel("latest");
-        yield* updates.check("remote-update", { allowDowngrade: true });
-
-        // Back on its own Stable track the build never needs an older release.
-        assert.deepEqual(harness.checkAllowedDowngrade.slice(before), [true, false, true]);
+        yield* updates.check("manual");
+        assert.deepEqual(harness.checkAllowedDowngrade, [false]);
         assert.isFalse(harness.allowDowngrade());
       }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    ).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("re-checks a saved track that differs from the running build's track", () => {
@@ -972,30 +1015,19 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("keeps the current track's offers when a track switch fails to save", () => {
-    const harness = makeHarness({
-      setUpdateChannelError: new DesktopAppSettings.DesktopSettingsWriteError({
-        operation: "replace-settings-file",
-        path: "desktop-settings.json",
-        cause: new Error("rename failed"),
-      }),
-    });
-
+  it.effect("ignores a legacy Nightly floor and keeps the fork release offer", () => {
+    const harness = makeHarness();
     return Effect.scoped(
       Effect.gen(function* () {
         const updates = yield* DesktopUpdates.DesktopUpdates;
         yield* updates.configure;
-        const error = yield* updates
-          .setChannel("nightly", { minimumVersion: "1.2.5-nightly.20261028.1" })
-          .pipe(Effect.flip);
-        assert.equal(error._tag, "DesktopUpdateChannelPersistenceError");
-        assert.equal((yield* updates.getState).channel, "latest");
-
+        yield* updates.setChannel("nightly", { minimumVersion: "1.2.5-nightly.20261028.1" });
         harness.emit("update-available", { version: "1.2.4" });
         yield* flushCallbacks;
+        assert.equal((yield* updates.getState).channel, "latest");
         assert.equal((yield* updates.getState).availableVersion, "1.2.4");
       }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    ).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("keeps a saved Stable track across a restart without offering an older release", () => {
@@ -1019,7 +1051,7 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("keeps a saved Nightly track across a restart without crossing on its own", () => {
+  it.effect("normalizes a saved Nightly preference and ignores its artifacts", () => {
     // A Stable build whose switch to Nightly was refused before the app quit; its floor is gone.
     const harness = makeHarness({ savedChannel: "nightly" });
 
@@ -1031,14 +1063,14 @@ describe("DesktopUpdates", () => {
         harness.emit("update-available", { version: "1.2.4-nightly.20261027.1" });
         yield* flushCallbacks;
 
-        assert.equal((yield* updates.getState).channel, "nightly");
+        assert.equal((yield* updates.getState).channel, "latest");
         assert.isNull((yield* updates.getState).availableVersion);
         assert.deepEqual(harness.checkAllowedDowngrade, [false]);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("never offers an older Nightly to a Nightly build's own checks", () => {
+  it.effect("never allows downgrades when an old Nightly install checks the fork feed", () => {
     const harness = makeHarness({ appVersion: "1.2.4-nightly.20261027.1" });
 
     return Effect.scoped(
@@ -1047,7 +1079,7 @@ describe("DesktopUpdates", () => {
         yield* updates.configure;
         yield* updates.check("poll");
 
-        assert.equal((yield* updates.getState).channel, "nightly");
+        assert.equal((yield* updates.getState).channel, "latest");
         assert.deepEqual(harness.checkAllowedDowngrade, [false]);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
@@ -1076,43 +1108,28 @@ describe("DesktopUpdates", () => {
           yield* TestClock.adjust(Duration.seconds(2));
           const state = yield* Fiber.join(channelFiber);
 
-          assert.equal(state.channel, "nightly");
+          assert.equal(state.channel, "latest");
         }),
       ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
     }),
   );
 
-  it.effect("rejects checks while an update channel change is being persisted", () =>
-    Effect.gen(function* () {
-      const channelChangeStarted = yield* Deferred.make<void>();
-      const releaseChannelChange = yield* Deferred.make<void>();
-      const harness = makeHarness({
-        beforeSetUpdateChannel: Deferred.succeed(channelChangeStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseChannelChange)),
-        ),
-      });
-
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const updates = yield* DesktopUpdates.DesktopUpdates;
-          yield* updates.configure;
-
-          const channelFiber = yield* updates.setChannel("nightly").pipe(Effect.forkScoped);
-          yield* Deferred.await(channelChangeStarted);
-
-          const checkResult = yield* updates.check("manual");
-          assert.isFalse(checkResult.checked);
-          assert.equal(harness.checkCount(), 0);
-
-          yield* Deferred.succeed(releaseChannelChange, undefined);
-          const state = yield* Fiber.join(channelFiber);
-
-          assert.equal(state.channel, "nightly");
-          assert.equal(harness.checkCount(), 1);
-        }),
-      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-    }),
-  );
+  it.effect("a legacy Nightly request does not interrupt a pending download", () => {
+    const harness = makeHarness();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("download-progress", { percent: 40 });
+        yield* flushCallbacks;
+        const state = yield* updates.setChannel("nightly");
+        assert.equal(state.channel, "latest");
+        assert.equal(state.status, "downloading");
+        assert.equal(state.downloadPercent, 40);
+        assert.equal(harness.checkCount(), 0);
+      }),
+    ).pipe(Effect.provide(harness.layer));
+  });
 });
 
 describe("describeUpdateErrorCause", () => {
@@ -1212,18 +1229,18 @@ describe("DesktopUpdates under a managed policy", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("refuses the nightly channel without nightly", () => {
+  it.effect("legacy Nightly requests cannot escape the administrator policy", () => {
     const harness = makeHarness({ policy: managed({ allowNightly: false }) });
-
     return Effect.scoped(
       Effect.gen(function* () {
         const updates = yield* DesktopUpdates.DesktopUpdates;
         yield* updates.configure;
-        const error = yield* updates.setChannel("nightly").pipe(Effect.flip);
-        assert.equal(error._tag, "DesktopUpdateChannelManagedError");
-        assert.equal((yield* updates.getState).channel, "latest");
+        const before = yield* updates.getState;
+        const after = yield* updates.setChannel("nightly");
+        assert.deepEqual(after, before);
+        assert.equal(after.channel, "latest");
       }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    ).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("does not report the channel as the only block when updates are off anyway", () => {
@@ -1244,33 +1261,24 @@ describe("DesktopUpdates under a managed policy", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("holds a nightly install until its user switches to stable", () => {
-    const harness = makeHarness({
-      appVersion: "1.2.3-nightly.20261028.1",
-      // A managed app ignores the mock feed, so give it a real one.
-      policy: managed({ allowNightly: false, feedUrl: "https://updates.example.com/t3code" }),
-    });
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const updates = yield* DesktopUpdates.DesktopUpdates;
-        yield* updates.configure;
-        yield* TestClock.adjust("10 minutes");
-
-        const held = yield* updates.getState;
-        assert.equal(held.channel, "nightly");
-        assert.equal(held.status, "disabled");
-        assert.include(held.message ?? "", message);
-        assert.isTrue(held.channelBlockedByPolicy);
-        assert.isFalse((yield* updates.check("menu")).checked);
-        assert.equal(harness.checkCount(), 0);
-
-        const stable = yield* updates.setChannel("latest");
-        assert.equal(stable.channel, "latest");
-        assert.isTrue(stable.enabled);
-        assert.isUndefined(stable.channelBlockedByPolicy);
-        assert.equal(harness.checkCount(), 1);
-      }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-  });
+  it.effect(
+    "normalizes an old Nightly install to the single fork channel without downloading",
+    () => {
+      const harness = makeHarness({
+        appVersion: "1.2.3-nightly.20261028.1",
+        policy: managed({ allowNightly: false, feedUrl: "https://updates.example.com/t3code" }),
+      });
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          const state = yield* updates.getState;
+          assert.equal(state.channel, "latest");
+          assert.isTrue(state.enabled);
+          assert.equal(harness.downloadCount(), 0);
+          assert.equal(harness.quitAndInstalls(), 0);
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    },
+  );
 });

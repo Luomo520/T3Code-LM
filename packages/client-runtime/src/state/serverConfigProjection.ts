@@ -65,6 +65,20 @@ export function reuseUnchanged<T>(previous: unknown, next: T): T {
   return (same ? previous : merged) as T;
 }
 
+function withAttachmentLimit(config: ServerConfig): ServerConfig {
+  if (config.environment.capabilities.configurableAttachmentLimit !== true) return config;
+  return {
+    ...config,
+    environment: {
+      ...config.environment,
+      capabilities: {
+        ...config.environment.capabilities,
+        fileAttachments: { maxUploadBytes: config.settings.attachmentMaxFileSizeMiB * 1024 * 1024 },
+      },
+    },
+  };
+}
+
 type ServerProviders = ServerConfig["providers"];
 
 /**
@@ -100,14 +114,18 @@ export function applyServerConfigProjection(
   switch (event.type) {
     case "snapshot": {
       // Wire snapshots never contain published themes. Keep the previous set
-      // until the server sends its authoritative theme event.
-      const carriedThemes = Option.isSome(current)
-        ? current.value.config.environmentThemes
-        : undefined;
-      const carriedSources = Option.isSome(current)
-        ? current.value.config.usageLimitSources
-        : undefined;
-      const config: ServerConfig = {
+      // until a capable server sends its authoritative theme event. A legacy
+      // server cannot send a later removal, so a downgrade must clear the set.
+      const capabilities = event.config.environment.capabilities;
+      const carriedThemes =
+        capabilities.environmentThemes === true && Option.isSome(current)
+          ? current.value.config.environmentThemes
+          : undefined;
+      const carriedSources =
+        capabilities.usageLimitSources === true && Option.isSome(current)
+          ? current.value.config.usageLimitSources
+          : undefined;
+      const config: ServerConfig = withAttachmentLimit({
         ...event.config,
         providers: withHeldProviderCatalogs(
           Option.getOrUndefined(current)?.config.providers,
@@ -115,7 +133,7 @@ export function applyServerConfigProjection(
         ),
         ...(carriedThemes === undefined ? {} : { environmentThemes: carriedThemes }),
         ...(carriedSources === undefined ? {} : { usageLimitSources: carriedSources }),
-      };
+      });
       return Option.some({
         // Every reconnect re-sends the whole config, usually unchanged apart from timestamps.
         config: Option.isSome(current) ? reuseUnchanged(current.value.config, config) : config,
@@ -157,7 +175,7 @@ export function applyServerConfigProjection(
           config:
             settings === projection.config.settings
               ? projection.config
-              : { ...projection.config, settings },
+              : withAttachmentLimit({ ...projection.config, settings }),
           latestEvent: event,
           source: "live",
         };

@@ -3,7 +3,9 @@ import * as Schema from "effect/Schema";
 
 import { compareSemverVersions } from "./semver.ts";
 
-const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
+import { FORK_RELEASE_REPOSITORY } from "./forkRelease.generated.ts";
+export * from "./forkRelease.ts";
+const CLI_RELEASE_REPOSITORY = FORK_RELEASE_REPOSITORY;
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
@@ -39,7 +41,11 @@ export function cliArchiveTarCommand(
 }
 
 export function cliArchiveFileName(version: string, platformKey: CliArchivePlatformKey): string {
-  return `t3-${version}-${platformKey}.${platformKey.startsWith("win32") ? "zip" : "tar.gz"}`;
+  const platform = platformKey.startsWith("win32") ? "windows" : platformKey.split("-")[0];
+  const arch = platformKey.split("-")[1];
+  return platform === "linux"
+    ? `T3Code-LM-${version}-linux-${arch}-server.tar.gz`
+    : `t3-${version}-${platformKey}.${platformKey.startsWith("win32") ? "zip" : "tar.gz"}`;
 }
 
 const CLI_RELEASE_DEFAULT_BASE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases/download`;

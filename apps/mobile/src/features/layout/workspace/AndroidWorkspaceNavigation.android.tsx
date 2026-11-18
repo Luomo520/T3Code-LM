@@ -1,6 +1,9 @@
+import { themeColorWithAlpha } from "../../../lib/mobileTheme";
+import { FloatingWorkspaceDock } from "./FloatingWorkspaceDock";
+import { type DockGlassScope } from "../../../components/ui/DockGlass";
 import { selectedNavigationTab, visibleNavigationTabs } from "./navigation-tab-order";
 import { requireNativeView } from "expo";
-import { CommonActions, useNavigation } from "@react-navigation/native";
+import { CommonActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
   Keyboard,
   processColor,
@@ -21,12 +24,15 @@ import {
   type AndroidWorkspaceNavigationTab,
 } from "./android-workspace-tabs";
 import { useAppearancePreferences } from "../../settings/appearance/AppearancePreferencesProvider";
-import { useSoftKeyboardShowing } from "../../keyboard/useSoftKeyboardShowing";
+import {
+  refreshSoftKeyboardShowing,
+  useSoftKeyboardShowing,
+} from "../../keyboard/useSoftKeyboardShowing";
 import { useAdaptiveWorkspaceLayout } from "../adaptive-workspace-context";
 import { useAndroidWorkspaceRoot } from "./AndroidWorkspaceTabsProvider";
 import { useNavigationTabOrder, useHiddenNavigationTabs } from "./navigation-tabs";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
-import { FLOATING_TABS, floatingTabsMetrics } from "./floating-workspace-tabs";
+import { FLOATING_TABS, floatingDockMetrics } from "./floating-workspace-tabs";
 
 // Matches RAIL_WIDTH in the native rail.
 export const ANDROID_WORKSPACE_RAIL_WIDTH = 72;
@@ -66,6 +72,7 @@ export function AndroidWorkspaceNavigation(props: {
   readonly onNewThread: () => void;
   readonly rail?: boolean;
   readonly floating?: boolean;
+  readonly glassScope?: DockGlassScope;
   readonly fillWidth?: boolean;
   readonly paneWidth?: number;
   readonly onSelect?: () => void;
@@ -81,13 +88,17 @@ export function AndroidWorkspaceNavigation(props: {
   const toolbar = useToolbarLayout();
   const connectionState = useWorkspaceConnectionState();
   const keyboardVisible = useSoftKeyboardShowing();
+  useFocusEffect(refreshSoftKeyboardShowing);
   const { layout } = useAdaptiveWorkspaceLayout();
   const { themeAppearance, themeVariables: colors } = useAppearancePreferences();
   const { scale, fabSize } = useAndroidControlSizing();
   const window = useWindowDimensions();
   const rail = Boolean(props.rail);
   const floating = !rail && Boolean(props.floating);
-  const tabs = [...visibleNavigationTabs(order, hidden, rail ? 5 : 4), "settings"];
+  const tabs: AndroidWorkspaceNavigationTab[] = [
+    ...visibleNavigationTabs(order, hidden, rail ? 5 : 4),
+    "settings",
+  ];
   const { containerColor, indicatorColor, selectedColor, unselectedColor } =
     androidWorkspaceNavigationColors(colors, rail, floating);
   const selectedTab = selectedNavigationTab(
@@ -97,28 +108,61 @@ export function AndroidWorkspaceNavigation(props: {
     hidden,
     rail ? 5 : 4,
   );
-  // FloatingWorkspaceTabs starts the bar at the left inset, so a cutout narrows the room.
+  const showCompose = selectedTab === "threads" && connectionState.hasConnections;
   const barWidth =
     (props.paneWidth ?? window.width) -
-    (Math.max(insets.left, FLOATING_TABS.edge) - FLOATING_TABS.edge);
-  const metrics = floatingTabsMetrics(tabs.length, scale, fabSize, barWidth, props.fillWidth);
+    Math.max(insets.left, FLOATING_TABS.edge) -
+    Math.max(insets.right, FLOATING_TABS.edge);
+  const metrics = floatingDockMetrics(tabs.length, fabSize, barWidth, showCompose);
   if (!rail && keyboardVisible) return null;
+  const selectTab = (tab: AndroidWorkspaceNavigationTab) => {
+    Keyboard.dismiss();
+    if (tab !== "settings") workspace.dispatch({ type: "select", tab });
+    const rootState = rootNavigationRef.getRootState();
+    if (root && rootState) {
+      navigation.dispatch({
+        ...CommonActions.reset(
+          androidWorkspaceTabNavigationState(rootState, tab, layout.usesSplitView),
+        ),
+        target: root.key,
+      });
+    }
+    props.onSelect?.();
+  };
+  if (floating) {
+    return (
+      <FloatingWorkspaceDock
+        tabs={tabs}
+        selectedTab={selectedTab}
+        onSelect={selectTab}
+        width={metrics.pill}
+        height={metrics.height}
+        scale={scale}
+        selectedColor={selectedColor}
+        unselectedColor={unselectedColor}
+        indicatorColor={indicatorColor}
+        glassScope={props.glassScope ?? "workspace"}
+        onNewThread={
+          showCompose
+            ? () => {
+                Keyboard.dismiss();
+                props.onNewThread();
+              }
+            : undefined
+        }
+        primaryColor={colors["--color-primary"]}
+        primaryForeground={colors["--color-primary-foreground"]}
+      />
+    );
+  }
 
   return (
     <View
-      style={
-        // The rail draws its own surface and pads the system bars; while open it spans the
-        // workspace, so the rest of it must stay transparent.
-        rail
-          ? { flex: 1 }
-          : floating
-            ? undefined
-            : { backgroundColor: containerColor, paddingBottom: insets.bottom }
-      }
+      style={rail ? { flex: 1 } : { backgroundColor: containerColor, paddingBottom: insets.bottom }}
     >
       <NativeNavigation
         rail={rail}
-        floating={floating}
+        floating={false}
         tabs={tabs}
         selectedTab={selectedTab}
         dark={themeAppearance === "dark"}
@@ -133,62 +177,56 @@ export function AndroidWorkspaceNavigation(props: {
         unselectedColor={nativeColor(unselectedColor)}
         actionColor={nativeColor(colors["--color-primary"])}
         actionContentColor={nativeColor(colors["--color-primary-foreground"])}
-        onTabSelected={(event) => {
-          Keyboard.dismiss();
-          const tab = event.nativeEvent.tab;
-          if (tab !== "settings") workspace.dispatch({ type: "select", tab });
-          // Reset the root stack even when a nested settings navigator has focus.
-          // The provider renders inside the root stack's layout, so the container's root state is
-          // that stack's current state.
-          const rootState = rootNavigationRef.getRootState();
-          if (root && rootState) {
-            navigation.dispatch({
-              ...CommonActions.reset(
-                androidWorkspaceTabNavigationState(rootState, tab, layout.usesSplitView),
-              ),
-              target: root.key,
-            });
-          }
-          props.onSelect?.();
-        }}
+        onTabSelected={(event) => selectTab(event.nativeEvent.tab)}
         onNewThread={() => {
           Keyboard.dismiss();
           props.onNewThread();
         }}
         onOverlayChange={(event) => props.onOverlayChange?.(event.nativeEvent.overlay)}
-        style={
-          rail
-            ? { flex: 1 }
-            : floating
-              ? {
-                  width: metrics.pill + 2 * FLOATING_TABS.shadow,
-                  height: metrics.height + 2 * FLOATING_TABS.shadow,
-                }
-              : { height: 80 * Math.max(1, scale) }
-        }
+        style={rail ? { flex: 1 } : { height: 80 * Math.max(1, scale) }}
       />
     </View>
   );
 }
 
 export function FloatingWorkspaceTabs(props: {
+  readonly glassScope?: DockGlassScope;
   readonly fillWidth?: boolean;
   readonly onNewThread: () => void;
   readonly paneWidth?: number;
   readonly onSelect?: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { themeVariables: colors } = useAppearancePreferences();
+  const keyboardVisible = useSoftKeyboardShowing();
+  useFocusEffect(refreshSoftKeyboardShowing);
+  if (keyboardVisible) return null;
   return (
     <View
       pointerEvents="box-none"
       style={{
         position: "absolute",
-        left: Math.max(insets.left, FLOATING_TABS.edge) - FLOATING_TABS.shadow,
+        left: 0,
         right: 0,
-        bottom: insets.bottom + FLOATING_TABS.bottom - FLOATING_TABS.shadow,
-        alignItems: "flex-start",
+        bottom: 0,
+        paddingTop: 20,
+        paddingLeft: Math.max(insets.left, FLOATING_TABS.edge),
+        paddingRight: Math.max(insets.right, FLOATING_TABS.edge),
+        paddingBottom: insets.bottom + FLOATING_TABS.bottom,
+        alignItems: "center",
       }}
     >
+      <View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          experimental_backgroundImage: `linear-gradient(to bottom, ${themeColorWithAlpha(colors["--color-screen"], 0)} 0%, ${colors["--color-screen"]} 34%, ${colors["--color-screen"]} 100%)`,
+        }}
+      />
       <AndroidWorkspaceNavigation {...props} floating />
     </View>
   );

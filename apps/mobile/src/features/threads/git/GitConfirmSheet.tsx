@@ -112,13 +112,13 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
 
   return (
     <FitSheet
-      header={<SheetHeader title="Confirm action" onClose={() => navigation.goBack()} />}
+      header={<SheetHeader title="确认操作" onClose={() => navigation.goBack()} />}
       showsVerticalScrollIndicator={false}
     >
       <SheetIntro
         eyebrow="Confirm"
-        title={copy?.title ?? "Run action on default branch?"}
-        description={copy?.description ?? "Choose how to continue."}
+        title={copy?.title ?? "在默认分支上执行操作？"}
+        description={copy?.description ?? "选择继续方式。"}
       />
 
       <View className="gap-3">
@@ -130,7 +130,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
         />
         <SheetActionButton
           icon="arrow.branch"
-          label="Feature branch & continue"
+          label="创建功能分支并继续"
           disabled={!canChangeThreadBranch}
           tone="primary"
           onPress={() => void movePendingActionToFeatureBranch()}

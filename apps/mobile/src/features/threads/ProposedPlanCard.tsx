@@ -59,7 +59,7 @@ export function ProposedPlanCard(props: {
         <Text accessibilityRole="header" className="flex-1 font-t3-bold text-base text-foreground">
           {proposedPlanTitle(props.markdown) ?? "Proposed plan"}
         </Text>
-        <CopyTextButton accessibilityLabel="Copy plan" text={contents} />
+        <CopyTextButton accessibilityLabel="复制计划" text={contents} />
       </View>
       {props.renderMarkdown(stripDisplayedPlanMarkdown(props.markdown))}
       <View className="flex-row">
@@ -69,10 +69,10 @@ export function ProposedPlanCard(props: {
           disabled={!canWrite || !props.workspaceRoot || saving}
           onPress={() =>
             Dialog.prompt({
-              title: "Save plan to workspace",
+              title: "将方案保存到工作区",
               // The write replaces an existing file, and the RPC has no create-only mode.
               message:
-                "Enter a path relative to the thread's workspace. A file already at that path is replaced.",
+                "请输入相对于任务工作区的路径，该路径下已有的文件将被替换。",
               initialValue: lastPath,
               confirmText: "Save",
               onConfirm: (path) => void save(path),

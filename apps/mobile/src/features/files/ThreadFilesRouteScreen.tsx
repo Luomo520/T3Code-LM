@@ -1,3 +1,8 @@
+import { useCallback } from "react";
+import { Alert } from "react-native";
+import { enqueueSystemFileDownload, showSystemFileDownloads } from "../../lib/systemFileDownload";
+import { useWorkspaceDownloadUrl } from "../../state/assets";
+const pendingFileDownloads = new Set<string>();
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
@@ -73,6 +78,7 @@ import {
   needsWorkspaceFileContents,
 } from "./filePath";
 import { useWorkspaceFileAssetUrlState } from "./workspaceFileAssetUrl";
+import { FileDownloadFallback } from "./FileDownloadFallback";
 
 function FilesBrowserHeader(props: {
   readonly projectName: string;
@@ -251,6 +257,9 @@ function FileContent(props: {
   readonly initialLine: number | null;
   readonly truncated: boolean;
   readonly selectable: boolean;
+  readonly onDownload?: () => void;
+  readonly downloading: boolean;
+  readonly sizeBytes?: number;
   readonly onRefresh?: () => Promise<void> | void;
 }) {
   // Reopening a mutable host file must not reuse a poster from an earlier visit.
@@ -317,9 +326,13 @@ function FileContent(props: {
 
   if (props.fileError && props.fileContents === null) {
     return (
-      <View className="flex-1 items-center justify-center bg-sheet px-6">
-        <EmptyState title="File unavailable" detail={props.fileError} />
-      </View>
+      <FileDownloadFallback
+        relativePath={props.relativePath}
+        sizeBytes={props.sizeBytes}
+        reason={props.fileError}
+        downloading={props.downloading}
+        onDownload={props.onDownload}
+      />
     );
   }
 
@@ -813,10 +826,70 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
     </>
   );
 
+  const [downloading, setDownloading] = useState(false);
+  const downloadUrl = useWorkspaceDownloadUrl(
+    environmentId,
+    cwd && relativePath
+      ? { _tag: "draft-workspace-file", cwd, path: relativePath, disposition: "attachment" }
+      : null,
+  );
+  const handleDownload = useCallback(async () => {
+    const key = JSON.stringify([environmentId, cwd, relativePath]);
+    if (pendingFileDownloads.has(key)) return;
+    pendingFileDownloads.add(key);
+    setDownloading(true);
+    try {
+      const file = await downloadUrl();
+      await enqueueSystemFileDownload(file.url, file.fileName);
+      Alert.alert(
+        "已提交系统下载",
+        "保存位置：Download/T3Code。切到后台后仍由系统继续下载，可在系统下载界面查看进度、取消或查看失败原因。",
+        [
+          { text: "知道了", style: "cancel" },
+          {
+            text: "查看下载",
+            onPress: () => {
+              void showSystemFileDownloads().catch(() =>
+                Alert.alert("无法打开下载界面", "请从系统下载通知查看。"),
+              );
+            },
+          },
+        ],
+      );
+    } catch (error) {
+      Alert.alert("下载未启动", error instanceof Error ? error.message : "请检查连接后重试。");
+    } finally {
+      pendingFileDownloads.delete(key);
+      setDownloading(false);
+    }
+  }, [downloadUrl, environmentId, cwd, relativePath]);
+
   const fileMenuActions = (() => {
     if (relativePath === null) return [];
     const canToggleMode = canPreview && !isImageFile && !isVideoFile && !isAudioFile;
     return [
+      Platform.OS === "android" && canReadFiles && directoryPath === null
+        ? ({
+            id: "download",
+            title: downloading ? "正在申请下载…" : "下载到本机",
+            icon: "arrow.down.circle",
+            inline: false,
+            onPress: handleDownload,
+          } as const)
+        : null,
+      Platform.OS === "android"
+        ? ({
+            id: "system-downloads",
+            title: "查看系统下载",
+            icon: "arrow.down.circle",
+            inline: false,
+            onPress: () => {
+              void showSystemFileDownloads().catch(() =>
+                Alert.alert("无法打开下载界面", "请从系统下载通知查看。"),
+              );
+            },
+          } as const)
+        : null,
       canToggleMode
         ? ({
             id: "preview",
@@ -1062,6 +1135,11 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
           relativePath={relativePath}
           threadId={threadId}
           truncated={fileData?.truncated ?? false}
+          sizeBytes={metadata.data?.byteLength}
+          downloading={downloading}
+          onDownload={
+            Platform.OS === "android" && metadata.data?.kind === "file" ? handleDownload : undefined
+          }
           selectable={selectingText}
           onRefresh={() => fileQuery.refresh()}
         />

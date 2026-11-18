@@ -17,7 +17,7 @@ export function useSettingsEnvironmentMenu(): AppBarMenu {
     selectProject,
   } = useSettingsEnvironmentFilter();
   return {
-    title: "Filter settings environments and projects",
+    title: "筛选设置中的环境与项目",
     icon:
       selectedIds === null && selectedProjectKey === null
         ? "line.3.horizontal.decrease"
@@ -27,12 +27,12 @@ export function useSettingsEnvironmentMenu(): AppBarMenu {
         id: "environments",
         title:
           selectedIds === null
-            ? "All environments"
-            : `${selectedTargets.length} ${selectedTargets.length === 1 ? "environment" : "environments"}`,
+            ? "全部环境"
+            : `${selectedTargets.length} ${selectedTargets.length === 1 ? "环境" : "环境"}`,
         items: [
           {
             id: "all",
-            title: "All connected environments",
+            title: "所有已连接环境",
             selected: selectedIds === null,
             onPress: selectAll,
           },
@@ -50,11 +50,11 @@ export function useSettingsEnvironmentMenu(): AppBarMenu {
         id: "projects",
         title:
           selectableProjectGroups.find((group) => group.key === selectedProjectKey)?.label ??
-          (selectedProjectKey === null ? "All projects" : "Unavailable project"),
+          (selectedProjectKey === null ? "全部项目" : "不可用的项目"),
         items: [
           {
             id: "project:all",
-            title: "All projects",
+            title: "全部项目",
             selected: selectedProjectKey === null,
             onPress: () => selectProject(null),
           },

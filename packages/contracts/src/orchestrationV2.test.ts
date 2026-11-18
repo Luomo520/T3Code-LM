@@ -11,9 +11,10 @@ import {
   OrchestrationV2ProviderThreadJson,
   OrchestrationV2RpcSchemas,
   OrchestrationV2Subagent,
-  OrchestrationV2ThreadShellJson,
   OrchestrationV2SubagentJson,
   OrchestrationV2ThreadHistoryPage,
+  OrchestrationV2ThreadShell,
+  OrchestrationV2ThreadShellJson,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
 } from "./orchestrationV2.ts";
@@ -37,6 +38,36 @@ const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("keeps the native conversation message time optional for older shells", () => {
+    const decode = Schema.decodeUnknownSync(
+      Schema.Struct({
+        latestConversationMessageAt: OrchestrationV2ThreadShell.fields.latestConversationMessageAt,
+      }),
+    );
+    expect(decode({})).toEqual({});
+    expect(decode({ latestConversationMessageAt: null })).toEqual({
+      latestConversationMessageAt: null,
+    });
+    expect(decode({ latestConversationMessageAt: now })).toEqual({
+      latestConversationMessageAt: now,
+    });
+  });
+
+  it("decodes and encodes the optional JSON conversation message time", () => {
+    const schema = Schema.Struct({
+      latestConversationMessageAt:
+        OrchestrationV2ThreadShellJson.fields.latestConversationMessageAt,
+    });
+    const decode = Schema.decodeUnknownSync(schema);
+    expect(decode({})).toEqual({});
+    expect(decode({ latestConversationMessageAt: null })).toEqual({
+      latestConversationMessageAt: null,
+    });
+    const encoded = { latestConversationMessageAt: DateTime.formatIso(now) };
+    expect(decode(encoded)).toEqual({ latestConversationMessageAt: now });
+    expect(Schema.encodeSync(schema)(decode(encoded))).toEqual(encoded);
+  });
+
   it("decodes thread event types from a newer server as skippable items", () => {
     const decodeWireItems = Schema.decodeUnknownSync(
       Schema.toCodecJson(Schema.Array(OrchestrationV2RpcSchemas.subscribeThread.output)),

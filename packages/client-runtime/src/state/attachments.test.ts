@@ -134,6 +134,15 @@ describe("verifyPersistedAttachmentUpload", () => {
   });
 });
 
+describe("file size capability clamp", () => {
+  it("allows configured large files while retaining the wire ceiling", async () => {
+    const { clampFileAttachmentUploadBytes } = await import("./attachments.ts");
+    expect(clampFileAttachmentUploadBytes(256 * 1024 * 1024)).toBe(256 * 1024 * 1024);
+    expect(clampFileAttachmentUploadBytes(Infinity)).toBe(50 * 1024 * 1024);
+    expect(clampFileAttachmentUploadBytes(20 * 1024 ** 3)).toBe(10 * 1024 ** 3);
+  });
+});
+
 describe("formatAttachmentSize", () => {
   it.each([
     [1_047_552, "1023 KB"],

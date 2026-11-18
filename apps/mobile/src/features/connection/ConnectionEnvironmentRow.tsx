@@ -98,8 +98,8 @@ export function ConnectionEnvironmentRow(props: {
           accessibilityRole="button"
           accessibilityLabel={
             props.opensDetails
-              ? `Manage ${props.environment.environmentLabel}`
-              : `${props.expanded ? "Collapse" : "Expand"} details for ${props.environment.environmentLabel}`
+              ? `Manage ${props.environment.environmentLabel} 次`
+              : ` 次${props.expanded ? "Collapse" : "Expand"} details for ${props.environment.environmentLabel} 次`
           }
           onPress={props.onToggle}
         >
@@ -165,7 +165,7 @@ export function ConnectionEnvironmentRow(props: {
         </Pressable>
 
         <ThemedSwitch
-          accessibilityLabel={`Enable ${props.environment.environmentLabel}`}
+          accessibilityLabel={`Enable ${props.environment.environmentLabel} 次`}
           style={{ alignSelf: "center" }}
           disabled={unsupported && !canRetry}
           onValueChange={(next) => props.onSetEnabled(props.environment.environmentId, next)}
@@ -175,8 +175,8 @@ export function ConnectionEnvironmentRow(props: {
           accessibilityRole="button"
           accessibilityLabel={
             props.opensDetails
-              ? `Manage ${props.environment.environmentLabel}`
-              : `${props.expanded ? "Collapse" : "Expand"} details for ${props.environment.environmentLabel}`
+              ? `Manage ${props.environment.environmentLabel} 次`
+              : ` 次${props.expanded ? "Collapse" : "Expand"} details for ${props.environment.environmentLabel} 次`
           }
           onPress={props.onToggle}
           style={{
@@ -209,16 +209,14 @@ export function ConnectionEnvironmentRow(props: {
             />
           ) : null}
           {props.environment.isRelayManaged ? (
-            <Text className="text-sm text-foreground-muted">
-              Managed by T3 Connect. Tunnel details update automatically.
-            </Text>
+            <Text className="text-sm text-foreground-muted">{"由 T3 Connect 管理，隧道信息会自动更新。"}</Text>
           ) : (
             <>
               <ConnectionFormField
-                label="Label"
+                label="名称"
                 autoCapitalize="words"
                 autoCorrect={false}
-                placeholder="My MacBook"
+                placeholder="我的电脑"
                 value={label}
                 onChangeText={setLabel}
               />
@@ -240,7 +238,7 @@ export function ConnectionEnvironmentRow(props: {
               {props.environment.isRelayManaged ? null : (
                 <View className="flex-1">
                   <Button
-                    label="Save"
+                    label="保存"
                     tone="primary"
                     fullWidth
                     onPress={() => {
@@ -250,14 +248,14 @@ export function ConnectionEnvironmentRow(props: {
                 </View>
               )}
               <IconButton
-                accessibilityLabel="Reconnect environment"
+                accessibilityLabel="重新连接环境"
                 icon="arrow.clockwise"
                 variant="tonal"
                 disabled={!enabled}
                 onPress={() => props.onReconnect(props.environment.environmentId)}
               />
               <IconButton
-                accessibilityLabel="Remove environment"
+                accessibilityLabel="移除环境"
                 icon="trash"
                 variant="danger"
                 onPress={() => props.onRemove(props.environment.environmentId)}
@@ -276,15 +274,13 @@ export function ConnectionEnvironmentRow(props: {
                     tintColorClassName="accent-primary-foreground"
                     type="monochrome"
                   />
-                  <Text className="text-xs font-t3-bold tracking-[0.8px] uppercase text-primary-foreground">
-                    Save
-                  </Text>
+                  <Text className="text-xs font-t3-bold tracking-[0.8px] uppercase text-primary-foreground">{"保存"}</Text>
                 </Pressable>
               )}
 
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Reconnect environment"
+                accessibilityLabel="重新连接环境"
                 accessibilityState={{ disabled: !enabled }}
                 className="h-[42px] w-[42px] items-center justify-center rounded-[14px] border border-input-border bg-input active:opacity-70 disabled:opacity-40"
                 disabled={!enabled}
@@ -300,7 +296,7 @@ export function ConnectionEnvironmentRow(props: {
 
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Remove environment"
+                accessibilityLabel="移除环境"
                 className="h-[42px] w-[42px] items-center justify-center rounded-[14px] border border-danger-border bg-danger active:opacity-70"
                 onPress={() => props.onRemove(props.environment.environmentId)}
               >

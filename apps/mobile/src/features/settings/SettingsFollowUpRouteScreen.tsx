@@ -18,13 +18,13 @@ const FOLLOW_UP_OPTIONS: ReadonlyArray<{
 }> = [
   {
     behavior: "queue",
-    label: "Queue",
-    description: "Your message waits and runs after the current turn finishes.",
+    label: "加入队列",
+    description: "你的消息将在当前轮次结束后执行。",
   },
   {
     behavior: "steer",
-    label: "Steer",
-    description: "Your message reaches the agent right away, changing what it is working on.",
+    label: "调整当前任务",
+    description: "你的消息将立即发送给智能体，调整其当前工作。",
   },
 ];
 
@@ -45,7 +45,7 @@ export function SettingsFollowUpRouteScreen() {
       contentContainerClassName="gap-3 px-5 pt-4"
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
     >
-      <SettingsSection title="While the agent is running">
+      <SettingsSection title="智能体运行时">
         {FOLLOW_UP_OPTIONS.map((option, index) => (
           <SettingsChoiceRow
             key={option.behavior}

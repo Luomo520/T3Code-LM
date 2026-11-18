@@ -26,7 +26,7 @@ export function PullRequestStackCard(props: {
     return (
       <PullRequestCardGroup>
         <PullRequestCardRow
-          title="Stack"
+          title="堆叠"
           icon={PullRequestGlyph.stack}
           value={`${summary.position} of ${summary.size}`}
           last
@@ -38,7 +38,7 @@ export function PullRequestStackCard(props: {
   return (
     <PullRequestCardGroup>
       <PullRequestCardRow
-        title="Stack"
+        title="堆叠"
         icon={PullRequestGlyph.stack}
         value={`${position} of ${stack.layers.length}`}
         accessibilityLabel={`Stack, ${position} of ${stack.layers.length}${props.state.isFresh ? "" : ", showing saved stack"}`}
@@ -80,9 +80,7 @@ export function PullRequestStackCard(props: {
               </View>
             );
           })}
-          <Text className="px-4 py-3 text-xs text-foreground-muted">
-            Base: {stack.base}. Open a layer to review it or merge the stack through that layer.
-          </Text>
+          <Text className="px-4 py-3 text-xs text-foreground-muted">{"基础分支："}{stack.base}{"。打开某一层以进行审查，或合并截至该层的堆栈。"}</Text>
         </View>
       ) : null}
     </PullRequestCardGroup>

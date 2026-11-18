@@ -14,7 +14,20 @@ export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 100;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const PROVIDER_SEND_TURN_MAX_TOTAL_IMAGE_BYTES = 80 * 1024 * 1024;
+// Retained as the default and for unrelated provider/preview payload budgets.
 export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 50 * 1024 * 1024;
+export const DEFAULT_ATTACHMENT_MAX_FILE_SIZE_MIB = 50;
+export const MAX_ATTACHMENT_FILE_SIZE_MIB = 10240;
+// Wire/history ceiling. The environment's saved setting controls new uploads.
+export const MAX_FILE_ATTACHMENT_BYTES = MAX_ATTACHMENT_FILE_SIZE_MIB * 1024 * 1024;
+
+export function parseAttachmentMaxFileSizeMiB(value: string): number | null {
+  if (!/^[0-9]+$/.test(value.trim())) return null;
+  const size = Number(value.trim());
+  return Number.isSafeInteger(size) && size >= 1 && size <= MAX_ATTACHMENT_FILE_SIZE_MIB
+    ? size
+    : null;
+}
 export const PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES = [
   "image/gif",
   "image/jpeg",
@@ -165,7 +178,7 @@ export const ChatFileAttachment = Schema.Struct({
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
   sizeBytes: NonNegativeInt.check(
     Schema.isGreaterThanOrEqualTo(1),
-    Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES),
+    Schema.isLessThanOrEqualTo(MAX_FILE_ATTACHMENT_BYTES),
   ),
   /** Keep path-only so agents inspect selectively without consuming the context folding preserves. */
   source: Schema.optional(PastedTextAttachmentSource),

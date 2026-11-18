@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ServerNpmRelease } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -9,6 +9,12 @@ import { findEnvironmentUpdate } from "./environment-maintenance";
 export interface EnvironmentReleaseCheck {
   readonly fromVersion: string;
   readonly targetVersion: string | null;
+  readonly manualCheckRequired: boolean;
+}
+
+export interface EnvironmentReleaseCheckRequest {
+  readonly readServerVersion: (signal: AbortSignal) => Promise<string>;
+  readonly lookupRelease?: (signal: AbortSignal) => Promise<ServerNpmRelease | null>;
 }
 
 export class EnvironmentUpdateCheckError extends Schema.TaggedError<EnvironmentUpdateCheckError>()(
@@ -25,32 +31,27 @@ const asError = (cause: unknown) =>
     cause,
   });
 
-/**
- * Looks up the newest T3 Code release for one environment. The atom is not
- * kept alive, so leaving the screen interrupts the lookup and aborts its fetch.
- * The argument reads the server version, which an outdated server only
- * reports through a separate description request.
- */
+/** User-initiated only; screen disposal interrupts the remote lookup and its RPC. */
 export const environmentReleaseCheckAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.fn((readServerVersion: () => Promise<string>) =>
-    Effect.gen(function* () {
-      const fromVersion = yield* Effect.tryPromise({ try: readServerVersion, catch: asError });
-      const targetVersion = yield* Effect.tryPromise({
-        try: (signal) => findEnvironmentUpdate(fromVersion, signal),
-        catch: asError,
-      }).pipe(
-        Effect.timeoutOrElse({
-          duration: "20 seconds",
-          orElse: () =>
-            Effect.fail(
-              new EnvironmentUpdateCheckError({
-                message: "Checking for updates timed out. Try again.",
-              }),
-            ),
-        }),
-      );
-      return { fromVersion, targetVersion } satisfies EnvironmentReleaseCheck;
-    }),
+  Atom.fn((request: EnvironmentReleaseCheckRequest) =>
+    Effect.tryPromise({
+      try: async (signal) => {
+        const fromVersion = await request.readServerVersion(signal);
+        const result = await findEnvironmentUpdate(fromVersion, signal, request.lookupRelease);
+        return { fromVersion, ...result } satisfies EnvironmentReleaseCheck;
+      },
+      catch: asError,
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: "20 seconds",
+        orElse: () =>
+          Effect.fail(
+            new EnvironmentUpdateCheckError({
+              message: "检查更新超时，请重试。",
+            }),
+          ),
+      }),
+    ),
   ).pipe(Atom.withLabel(`mobile:environment-release-check:${environmentId}`)),
 );
 

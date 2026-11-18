@@ -330,7 +330,7 @@ export function ComposerDictationError(props: {
         {props.error}
       </Text>
       <Pressable
-        accessibilityLabel="Dismiss voice input error"
+        accessibilityLabel="关闭语音输入错误"
         accessibilityRole="button"
         className="size-7 items-center justify-center active:opacity-70"
         hitSlop={8}
@@ -396,7 +396,7 @@ export function ComposerDictationCancelAction(props: {
   return (
     <VoiceActionButton
       size={props.size}
-      accessibilityLabel="Cancel dictation"
+      accessibilityLabel="取消语音输入"
       icon="xmark"
       onPress={props.onCancel}
     />

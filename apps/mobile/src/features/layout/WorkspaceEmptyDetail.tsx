@@ -28,12 +28,12 @@ export function WorkspaceEmptyDetail(props: {
         {props.onAddConnection ? (
           <View className="w-full max-w-[430px]">
             <EmptyState
-              title="No environments connected"
+              title="尚未连接环境"
               detail="Add an environment to load projects and start coding sessions."
               variant="plain"
               action={
                 <FloatingActionButton
-                  label="Add environment"
+                  label="添加环境"
                   icon="plus"
                   variant="extended"
                   tone="primary"

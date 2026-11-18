@@ -22,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -256,11 +257,24 @@ const resolveWelcomeBase = Effect.gen(function* () {
   } as const;
 });
 
+export const bootstrapStartupProject = Effect.fn("bootstrapStartupProject")(function* (
+  input: ProjectService.ProjectBootstrapInput,
+) {
+  const projects = yield* ProjectService.ProjectService;
+  const active = yield* projects.getByWorkspaceRoot(input.workspaceRoot);
+  if (Option.isSome(active)) return { project: active.value, created: false };
+  const previous = yield* projects.getByWorkspaceRoot(input.workspaceRoot, {
+    includeDeleted: true,
+  });
+  // Automatic startup must not undo an explicit deletion; manual creation remains available.
+  if (Option.isSome(previous) && previous.value.deletedAt !== null) return undefined;
+  return yield* projects.bootstrap(input);
+});
+
 const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const randomUUID = random.uuidV4();
   const serverConfig = yield* ServerConfig.ServerConfig;
-  const projects = yield* ProjectService.ProjectService;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const threadLaunch = yield* ThreadLaunch.ThreadLaunchService;
   const path = yield* Path.Path;
@@ -270,27 +284,31 @@ const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
 
   if (serverConfig.autoBootstrapProjectFromCwd) {
     const threadModelSelection = getAutoBootstrapThreadModelSelection();
-    const bootstrapped = yield* projects
-      .bootstrap({
-        commandId: CommandId.make(yield* randomUUID),
-        projectId: ProjectId.make(yield* randomUUID),
-        title: path.basename(serverConfig.cwd) || "project",
-        workspaceRoot: serverConfig.cwd,
-      })
-      .pipe(
-        // A folder the project rules refuse must not stop the server from starting there.
-        Effect.catchTags({
-          ProjectInvalidError: (error) =>
-            Effect.logWarning("Skipped bootstrap project", { detail: error.detail }).pipe(
-              Effect.as(undefined),
-            ),
-        }),
-      );
+    const bootstrapped = yield* bootstrapStartupProject({
+      commandId: CommandId.make(yield* randomUUID),
+      projectId: ProjectId.make(yield* randomUUID),
+      title: path.basename(serverConfig.cwd) || "project",
+      workspaceRoot: serverConfig.cwd,
+    }).pipe(
+      // A folder the project rules refuse must not stop the server from starting there.
+      Effect.catchTags({
+        ProjectInvalidError: (error) =>
+          Effect.logWarning("Skipped bootstrap project", { detail: error.detail }).pipe(
+            Effect.as(undefined),
+          ),
+      }),
+    );
     if (bootstrapped === undefined) return {} satisfies AutoBootstrapWelcomeTargets;
-    const { project } = bootstrapped;
+    const { project, created } = bootstrapped;
     const existingThread = (yield* threads.listActiveShellIndex()).find(
       (thread) => thread.projectId === project.id && isListedThreadLineage(thread.lineage),
     );
+    // A project that already existed may have had its only bootstrap thread deleted by the
+    // user. Recreating it on every server restart makes a deletion appear to fail. The welcome
+    // thread is only an automatic companion to a project created in this startup pass.
+    if (!created && existingThread === undefined) {
+      return {} satisfies AutoBootstrapWelcomeTargets;
+    }
     if (existingThread === undefined) {
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const settings = yield* serverSettings.getSettings;

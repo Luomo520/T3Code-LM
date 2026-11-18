@@ -41,11 +41,13 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
+import { HeaderUsageStats } from "../usage/HeaderUsageStats";
 import { GuestShareIndicator } from "./GuestShareControls";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
+  activeProviderInstanceId?: string | undefined;
   activeThreadTitle: string;
   activeThreadLinkOrigin?: string | null | undefined;
   isServerThread: boolean;
@@ -71,6 +73,7 @@ function resolveRenameCommit(input: {
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
+  activeProviderInstanceId,
   activeThreadTitle,
   activeThreadLinkOrigin,
   isServerThread,
@@ -249,14 +252,14 @@ export const ChatHeader = memo(function ChatHeader({
     <div
       ref={breadcrumbContainerRef}
       className={cn(
-        "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
+        "@container/header flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
         rightPanelOpen ? "pr-10" : "pr-24",
       )}
       onContextMenu={handleHeaderContextMenu}
     >
       <WorkspaceBreadcrumb
         ariaLabel="Thread breadcrumb"
-        className="flex-1 overflow-clip [overflow-clip-margin:2px]"
+        className="min-w-10 flex-1 overflow-clip [overflow-clip-margin:2px] @max-[28rem]/header:[&>ol>li:not([aria-current])]:hidden"
       >
         {activeProject ? (
           <>
@@ -394,6 +397,11 @@ export const ChatHeader = memo(function ChatHeader({
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      <HeaderUsageStats
+        environmentId={activeThreadEnvironmentId}
+        {...(isServerThread ? { threadId: activeThreadId } : { home: true })}
+        {...(activeProviderInstanceId ? { providerInstanceId: activeProviderInstanceId } : {})}
+      />
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

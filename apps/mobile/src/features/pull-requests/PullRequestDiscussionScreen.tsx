@@ -157,7 +157,7 @@ function Discussion({ params }: { params: PullRequestParams & { readonly discuss
       ? resolvePullRequestReviewAnchor(location.anchor, [], [{ comments }])
       : null;
   const canReply = permissions.canReply && Boolean(thread);
-  const resolveLabel = thread?.isResolved ? "Unresolve" : "Resolve";
+  const resolveLabel = thread?.isResolved ? "标记为未解决" : "标记为已解决";
   return (
     <PullRequestMarkdownRepository params={params} changeRequest={detail.data}>
       <KeyboardAvoidingView
@@ -170,7 +170,7 @@ function Discussion({ params }: { params: PullRequestParams & { readonly discuss
         }}
       >
         <AppBar
-          title="Discussion"
+          title="讨论"
           subtitle={`#${params.number}`}
           onBack={() => navigation.goBack()}
           actions={
@@ -217,7 +217,7 @@ function Discussion({ params }: { params: PullRequestParams & { readonly discuss
                 </Text>
                 {filePath === null ? null : (
                   <Button
-                    label="View file diff"
+                    label="查看文件差异"
                     onPress={() =>
                       navigation.navigate("PullRequestFile", { ...params, path: filePath })
                     }
@@ -225,7 +225,7 @@ function Discussion({ params }: { params: PullRequestParams & { readonly discuss
                 )}
               </View>
             ) : !activity.isPending ? (
-              <Text>This discussion is no longer available.</Text>
+              <Text>{"此讨论已不可用。"}</Text>
             ) : null}
             {comments.map((comment) => (
               <View
@@ -296,13 +296,13 @@ function Discussion({ params }: { params: PullRequestParams & { readonly discuss
               className="flex-row items-end gap-1 p-1"
             >
               <TextInput
-                accessibilityLabel="Discussion reply"
+                accessibilityLabel="讨论回复"
                 selection={completions.selection}
                 onSelectionChange={completions.onSelectionChange}
                 onBlur={completions.onBlur}
                 multiline
                 maxLength={65536}
-                placeholder="Reply…"
+                placeholder="回复…"
                 placeholderTextColorClassName="accent-foreground-muted"
                 value={body}
                 onChangeText={setBody}

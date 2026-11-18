@@ -229,6 +229,13 @@ const SOURCE_CONTROL_HOST_TERMS = sourceControlClients.definitions
 
 export const SETTINGS_SEARCH_ITEMS = [
   {
+    id: "attachment-file-limit",
+    title: "单个附件大小上限",
+    to: "/settings/general",
+    scope: "environment",
+    searchTerms: ["附件", "上传", "文件", "大小", "attachment", "upload", "MiB", "50MB"],
+  },
+  {
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
     title: "Keep worktrees with local changes",

@@ -183,7 +183,7 @@ export function useRemoteConnections() {
       return;
     }
     const remove = {
-      text: "Remove",
+      text: "移除",
       style: "destructive",
       onPress: () => {
         void controller.removeEnvironment(environmentId);
@@ -195,22 +195,22 @@ export function useRemoteConnections() {
         environmentId,
       );
       const openAccount = {
-        text: "Open T3 Account",
+        text: "打开 T3 账号",
         onPress: () => navigation.navigate("SettingsAuth"),
       };
       Dialog.alert(
         "Remove from this device?",
         `Forget ${environment.environmentLabel} and its cached threads on this device.\n\n${RELAY_REMOVAL_ACCOUNT_NOTE[registration]}`,
         registration === "unregistered" || !hasCloudPublicConfig()
-          ? [{ text: "Cancel", style: "cancel" }, remove]
-          : [{ text: "Cancel", style: "cancel" }, openAccount, remove],
+          ? [{ text: "取消", style: "cancel" }, remove]
+          : [{ text: "取消", style: "cancel" }, openAccount, remove],
       );
       return;
     }
     Dialog.alert(
       "Remove from this device?",
       `Forget ${environment.environmentLabel} and its cached threads on this device. Switch it off instead to keep it saved.`,
-      [{ text: "Cancel", style: "cancel" }, remove],
+      [{ text: "取消", style: "cancel" }, remove],
     );
   };
 

@@ -60,10 +60,10 @@ function ConfiguredConnectOnboardingRouteScreen() {
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       <AppBar
-        title="Set up T3 Connect"
+        title="设置 T3 Connect"
         onClose={handleClose}
         refresh={{
-          accessibilityLabel: "Refresh environments",
+          accessibilityLabel: "刷新环境",
           disabled: isRefreshing,
           onPress: handleRefresh,
         }}
@@ -91,9 +91,7 @@ function ConfiguredConnectOnboardingRouteScreen() {
           />
         ) : (
           <View collapsable={false} className="rounded-[24px] bg-grouped-card p-5">
-            <Text className="text-sm leading-normal text-foreground-muted">
-              Sign in to your T3 account to set up T3 Connect.
-            </Text>
+            <Text className="text-sm leading-normal text-foreground-muted">{"登录 T3 账号以设置 T3 Connect。"}</Text>
           </View>
         )}
 

@@ -12,6 +12,7 @@ import { HostedEmptyState } from "../components/HostedEmptyState";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { HomeHeaderUsageStats } from "../components/usage/HeaderUsageStats";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
   readProject,
@@ -98,7 +99,10 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
       role="main"
       className="h-dvh min-h-0 overflow-hidden overscroll-y-none"
     >
-      {isElectron ? <WorkspacePageHeader electron /> : null}
+      <WorkspacePageHeader electron={isElectron}>
+        <div className="min-w-3 flex-1" />
+        <HomeHeaderUsageStats />
+      </WorkspacePageHeader>
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
           <EmptyTitle>Couldn’t start a new thread</EmptyTitle>

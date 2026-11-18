@@ -270,8 +270,8 @@ export function getReviewFilePreviewState(file: ReviewRenderableFile): ReviewFil
     return {
       kind: "suppressed",
       reason: "non-text",
-      title: "Non-text file",
-      message: "Diff preview is not available for this file format.",
+      title: "非文本文件",
+      message: "此文件格式不支持差异预览。",
       actionLabel: null,
     };
   }
@@ -282,8 +282,8 @@ export function getReviewFilePreviewState(file: ReviewRenderableFile): ReviewFil
     return {
       kind: "suppressed",
       reason: "large",
-      title: "Large diff",
-      message: "Large diffs are not rendered by default.",
+      title: "大型差异",
+      message: "默认不渲染大型差异。",
       actionLabel: "Load diff",
     };
   }

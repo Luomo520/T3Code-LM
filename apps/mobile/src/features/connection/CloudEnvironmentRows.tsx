@@ -136,15 +136,11 @@ function CloudEnvironmentRowsContent(
       ) : controller.relayDiscovery.isRefreshing ? (
         <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-grouped-card p-6">
           <AppActivityIndicator colorClassName={"accent-icon"} />
-          <Text className="text-center text-sm leading-normal text-foreground-muted">
-            Loading linked cloud environments.
-          </Text>
+          <Text className="text-center text-sm leading-normal text-foreground-muted">{"正在加载已关联的云端环境。"}</Text>
         </View>
       ) : controller.relayDiscovery.error ? null : (
         <View collapsable={false} className="rounded-[24px] bg-grouped-card p-5">
-          <Text className="text-sm leading-normal text-foreground-muted">
-            No additional linked cloud environments.
-          </Text>
+          <Text className="text-sm leading-normal text-foreground-muted">{"没有其他已关联的云端环境。"}</Text>
         </View>
       )}
 
@@ -152,15 +148,13 @@ function CloudEnvironmentRowsContent(
       controller.relayDiscovery.error &&
       !controller.relayDiscovery.isRefreshing ? (
         <View collapsable={false} className="gap-3 rounded-[24px] bg-grouped-card p-5">
-          <Text className="text-base font-t3-bold text-foreground">
-            Could not load T3 Connect environments
-          </Text>
+          <Text className="text-base font-t3-bold text-foreground">{"无法加载 T3 Connect 环境"}</Text>
           <Text className="text-sm text-foreground-muted">{controller.relayDiscovery.error}</Text>
           {controller.relayDiscovery.errorTraceId ? (
             <CopyTraceIdButton traceId={controller.relayDiscovery.errorTraceId} />
           ) : null}
           <Button
-            label="Try again"
+            label="重试"
             tone="secondary"
             onPress={() => {
               void controller.refreshRelayEnvironments();
@@ -301,7 +295,7 @@ function CloudEnvironmentRowShell(props: {
     readonly lineCount: number;
   } | null>(null);
   const errorTraceId = props.connectionErrorTraceId;
-  const measuredErrorText = errorTraceId ? `${statusText} Trace ID: ${errorTraceId}` : statusText;
+  const measuredErrorText = errorTraceId ? `${statusText} 跟踪 ID：${errorTraceId}` : statusText;
   const errorLineCount =
     errorMeasurement?.text === measuredErrorText ? errorMeasurement.lineCount : 0;
   const errorCanExpand = props.connectionError !== null && errorLineCount > 1;
@@ -435,7 +429,7 @@ function CloudEnvironmentRowShell(props: {
 function CopyTraceIdButton(props: { readonly traceId: string }) {
   return (
     <Button
-      label="Copy trace ID"
+      label="复制跟踪 ID"
       tone="secondary"
       onPress={() => {
         copyTextWithHaptic(props.traceId, { target: "connection-trace-id" });

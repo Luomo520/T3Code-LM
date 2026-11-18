@@ -110,3 +110,25 @@ function isFileResource(resource: AssetResource): boolean {
     (resource._tag === "native-app-icon" && resource.app._tag === "app-path")
   );
 }
+
+export function useWorkspaceDownloadUrl(
+  environmentId: EnvironmentId | null,
+  resource: AssetResource | null,
+) {
+  const connection = usePreparedConnection(environmentId);
+  const create = useAtomQueryRunner(assetEnvironment.createDownloadUrl, {
+    refresh: true,
+    reportFailure: false,
+  });
+  return async () => {
+    if (!environmentId || !resource || connection._tag !== "Some")
+      throw new Error("环境未连接，请连接后重试。");
+    const result = await create({ environmentId, input: { resource } });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+    if (!result.value.download || !result.value.fileName)
+      throw new Error("当前服务端未提供此文件的下载能力。");
+    const url = resolveAssetUrl(connection.value.httpBaseUrl, result.value.relativeUrl);
+    if (!url) throw new Error("下载地址不可用，请重新连接环境。");
+    return { url, fileName: result.value.fileName };
+  };
+}

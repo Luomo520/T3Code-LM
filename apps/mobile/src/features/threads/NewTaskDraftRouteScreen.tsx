@@ -201,7 +201,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       {preparingBranch ? (
         <ThreadScreenFallback header={<AppBar title="New thread" onBack={goBack} />}>
           <View className="flex-1 items-center justify-center bg-screen">
-            <Text className="text-foreground">Switching branch...</Text>
+            <Text className="text-foreground">{"正在切换分支…"}</Text>
           </View>
         </ThreadScreenFallback>
       ) : (

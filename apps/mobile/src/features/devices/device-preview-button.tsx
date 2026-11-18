@@ -13,7 +13,7 @@ export function DevicePreviewButton(props: {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={props.count === 1 ? "View device" : `View ${props.count} devices`}
-      accessibilityHint="Watch and control devices open in this thread"
+      accessibilityHint="查看并操作此任务中的设备"
       onPress={props.onPress}
       className={
         compact

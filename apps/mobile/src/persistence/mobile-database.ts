@@ -17,6 +17,7 @@ export const ClientCacheKind = Schema.Literals([
   "vcs-refs",
   "project-favicon",
   "pull-request",
+  "header-usage",
 ]);
 export type ClientCacheKind = typeof ClientCacheKind.Type;
 
@@ -204,6 +205,8 @@ const makeAvailable = Effect.gen(function* () {
               new TextEncoder().encode(payload).length > 4 * 1024 * 1024
             )
               return;
+            if (kind === "header-usage" && new TextEncoder().encode(payload).length > 65_536)
+              return;
             const save = async (transaction: SQLiteDatabase) => {
               await transaction.runAsync(
                 `INSERT INTO client_cache
@@ -236,6 +239,22 @@ const makeAvailable = Effect.gen(function* () {
                   environmentId,
                   environmentId,
                   Date.now() - 30 * 24 * 60 * 60_000,
+                );
+              }
+              if (kind === "header-usage") {
+                // Bound history across environments and threads without expiring offline samples.
+                await transaction.runAsync(
+                  `DELETE FROM client_cache WHERE kind = 'header-usage' AND
+                   (environment_id, cache_key) IN (
+                     SELECT environment_id, cache_key FROM (
+                       SELECT environment_id, cache_key,
+                         ROW_NUMBER() OVER (ORDER BY updated_at DESC, environment_id, cache_key) AS position,
+                         SUM(LENGTH(CAST(payload AS BLOB))) OVER (
+                           ORDER BY updated_at DESC, environment_id, cache_key
+                         ) AS total_bytes
+                       FROM client_cache WHERE kind = 'header-usage'
+                     ) WHERE position > 256 OR total_bytes > 4194304
+                   )`,
                 );
               }
             };

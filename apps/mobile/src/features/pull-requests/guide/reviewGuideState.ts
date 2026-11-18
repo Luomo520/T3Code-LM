@@ -24,10 +24,10 @@ export function guideNoticeState(state: {
   if (state.running) {
     return {
       kind: "writing" as const,
-      title: "Rewriting guide",
+      title: "正在重写指南",
       description: guide
-        ? "You can keep reading this guide while the agent writes the update."
-        : "An agent is reading the change and writing the tour. You can leave and come back when it’s ready.",
+        ? "智能体更新指南时，你可以继续阅读现有内容。"
+        : "智能体正在阅读更改并编写导览，你可以先离开，完成后再回来。",
       action: guide ? "Rewriting…" : "Writing guide…",
     };
   }
@@ -35,7 +35,7 @@ export function guideNoticeState(state: {
   if (error) {
     return {
       kind: "failed" as const,
-      title: "Could not write guide",
+      title: "无法编写指南",
       description: error,
       action: "Try again",
     };
@@ -43,7 +43,7 @@ export function guideNoticeState(state: {
   if (state.error) {
     return {
       kind: "unavailable" as const,
-      title: "Could not refresh guide",
+      title: "无法刷新指南",
       description: state.error,
       action: "Try again",
     };
@@ -51,24 +51,24 @@ export function guideNoticeState(state: {
   if (!state.data) {
     return {
       kind: "loading" as const,
-      title: "Review guide",
-      description: "Checking for a saved guide…",
+      title: "审查指南",
+      description: "正在检查已保存的指南…",
       action: "Loading guide…",
     };
   }
   if (stale) {
     return {
       kind: "stale" as const,
-      title: "New changes since this guide",
-      description: "You can read the previous guide, or rewrite it for the latest changes.",
+      title: "此指南之后有新的更改",
+      description: "你可以阅读旧指南，或基于最新更改重新编写。",
       action: "Rewrite guide",
     };
   }
   return {
     kind: guide ? ("ready" as const) : ("empty" as const),
-    title: "Review guide",
+    title: "审查指南",
     description:
-      "Get a tour of the change, with code excerpts and notes on what needs a closer look.",
+      "通过代码摘录和重点说明，导览此次更改。",
     action: "Write guide",
   };
 }

@@ -78,9 +78,7 @@ export function ScrollComposeButton(props: {
                     lineHeight: typography.lineHeight / scale,
                     fontWeight: "500",
                   }}
-                >
-                  New thread
-                </Text>
+                >{"新建任务"}</Text>
               </ExtendedFloatingActionButton.Text>
             </ExtendedFloatingActionButton>
           </Box>
@@ -90,7 +88,7 @@ export function ScrollComposeButton(props: {
       <Pressable
         onPress={props.onPress}
         accessibilityRole="button"
-        accessibilityLabel="New thread"
+        accessibilityLabel="新建任务"
         android_ripple={{ foreground: true }}
         style={{
           position: "absolute",

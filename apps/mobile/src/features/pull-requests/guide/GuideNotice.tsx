@@ -56,8 +56,7 @@ export function GuideNotice({ state }: { readonly state: ReturnType<typeof useRe
           </Text>
         )}
         {notice.kind === "writing" && state.data?.run?._tag === "Running" ? (
-          <Text className="shrink text-xs text-foreground-muted">
-            Started{" "}
+          <Text className="shrink text-xs text-foreground-muted">{"已启动"}{" "}
             {new Date(state.data.run.startedAt).toLocaleTimeString([], {
               hour: "2-digit",
               minute: "2-digit",

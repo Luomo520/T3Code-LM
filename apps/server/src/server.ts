@@ -15,7 +15,11 @@ import * as NodeHttp from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
+import {
+  EnvironmentHttpApi,
+  type RepositoryIdentity,
+  ServerRestartError,
+} from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -295,6 +299,8 @@ const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
 );
 
+const layerSelfUpdate = ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate));
+
 const layerBackground = BackgroundPolicy.layer.pipe(
   Layer.provide(layerHostPowerMonitor),
   Layer.provideMerge(layerServerSettings),
@@ -542,7 +548,10 @@ const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
   Layer.provide(T3ProjectFileLoader.layer),
 );
 
-const layerServerEnvironment = ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer));
+const layerServerEnvironment = ServerEnvironment.layer.pipe(
+  Layer.provide(layerServerSettings),
+  Layer.provide(ServerSecretStore.layer),
+);
 
 const layerAuth = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(layerPersistence),
@@ -661,9 +670,24 @@ const layerServerRestart = Layer.effect(
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
     // As in runServerCommand, only the desktop app passes a bootstrap token; `serve --mode desktop` by hand has no supervisor.
     const desktopLaunched = config.mode === "desktop" && config.desktopBootstrapToken !== undefined;
-    if (!desktopLaunched && !launcher.managed) return null;
-    // Stop as a SIGTERM would: runMain's listener interrupts the server, so its shutdown path runs.
-    return Effect.sync(() => void process.emit("SIGTERM"));
+    if (launcher.requestRestart !== undefined) {
+      const updates = yield* ServerSelfUpdate.ServerSelfUpdate;
+      return updates.withRestart(
+        launcher.requestRestart.pipe(
+          Effect.mapError((error) => new ServerRestartError({ reason: error.message })),
+        ),
+      );
+    }
+    if (!desktopLaunched) return null;
+    const updates = yield* ServerSelfUpdate.ServerSelfUpdate;
+    // Desktop supervision restarts the process after its normal shutdown path.
+    return updates.withRestart(
+      Effect.sync(() => void process.emit("SIGTERM")).pipe(
+        Effect.delay("500 millis"),
+        Effect.forkDetach,
+        Effect.asVoid,
+      ),
+    );
   }),
 );
 
@@ -675,7 +699,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
-    Layer.provide(layerServerRestart),
+    Layer.provide(layerServerRestart.pipe(Layer.provide(layerSelfUpdate))),
   ),
   layerThreadPullRequestWorker,
   KeepAwake.layer,
@@ -878,7 +902,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(CloudSpeech.layer.pipe(Layer.provide(SecretResolver.layer))),
   Layer.provide(layerServerSettings),
   Layer.provide(PreviewAutomationBroker.layer),
-  Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
+  Layer.provide(layerSelfUpdate),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),
@@ -1332,11 +1356,7 @@ const layerMakeServer = Layer.unwrap(
     return layerServerApplication.pipe(
       Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
       Layer.provideMerge(layerRuntimeServices),
-      Layer.provideMerge(
-        McpSessionRegistry.layer.pipe(
-          Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-        ),
-      ),
+      Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
       Layer.provide(layerActivation),
       Layer.provideMerge(
         RelayTracing.layerServerRelayBroker.pipe(Layer.provide(ManagedPolicy.layer)),

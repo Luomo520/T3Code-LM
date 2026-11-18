@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 
 import packageJson from "../../package.json" with { type: "json" };
 import { pinnedRuntimePaths, pinnedRuntimeVersionsDir } from "./pinnedRuntime.ts";
@@ -103,6 +104,11 @@ export class ServiceLauncherClient extends Context.Service<
   ServiceLauncherClient,
   {
     readonly managed: boolean;
+    /** Absent under older launchers; callers must not infer restart support from managed. */
+    readonly requestRestart?: Effect.Effect<
+      void,
+      ServiceLauncherClientError | ServiceLauncherRejectedError
+    >;
     /** The supervising launcher's protocol. A remote update never replaces the launcher,
         so it can be older than this runtime's own. */
     readonly protocol: SupportedLauncherProtocol | undefined;
@@ -141,8 +147,8 @@ const resolveStartup = Effect.fn("cloud.service_launcher_client.resolve_startup"
 
 export const resolveServiceLauncherMode = Effect.fn("cloud.service_launcher_client.resolve_mode")(
   function* () {
-    const { managed } = yield* resolveStartup();
-    return { managed };
+    const { managed, context } = yield* resolveStartup();
+    return { managed, restart: context?.restart === true };
   },
 );
 
@@ -243,6 +249,7 @@ export const make = Effect.fn("cloud.service_launcher_client.make")(function* (o
   readonly currentVersion?: string;
 }) {
   const { host, context, managed } = yield* resolveStartup(options);
+  const random = yield* SecureRandom.SecureRandom;
   // prepareTrial runs later, outside whatever context built the client.
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -320,6 +327,29 @@ export const make = Effect.fn("cloud.service_launcher_client.make")(function* (o
       ),
     );
 
+  const requestRestart = Effect.gen(function* () {
+    const requestId = yield* random.uuidV4();
+    return yield* exchange(
+      { type: "request-restart", requestId },
+      (reply) =>
+        (reply.type === "restart-accepted" || reply.type === "restart-rejected") &&
+        reply.requestId === requestId,
+    ).pipe(
+      Effect.flatMap((reply) =>
+        reply.type === "restart-accepted"
+          ? Effect.void
+          : reply.type === "restart-rejected"
+            ? Effect.fail(
+                new ServiceLauncherRejectedError({
+                  targetVersion: context?.childVersion ?? "",
+                  reason: reply.reason,
+                }),
+              )
+            : Effect.die("service launcher returned an impossible restart response"),
+      ),
+    );
+  });
+
   const pending = context?.update?.status === "pending" ? context.update : undefined;
   const outcome =
     context?.update === undefined || context.update.status === "pending"
@@ -356,6 +386,7 @@ export const make = Effect.fn("cloud.service_launcher_client.make")(function* (o
   return ServiceLauncherClient.of({
     managed,
     protocol: context?.protocol,
+    ...(context?.restart === true ? { requestRestart } : {}),
     requestUpdate,
     prepareTrial,
   });

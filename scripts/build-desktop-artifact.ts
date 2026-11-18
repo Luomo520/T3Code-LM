@@ -16,6 +16,7 @@ import {
 } from "@electron/asar";
 
 import { fromYaml } from "@t3tools/shared/schemaYaml";
+import { FORK_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -1062,7 +1063,9 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   ];
 }
 
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
+// Electron 44, current native transcription DLLs and the server compile cache use 91 files.
+// Keep a bounded allowance while still rejecting accidental loose dependency trees.
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 120;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
@@ -2696,31 +2699,30 @@ export function resolveDesktopRuntimeDependencies(
   );
 }
 
-export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
-  updateChannel: "latest" | "nightly",
+export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function (
+  _updateChannel: "latest" | "nightly",
 ) {
-  const env = yield* Config.all({
-    updateRepository: Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
-    githubRepository: Config.String("GITHUB_REPOSITORY").pipe(Config.option),
-  });
-  const rawRepo = (
-    Option.getOrUndefined(env.updateRepository)?.trim() ||
-    Option.getOrUndefined(env.githubRepository)?.trim() ||
-    ""
-  ).trim();
-  if (!rawRepo) return undefined;
-
-  const [owner, repo, ...rest] = rawRepo.split("/");
-  if (!owner || !repo || rest.length > 0) return undefined;
-
-  return {
+  // CI metadata often still names the upstream checkout. Never let it redirect a fork update.
+  const [owner, repo] = FORK_RELEASE_REPOSITORY.split("/");
+  return Effect.succeed({
     provider: "github",
     owner,
     repo,
-    releaseType: updateChannel === "nightly" ? "prerelease" : "release",
-    ...(updateChannel === "nightly" ? { channel: "nightly" as const } : {}),
-  };
+    releaseType: "release",
+    channel: "latest" as const,
+  });
 });
+
+/** Windows PE resources need four 16-bit numeric components; the visible app version stays intact. */
+export function resolveWindowsBuildVersion(version: string): string {
+  const match = /^(\d+)\.(\d+)\.(\d+)-(\d+)$/.exec(version);
+  if (!match) return version;
+  const components = match.slice(1).map(Number);
+  if (components.some((part) => !Number.isSafeInteger(part) || part > 65535)) {
+    throw new Error("Windows product and build version components must be at most 65535.");
+  }
+  return components.join(".");
+}
 
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
@@ -2966,12 +2968,26 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   if (platform === "win") {
     buildConfig.npmRebuild = false;
+    buildConfig.buildVersion = resolveWindowsBuildVersion(version);
+    const numericBuild = /^\d+\.\d+\.\d+-(\d+)$/.exec(version)?.[1];
+    if (numericBuild !== undefined) buildConfig.buildNumber = numericBuild;
+    buildConfig.artifactName = "T3Code-LM-${version}-windows-${arch}-portable.${ext}";
     buildConfig.nsis = {
+      oneClick: false,
+      perMachine: false,
+      allowElevation: true,
+      allowToChangeInstallationDirectory: true,
+      deleteAppDataOnUninstall: false,
+      runAfterFinish: false,
+      displayLanguageSelector: false,
+      language: "2052",
+      installerLanguages: ["zh_CN"],
       differentialPackage: true,
+      artifactName: "T3Code-LM-${version}-windows-${arch}-installer.${ext}",
       include: "apps/desktop/resources/installer.nsh",
     };
     const winConfig: Record<string, unknown> = {
-      target: [target],
+      target: target === "nsis" ? ["nsis", "zip"] : [target],
       icon: "icon.ico",
       // Smart App Control validates unpacked native libraries independently; sign them too.
       signExts: [".node", ".dll"],
@@ -3916,7 +3932,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   const stagePackageJson: StagePackageJson = {
     name: "t3code",
     version: appVersion,
-    buildVersion: appVersion,
+    buildVersion: options.platform === "win" ? resolveWindowsBuildVersion(appVersion) : appVersion,
     t3codeCommitHash: commitHash,
     // Read by apps/desktop/src/preview/Passkeys.ts; must match the signed entitlements.
     ...(macWebAuthn ? { t3codeWebAuthn: macWebAuthn } : {}),

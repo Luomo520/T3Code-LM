@@ -537,8 +537,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       search={{
         value: props.searchQuery,
         onChangeText: props.onSearchQueryChange,
-        placeholder: "Search",
-        accessibilityLabel: "Search threads",
+        placeholder: "搜索",
+        accessibilityLabel: "搜索任务",
       }}
       filter={{
         customized: options.selectedEnvironmentId !== null || selectedProjectKey !== null,

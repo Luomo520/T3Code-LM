@@ -49,7 +49,7 @@ export function AudioFilePreview(props: { uri: string; onRetry: () => void }) {
         <Button
           label="−15s"
           tone="text"
-          accessibilityLabel="Back 15 seconds"
+          accessibilityLabel="后退 15 秒"
           disabled={!status.isLoaded}
           onPress={() => seek(Math.max(0, status.currentTime - 15))}
         />
@@ -76,18 +76,16 @@ export function AudioFilePreview(props: { uri: string; onRetry: () => void }) {
         <Button
           label="+15s"
           tone="text"
-          accessibilityLabel="Forward 15 seconds"
+          accessibilityLabel="前进 15 秒"
           disabled={!status.isLoaded}
           onPress={() => seek(Math.min(status.duration, status.currentTime + 15))}
         />
       </View>
       {status.error || seekError ? (
         <View className="items-center gap-3">
-          <Text className="text-center text-foreground">
-            This audio could not be played. Try again or save it to open in another app.
-          </Text>
+          <Text className="text-center text-foreground">{"无法播放此音频，请重试，或保存后在其他应用中打开。"}</Text>
           <View className="items-center">
-            <Button label="Try again" tone="secondary" onPress={props.onRetry} />
+            <Button label="重试" tone="secondary" onPress={props.onRetry} />
           </View>
         </View>
       ) : null}

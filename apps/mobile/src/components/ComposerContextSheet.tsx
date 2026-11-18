@@ -68,7 +68,7 @@ function ContextSource(props: { source: ElementContextSource | null }) {
     : null;
   return (
     <ContextField
-      label="Source"
+      label="源码"
       value={[source.functionName, location].filter(Boolean).join("\n")}
       code
     />
@@ -202,20 +202,13 @@ export function ComposerContextSheet(props: {
         }}
       >
         {terminal ? (
-          <Text className="text-sm text-foreground-muted">
-            Lines {terminal.lineStart}–{terminal.lineEnd}
+          <Text className="text-sm text-foreground-muted">{"行"}{terminal.lineStart}–{terminal.lineEnd}
           </Text>
         ) : null}
         {!record ? (
-          <Text className="text-foreground">
-            Context unavailable. The reference was copied without its payload. Copy it again from
-            the original message or remove it.
-          </Text>
+          <Text className="text-foreground">{"上下文不可用，复制的引用缺少内容。请从原始消息重新复制或移除此引用。"}</Text>
         ) : "payload" in record ? (
-          <Text className="text-foreground">
-            This context type is not supported by this version of the app. Its payload will be
-            preserved when sent.
-          </Text>
+          <Text className="text-foreground">{"此版本应用不支持该上下文类型，发送时将保留其内容。"}</Text>
         ) : (
           <>
             {record.kind === "terminal" ? (
@@ -263,11 +256,11 @@ export function ComposerContextSheet(props: {
             ) : null}
             {record.kind === "preview-annotation" ? (
               <>
-                <ContextField label="Page" value={record.pageTitle ?? record.pageUrl} />
+                <ContextField label="页面" value={record.pageTitle ?? record.pageUrl} />
                 <ContextField label="URL" value={record.pageUrl} />
-                <ContextField label="Comment" value={record.comment} />
-                <ContextField label="Selection" value={record.targetSummary} />
-                <ContextField label="Requested changes" value={record.styleChanges.join("\n")} />
+                <ContextField label="评论" value={record.comment} />
+                <ContextField label="选区" value={record.targetSummary} />
+                <ContextField label="请求更改" value={record.styleChanges.join("\n")} />
                 {record.elements?.map(
                   (element, index) => (
                     /* oxlint-disable react/no-array-index-key -- Captured DOM elements are a fixed snapshot without persistent element IDs. */ <View
@@ -275,13 +268,13 @@ export function ComposerContextSheet(props: {
                       className="gap-3"
                     >
                       <ContextField
-                        label="Element"
+                        label="元素"
                         value={element.componentName ?? element.tagName}
                       />
-                      <ContextField label="Selector" value={element.selector} code />
+                      <ContextField label="选择器" value={element.selector} code />
                       <ContextSource source={element.source} />
                       <ContextField label="HTML" value={element.htmlPreview} code />
-                      <ContextField label="Styles" value={element.styles} code />
+                      <ContextField label="样式" value={element.styles} code />
                     </View>
                   ) /* oxlint-enable react/no-array-index-key */,
                 )}
@@ -289,29 +282,29 @@ export function ComposerContextSheet(props: {
             ) : null}
             {record.kind === "element" ? (
               <>
-                <ContextField label="Page" value={record.pageUrl} />
-                <ContextField label="Element" value={record.componentName ?? record.tagName} />
-                <ContextField label="Selector" value={record.selector} code />
+                <ContextField label="页面" value={record.pageUrl} />
+                <ContextField label="元素" value={record.componentName ?? record.tagName} />
+                <ContextField label="选择器" value={record.selector} code />
                 <ContextSource source={record.source} />
                 <ContextField label="HTML" value={record.htmlPreview} code />
-                <ContextField label="Styles" value={record.styles} code />
+                <ContextField label="样式" value={record.styles} code />
               </>
             ) : null}
             {record.kind === "image" ? (
               <ContextField
-                label="File"
+                label="文件"
                 value={`${record.mimeType} · ${formatAttachmentSize(record.sizeBytes)}`}
               />
             ) : null}
             {record.kind === "mention" ? (
-              <ContextField label="Path" value={record.path} code />
+              <ContextField label="路径" value={record.path} code />
             ) : null}
             {record.kind === "thread" ? (
               <View className="gap-3">
-                <ContextField label="Thread" value={record.title} />
+                <ContextField label="任务" value={record.title} />
                 {props.onOpenThread ? (
                   <Button
-                    label="Open thread"
+                    label="打开任务"
                     tone="secondary"
                     onPress={() =>
                       props.onOpenThread?.({
@@ -325,18 +318,18 @@ export function ComposerContextSheet(props: {
               </View>
             ) : null}
             {record.kind === "environment" ? (
-              <ContextField label="Machine" value={record.label} />
+              <ContextField label="设备" value={record.label} />
             ) : null}
             {record.kind === "skill" ? (
               <View className="gap-3">
-                <ContextField label="Skill" value={record.name} />
+                <ContextField label="技能" value={record.name} />
                 <ContextField
-                  label="Description"
+                  label="描述"
                   value={props.skillDescription ?? "No description is available for this skill."}
                 />
                 {props.onOpenSkill ? (
                   <Button
-                    label="View instructions"
+                    label="查看指令"
                     tone="secondary"
                     onPress={props.onOpenSkill}
                     fullWidth
@@ -377,7 +370,7 @@ export function ComposerContextSheet(props: {
         ) : null}
         {props.onOpenAttachment ? (
           <Button
-            label="Open attachment"
+            label="打开附件"
             tone="secondary"
             onPress={props.onOpenAttachment}
             fullWidth
@@ -392,7 +385,7 @@ export function ComposerContextSheet(props: {
           />
         ) : null}
         {props.onRemove ? (
-          <Button label="Remove from draft" tone="secondary" onPress={props.onRemove} fullWidth />
+          <Button label="从草稿移除" tone="secondary" onPress={props.onRemove} fullWidth />
         ) : null}
       </ScrollView>
     </Sheet>

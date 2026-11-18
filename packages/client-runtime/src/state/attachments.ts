@@ -1,4 +1,5 @@
 import {
+  MAX_FILE_ATTACHMENT_BYTES,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   WS_METHODS,
   type AttachmentCreateUploadUrlInput,
@@ -190,7 +191,9 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
  * files the send would then refuse.
  */
 export function clampFileAttachmentUploadBytes(advertisedMaxUploadBytes: number): number {
-  return Math.min(advertisedMaxUploadBytes, PROVIDER_SEND_TURN_MAX_FILE_BYTES);
+  return Number.isFinite(advertisedMaxUploadBytes) && advertisedMaxUploadBytes >= 1
+    ? Math.min(Math.floor(advertisedMaxUploadBytes), MAX_FILE_ATTACHMENT_BYTES)
+    : PROVIDER_SEND_TURN_MAX_FILE_BYTES;
 }
 
 export function formatAttachmentSize(sizeBytes: number): string {

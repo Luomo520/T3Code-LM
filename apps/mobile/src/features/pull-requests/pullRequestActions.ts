@@ -27,12 +27,12 @@ type ActionDetail = Pick<
 };
 
 export const MERGE_METHODS = {
-  squash: { title: "Squash and merge", description: "Combine the commits into one commit." },
+  squash: { title: "压缩并合并", description: "将多个提交合并为一个提交。" },
   merge: {
-    title: "Create a merge commit",
-    description: "Keep the commits and add a merge commit.",
+    title: "创建合并提交",
+    description: "保留原有提交，并添加合并提交。",
   },
-  rebase: { title: "Rebase and merge", description: "Add the commits without a merge commit." },
+  rebase: { title: "变基并合并", description: "添加原有提交，不创建合并提交。" },
   "fast-forward": {
     title: "Fast-forward merge",
     description: "Add the commits as they are. Needs the branch to contain the base.",

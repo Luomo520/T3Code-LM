@@ -735,6 +735,7 @@ async function terminateChild(
   child: NodeChildProcess.ChildProcess,
   signal: NodeJS.Signals,
   overIpc: boolean,
+  gracefulOnly = false,
 ): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (overIpc) {
@@ -742,7 +743,10 @@ async function terminateChild(
   } else {
     child.kill(signal);
   }
-  const force = setTimeout(() => child.kill("SIGKILL"), TERMINATE_GRACE_MS);
+  // User-initiated updates/restarts wait for database and task shutdown; never escalate them.
+  const force = gracefulOnly
+    ? undefined
+    : setTimeout(() => child.kill("SIGKILL"), TERMINATE_GRACE_MS);
   try {
     await waitForExit(child);
   } finally {
@@ -853,6 +857,7 @@ export class Launcher {
   #state: ServiceState;
   #child: ManagedChild | null = null;
   #timer: NodeJS.Timeout | undefined;
+  #restartPending: { readonly child: ManagedChild; readonly requestId: string } | undefined;
   #transitions: Promise<void> = Promise.resolve();
   #stopRequested = false;
   readonly #stopSignal = new AbortController();
@@ -951,8 +956,12 @@ export class Launcher {
     this.#servingLock = undefined;
   }
 
-  #terminate(child: NodeChildProcess.ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
-    return terminateChild(child, signal, this.#stopChildOverIpc);
+  #terminate(
+    child: NodeChildProcess.ChildProcess,
+    signal: NodeJS.Signals = "SIGTERM",
+    gracefulOnly = false,
+  ) {
+    return terminateChild(child, signal, this.#stopChildOverIpc, gracefulOnly);
   }
 
   // Diagnostics are best-effort: a full log filesystem must not stop the launcher waiting for space.
@@ -1172,6 +1181,7 @@ export class Launcher {
     const context: ServiceLauncherContext = {
       protocol: SERVICE_LAUNCHER_PROTOCOL,
       childVersion: version,
+      restart: true,
       ...(update === undefined ? {} : { update }),
     };
     const spawnArguments = runtimeSpawnArguments(paths);
@@ -1220,11 +1230,48 @@ export class Launcher {
 
   async #handleMessage(child: ManagedChild, message: ServiceLauncherChildMessage): Promise<void> {
     if (this.#child !== child || this.#stopping) return;
+    if (message.type === "request-restart") {
+      const reject = (reason: string) =>
+        sendMessage(child.process, {
+          type: "restart-rejected",
+          requestId: message.requestId,
+          reason,
+        });
+      if (
+        child.role !== "active" ||
+        child.version !== this.#state.activeVersion ||
+        this.#state.update?.status === "pending"
+      ) {
+        await reject("Wait for the current server update to finish before restarting.");
+        return;
+      }
+      if (this.#restartPending !== undefined) {
+        await reject("A server restart is already in progress.");
+        return;
+      }
+      this.#restartPending = { child, requestId: message.requestId };
+      await sendMessage(child.process, { type: "restart-accepted", requestId: message.requestId });
+      // The acknowledgement must reach the RPC caller before its socket closes.
+      this.#timer = setTimeout(
+        () => this.#enqueue(() => this.#beginRestart(child)),
+        HANDOFF_DELAY_MS,
+      );
+      return;
+    }
     if (message.type === "request-update") {
       await this.#handleUpdateRequest(child, message);
       return;
     }
     await this.#handlePrepared(child, message.updateId);
+  }
+
+  async #beginRestart(child: ManagedChild): Promise<void> {
+    if (this.#child !== child || this.#restartPending?.child !== child || this.#stopping) return;
+    this.#timer = undefined;
+    await this.#terminate(child.process, "SIGTERM", true);
+    this.#child = null;
+    this.#restartPending = undefined;
+    await this.#startChild(child.version, "active", this.#state.update);
   }
 
   async #handleUpdateRequest(
@@ -1241,8 +1288,8 @@ export class Launcher {
       await reject("The requesting server is not the selected active version.");
       return;
     }
-    if (this.#state.update?.status === "pending") {
-      await reject("Another server update is already pending.");
+    if (this.#restartPending !== undefined || this.#state.update?.status === "pending") {
+      await reject("Another server update or restart is already pending.");
       return;
     }
     if (!isExactServiceVersion(message.targetVersion)) {
@@ -1307,7 +1354,7 @@ export class Launcher {
       this.#backupSpaceProbe,
     ).catch(() => undefined);
     this.#child = null;
-    await this.#terminate(child.process);
+    await this.#terminate(child.process, "SIGTERM", true);
     await finishOnlineBackup?.();
     await this.#startTrial(pending);
   }
@@ -1398,6 +1445,12 @@ export class Launcher {
   ): Promise<void> {
     if (this.#child !== child || this.#stopping) return;
     this.#child = null;
+    if (this.#restartPending?.child === child) {
+      this.#clearTimer();
+      this.#restartPending = undefined;
+      await this.#startChild(child.version, "active", this.#state.update);
+      return;
+    }
     if (code === STATE_DIR_OWNED_EXIT_CODE) {
       await this.#idleWhileStateDirOwned();
       return;

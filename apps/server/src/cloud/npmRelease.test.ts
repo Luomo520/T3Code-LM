@@ -1,198 +1,262 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ServerNpmReleaseError } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import * as Queue from "effect/Queue";
 import * as Fiber from "effect/Fiber";
-import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Result from "effect/Result";
 import * as TestClock from "effect/testing/TestClock";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
-import * as ProcessRunner from "../processRunner.ts";
 import * as NpmRelease from "./npmRelease.ts";
 
-const version = "0.1.5-nightly.20261030.1";
-const output = (stdout: string, code = 0): ProcessRunner.ProcessRunOutput => ({
-  stdout,
-  stderr: "",
-  code: ChildProcessSpawner.ExitCode(code),
-  timedOut: false,
-  stdoutTruncated: false,
-  stderrTruncated: false,
-  stdoutInvalidUtf8: false,
-  stderrInvalidUtf8: false,
-});
-
-const noPublicRegistry = HttpClient.make(() =>
-  Effect.die("a configured npm lookup must not fall back to public npm"),
-);
-// A fake npm on PATH decides whether npm counts as installed.
-const makeService = Effect.fnUntraced(function* (
-  run: ProcessRunner.ProcessRunner["Service"]["run"],
-  publicRegistry: HttpClient.HttpClient = noPublicRegistry,
-  npmInstalled = true,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const npmBin = yield* fs.makeTempDirectoryScoped({ prefix: "t3-npm-release-" });
-  for (const name of ["npm", "npm.cmd"]) {
-    yield* fs.writeFileString(path.join(npmBin, name), "", { mode: 0o755 });
-  }
-  return yield* NpmRelease.make().pipe(
-    Effect.provideService(ProcessRunner.ProcessRunner, { run }),
-    Effect.provideService(HttpClient.HttpClient, publicRegistry),
-    Effect.provideService(HostProcess.Environment, {
-      PATH: npmInstalled ? npmBin : "",
-      PATHEXT: ".CMD",
-    }),
-  );
-}, Effect.provide(NodeServices.layer));
-
-it.effect.each([
-  {
-    spec: version,
-    stdout: JSON.stringify({ version, t3code: { databaseMigration: 42 } }),
-    migration: 42,
-  },
-  {
-    spec: "nightly",
-    stdout: JSON.stringify([{ version, t3code: { databaseMigration: 42 } }]),
-    migration: 42,
-  },
-  { spec: "latest", stdout: JSON.stringify(version), migration: undefined },
-])("reads $spec through npm and retains migration compatibility metadata", (fixture) =>
-  Effect.gen(function* () {
-    const calls: ProcessRunner.ProcessRunInput[] = [];
-    const service = yield* makeService((input) => {
-      calls.push(input);
-      return Effect.succeed(output(fixture.stdout));
-    });
-    const expected = {
-      version,
-      ...(fixture.migration === undefined ? {} : { databaseMigration: fixture.migration }),
+const manifest = (build: number, platform: "linux" | "windows" = "linux", arch = "x64") => ({
+  schemaVersion: 1,
+  product: "T3Code-LM",
+  repository: "Luomo520/T3Code-LM",
+  channel: "release",
+  tag: `v0.1.0-${build}`,
+  sourceCommit: "a".repeat(40),
+  assets: (platform === "linux" ? ["server"] : ["installer", "portable"]).map((kind) => {
+    const extension = kind === "server" ? "tar.gz" : kind === "installer" ? "exe" : "zip";
+    const fileName = `T3Code-LM-0.1.0-${build}-${platform}-${arch}-${kind}.${extension}`;
+    return {
+      platform,
+      arch,
+      kind,
+      productVersion: "0.1.0",
+      build,
+      fileName,
+      sizeBytes: 42,
+      sha256: "b".repeat(64),
+      url: `https://github.com/Luomo520/T3Code-LM/releases/download/v0.1.0-${build}/${fileName}`,
     };
-    expect(yield* service.get({ spec: fixture.spec })).toEqual(expected);
-    expect(yield* service.get({ spec: fixture.spec })).toEqual(expected);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      command: expect.stringMatching(/[/\\]npm(?:\.cmd)?$/i),
-      args: ["view", "--global", "--json", `t3@${fixture.spec}`, "version", "t3code"],
-      maxOutputBytes: 256 * 1024,
-    });
-    yield* TestClock.adjust("1 minute");
-    expect(yield* service.get({ spec: fixture.spec })).toEqual(expected);
-    expect(calls).toHaveLength(2);
   }),
-);
-
-it.effect("treats a registry 404 as unpublished without trying another registry", () =>
-  Effect.gen(function* () {
-    const service = yield* makeService(() =>
-      Effect.succeed(output('{"error":{"code":"E404"}}', 1)),
-    );
-    expect(yield* service.get({ spec: version })).toBeNull();
-  }),
-);
-
-const spawnFailure = () =>
-  Effect.fail(
-    new ProcessRunner.ProcessSpawnError({
-      command: "npm",
-      argumentCount: 6,
-      cause: new Error("EACCES"),
-    }),
+});
+const makeService = (
+  http: HttpClient.HttpClient,
+  platform: NodeJS.Platform = "linux",
+  arch = "x64",
+) =>
+  NpmRelease.make().pipe(
+    Effect.provideService(HttpClient.HttpClient, http),
+    Effect.provideService(HostProcess.Platform, platform),
+    Effect.provideService(HostProcess.Architecture, arch),
   );
-
-it.effect.each([
-  output("not json"),
-  output('{"error":{"code":"E401","detail":"sensitive"}}', 1),
-  output('{"version":"9.9.9"}'),
-  output("[]"),
-  output("", 9009),
-  { ...output(JSON.stringify({ version })), stdoutTruncated: true },
-  { ...output(JSON.stringify({ version })), timedOut: true },
-  "spawn failure",
-] as const)("reports an unavailable lookup rather than an unpublished release: %j", (result) =>
-  Effect.gen(function* () {
-    const service = yield* makeService(() =>
-      result === "spawn failure" ? spawnFailure() : Effect.succeed(result),
+const releaseClient = (body: unknown, status = 200, urls: string[] = []) =>
+  HttpClient.make((request) => {
+    urls.push(request.url);
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(request, new Response(JSON.stringify(body), { status })),
     );
-    const found = yield* service.get({ spec: version }).pipe(Effect.result);
-    expect(Result.isFailure(found)).toBe(true);
-    if (Result.isFailure(found)) {
-      expect(found.failure).toBeInstanceOf(ServerNpmReleaseError);
-      expect(found.failure.message).not.toContain("sensitive");
-    }
+  });
+
+it.effect("reads and caches a fork release without starting npm or another registry", () =>
+  Effect.gen(function* () {
+    const urls: string[] = [];
+    const service = yield* makeService(releaseClient(manifest(1), 200, urls));
+    expect(yield* service.get({ spec: "0.1.0-1" })).toEqual({ version: "0.1.0-1" });
+    expect(yield* service.get({ spec: "0.1.0-1" })).toEqual({ version: "0.1.0-1" });
+    expect(urls).toEqual([
+      "https://github.com/Luomo520/T3Code-LM/releases/download/v0.1.0-1/T3Code-LM-release.json",
+    ]);
+    yield* TestClock.adjust("1 minute");
+    expect(yield* service.get({ spec: "0.1.0-1" })).toEqual({ version: "0.1.0-1" });
+    expect(urls).toHaveLength(2);
   }),
 );
 
-it.effect("falls back to public npm only when npm is not installed", () =>
+it.effect(
+  "ignores draft, prerelease, old channels and releases only containing other platforms",
+  () =>
+    Effect.gen(function* () {
+      const urls: string[] = [];
+      const service = yield* makeService(
+        HttpClient.make((request) => {
+          urls.push(request.url);
+          const body = request.url.includes("api.github.com")
+            ? [
+                { tag_name: "v0.1.0-5", draft: true },
+                { tag_name: "v0.1.0-4", prerelease: true },
+                { tag_name: "v0.1.0-nightly.20261030.1" },
+                { tag_name: "v0.1.0-3" },
+                { tag_name: "v0.1.0-2" },
+              ]
+            : request.url.includes("/v0.1.0-3/")
+              ? manifest(3, "windows")
+              : manifest(2);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response(JSON.stringify(body))),
+          );
+        }),
+      );
+      expect(yield* service.get({ spec: "latest" })).toEqual({ version: "0.1.0-2" });
+      expect(urls).toHaveLength(3);
+      expect(urls[0]).toBe(
+        "https://api.github.com/repos/Luomo520/T3Code-LM/releases?per_page=100&page=1",
+      );
+      expect(urls.some((url) => url.includes("npmjs"))).toBe(false);
+    }),
+);
+
+it.effect("orders numeric build identifiers instead of GitHub commit creation order", () =>
   Effect.gen(function* () {
     const urls: string[] = [];
     const service = yield* makeService(
-      () => Effect.die("npm is not installed"),
       HttpClient.make((request) => {
         urls.push(request.url);
-        const response = request.url.endsWith("/nightly")
-          ? new Response(JSON.stringify({ version, t3code: { databaseMigration: 42 } }))
-          : request.url.endsWith("/latest")
-            ? new Response(new ReadableStream())
-            : new Response("{}", { status: 404 });
-        return Effect.succeed(HttpClientResponse.fromWeb(request, response));
+        const body = request.url.includes("api.github.com")
+          ? [{ tag_name: "v0.1.0-2" }, { tag_name: "v0.1.0-10" }]
+          : manifest(10);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(request, new Response(JSON.stringify(body))),
+        );
       }),
-      false,
     );
-    expect(yield* service.get({ spec: "nightly" })).toEqual({ version, databaseMigration: 42 });
-    expect(yield* service.get({ spec: "9.9.9" })).toBeNull();
-    const stalled = yield* service.get({ spec: "latest" }).pipe(Effect.result, Effect.forkChild);
-    yield* TestClock.adjust("15 seconds");
-    expect(Result.isFailure(yield* Fiber.join(stalled))).toBe(true);
-    expect(urls).toEqual([
-      "https://registry.npmjs.org/t3/nightly",
-      "https://registry.npmjs.org/t3/9.9.9",
-      "https://registry.npmjs.org/t3/latest",
-    ]);
+    expect(yield* service.get({ spec: "latest" })).toEqual({ version: "0.1.0-10" });
+    expect(urls[1]).toContain("/v0.1.0-10/");
   }),
 );
 
-it.effect("runs at most two npm lookups at once", () =>
+it.effect("pages past releases without a matching Linux architecture", () =>
   Effect.gen(function* () {
-    const started = yield* Queue.unbounded<void>();
-    const release = yield* Deferred.make<void>();
-    let running = 0;
-    let peak = 0;
-    const service = yield* makeService(() =>
-      Effect.gen(function* () {
-        peak = Math.max(peak, ++running);
-        yield* Queue.offer(started, undefined);
-        yield* Deferred.await(release);
-        running--;
-        return output('{"error":{"code":"E404"}}', 1);
+    const urls: string[] = [];
+    const service = yield* makeService(
+      HttpClient.make((request) => {
+        urls.push(request.url);
+        const body =
+          new URL(request.url).searchParams.get("page") === "1"
+            ? Array.from({ length: 100 }, () => ({ tag_name: "not-a-fork-release" }))
+            : new URL(request.url).searchParams.get("page") === "2"
+              ? [{ tag_name: "v0.1.0-2" }, { tag_name: "v0.1.0-1" }]
+              : request.url.includes("/v0.1.0-2/")
+                ? manifest(2, "linux", "arm64")
+                : manifest(1);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(request, new Response(JSON.stringify(body))),
+        );
       }),
     );
-    const lookups = yield* Effect.forEach(
-      ["1.0.0", "1.0.1", "1.0.2"],
-      (spec) => service.get({ spec }),
-      { concurrency: "unbounded" },
-    ).pipe(Effect.forkChild);
-    yield* Queue.take(started);
-    yield* Queue.take(started);
-    yield* Deferred.succeed(release, undefined);
-    expect(yield* Fiber.join(lookups)).toEqual([null, null, null]);
-    expect(peak).toBe(2);
+    expect(yield* service.get({ spec: "latest" })).toEqual({ version: "0.1.0-1" });
+    expect(urls).toHaveLength(4);
+  }),
+);
+
+it.effect("keeps the wire-compatible nightly request unavailable without fetching", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService(
+      HttpClient.make(() => Effect.die("must not fetch another channel")),
+    );
+    expect(yield* service.get({ spec: "nightly" })).toBeNull();
+  }),
+);
+
+it.effect("treats GitHub 404 as unpublished and never falls back to npm", () =>
+  Effect.gen(function* () {
+    const urls: string[] = [];
+    const service = yield* makeService(releaseClient({}, 404, urls));
+    expect(yield* service.get({ spec: "0.1.0-1" })).toBeNull();
+    expect(urls).toHaveLength(1);
+  }),
+);
+
+it.effect.each([
+  { name: "foreign repository", body: { ...manifest(1), repository: "other/repo" } },
+  { name: "wrong tag", body: { ...manifest(2) } },
+  {
+    name: "wrong SHA",
+    body: { ...manifest(1), assets: [{ ...manifest(1).assets[0], sha256: "invalid" }] },
+  },
+  {
+    name: "foreign download host",
+    body: {
+      ...manifest(1),
+      assets: [{ ...manifest(1).assets[0], url: "https://unrelated.example/file" }],
+    },
+  },
+  { name: "null JSON", body: null },
+  { name: "empty asset list", body: { ...manifest(1), assets: [] } },
+])("rejects invalid manifest: $name", ({ body }) =>
+  Effect.gen(function* () {
+    const service = yield* makeService(releaseClient(body));
+    const result = yield* service.get({ spec: "0.1.0-1" }).pipe(Effect.result);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ServerNpmReleaseError);
+  }),
+);
+
+it.effect.each([403, 429, 500])("reports HTTP %s without leaking the response", (status) =>
+  Effect.gen(function* () {
+    const service = yield* makeService(releaseClient({ detail: "secret-response" }, status));
+    const result = yield* service.get({ spec: "0.1.0-1" }).pipe(Effect.result);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure.message).not.toContain("secret-response");
+  }),
+);
+
+it.effect("reports malformed JSON, oversized metadata and a transport failure", () =>
+  Effect.gen(function* () {
+    for (const body of ["not json", "x".repeat(2 * 1024 * 1024 + 1)]) {
+      const service = yield* makeService(
+        HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body))),
+        ),
+      );
+      expect(Result.isFailure(yield* service.get({ spec: "latest" }).pipe(Effect.result))).toBe(
+        true,
+      );
+    }
+    const service = yield* makeService(
+      HttpClient.make((request) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        ),
+      ),
+    );
+    expect(Result.isFailure(yield* service.get({ spec: "latest" }).pipe(Effect.result))).toBe(true);
+  }),
+);
+
+it.effect("times out a response that never completes", () =>
+  Effect.gen(function* () {
+    const requested = yield* Deferred.make<void>();
+    const service = yield* makeService(
+      HttpClient.make((request) => {
+        Deferred.doneUnsafe(requested, Effect.void);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(request, new Response(new ReadableStream())),
+        );
+      }),
+    );
+    const pending = yield* service.get({ spec: "latest" }).pipe(Effect.result, Effect.forkChild);
+    yield* Deferred.await(requested);
+    yield* TestClock.adjust("30 seconds");
+    expect(Result.isFailure(yield* Fiber.join(pending))).toBe(true);
+  }),
+);
+
+it.effect("selects the Windows installer only with its matching portable package", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService(releaseClient(manifest(1, "windows")), "win32");
+    expect(yield* service.get({ spec: "0.1.0-1" })).toEqual({ version: "0.1.0-1" });
+    const broken = manifest(1, "windows");
+    broken.assets.pop();
+    const missingPair = yield* makeService(releaseClient(broken), "win32");
+    expect(Result.isFailure(yield* missingPair.get({ spec: "0.1.0-1" }).pipe(Effect.result))).toBe(
+      true,
+    );
   }),
 );
 
 it.effect.each(["--registry=https://example.com", "../other", "other-package@latest", "*", ""])(
-  "rejects invalid release specs before spawning npm: %s",
+  "rejects invalid release specs before contacting GitHub: %s",
   (spec) =>
     Effect.gen(function* () {
-      const service = yield* makeService(() => Effect.die("invalid specs must not spawn npm"));
+      const service = yield* makeService(
+        HttpClient.make(() => Effect.die("invalid specs must not fetch")),
+      );
       expect(Result.isFailure(yield* service.get({ spec }).pipe(Effect.result))).toBe(true);
     }),
 );

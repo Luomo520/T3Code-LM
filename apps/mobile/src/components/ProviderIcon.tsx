@@ -17,6 +17,7 @@ type ProviderIconProps = {
   readonly provider: string | null | undefined;
   readonly iconUrl?: string | null | undefined;
   readonly size?: number;
+  readonly appearance?: "dark" | "light";
 };
 
 function AcpRegistryFallbackIcon(props: { readonly color: string; readonly size: number }) {
@@ -70,7 +71,7 @@ function AcpRegistryProviderIcon(props: {
 
 export function ProviderIcon(props: ProviderIconProps) {
   const { themeAppearance } = useAppearancePreferences();
-  const isDarkMode = themeAppearance === "dark";
+  const isDarkMode = (props.appearance ?? themeAppearance) === "dark";
   const gradientId = useId();
   const size = props.size ?? 16;
   const mono = isDarkMode ? "#e5e5e5" : "#171717";

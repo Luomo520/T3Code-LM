@@ -11,28 +11,28 @@ import { PullRequestGlyph } from "./pullRequestGlyphs";
 
 const STATES = {
   open: {
-    label: "Open",
+    label: "打开",
     icon: PullRequestGlyph.pullRequest,
     tint: "accent-adaptive-emerald-600-400",
     text: "text-adaptive-emerald-600-400",
     background: "bg-adaptive-emerald-500-a12-a16",
   },
   merged: {
-    label: "Merged",
+    label: "已合并",
     icon: PullRequestGlyph.merged,
     tint: "accent-adaptive-violet-600-400",
     text: "text-adaptive-violet-600-400",
     background: "bg-adaptive-violet-500-a12-a16",
   },
   closed: {
-    label: "Closed",
+    label: "已关闭",
     icon: PullRequestGlyph.closed,
     tint: "accent-danger-foreground",
     text: "text-danger-foreground",
     background: "bg-danger",
   },
   draft: {
-    label: "Draft",
+    label: "草稿",
     icon: PullRequestGlyph.draft,
     tint: "accent-icon-muted",
     text: "text-foreground-muted",
@@ -54,37 +54,37 @@ export function pullRequestConflict(pr: {
   readonly baseBranch?: string | undefined;
 }) {
   if (pr.state !== "open" || pr.isDraft || pr.mergeability !== "conflicting") return null;
-  return { label: pr.baseBranch ? `Conflicts with ${pr.baseBranch}` : "Has conflicts" };
+  return { label: pr.baseBranch ? `与 ${pr.baseBranch} 批准` : "存在冲突" };
 }
 
 export function checkStatus(check: PullRequestCheck) {
   switch (check.status) {
     case "success":
       return {
-        label: "Passed",
+        label: "已通过",
         icon: "checkmark.circle",
         tint: "accent-adaptive-emerald-600-400",
       } as const;
     case "failure":
       return {
-        label: "Failed",
+        label: "失败",
         icon: "exclamationmark.circle",
         tint: "accent-danger-foreground",
       } as const;
     case "action-required":
       return {
-        label: "Action required",
+        label: "需要操作",
         icon: "exclamationmark.circle",
         tint: "accent-warning-foreground",
       } as const;
     case "pending":
-      return { label: "Pending", icon: "clock", tint: "accent-warning-foreground" } as const;
+      return { label: "待处理", icon: "clock", tint: "accent-warning-foreground" } as const;
     case "cancelled":
-      return { label: "Cancelled", icon: "minus", tint: "accent-icon-muted" } as const;
+      return { label: "已取消", icon: "minus", tint: "accent-icon-muted" } as const;
     case "skipped":
-      return { label: "Skipped", icon: "slash.circle", tint: "accent-icon-muted" } as const;
+      return { label: "已跳过", icon: "slash.circle", tint: "accent-icon-muted" } as const;
     case "neutral":
-      return { label: "Neutral", icon: "minus", tint: "accent-icon-muted" } as const;
+      return { label: "中立", icon: "minus", tint: "accent-icon-muted" } as const;
   }
 }
 
@@ -96,39 +96,39 @@ export function pullRequestChecksSummary(pr: Pick<PullRequestDetail, "checks">) 
   const count = pr.checks.length ? `${passed} of ${pr.checks.length}` : undefined;
   if (failed)
     return {
-      label: `${failed} ${failed === 1 ? "check" : "checks"} failing`,
-      title: `${failed} ${failed === 1 ? "check" : "checks"} failing`,
+      label: ` 批准${failed} 项${failed === 1 ? "检查" : "检查"}失败`,
+      title: ` 批准${failed} 项${failed === 1 ? "检查" : "检查"}失败`,
       count,
       icon: "exclamationmark.circle",
       tint: "accent-danger-foreground",
     } as const;
   if (required)
     return {
-      label: `${required} need attention`,
-      title: "Checks need attention",
+      label: ` 批准${required} 项需要处理`,
+      title: "检查需要处理",
       count: `${required} awaiting action`,
       icon: "exclamationmark.circle",
       tint: "accent-warning-foreground",
     } as const;
   if (pending)
     return {
-      label: `${pending} pending`,
-      title: "Checks running",
+      label: ` 批准${pending} 项待处理`,
+      title: "检查正在运行",
       count: `${pending} pending`,
       icon: "clock",
       tint: "accent-warning-foreground",
     } as const;
   if (passed)
     return {
-      label: `${passed} of ${pr.checks.length} passed`,
-      title: passed === pr.checks.length ? "All checks passed" : "Checks completed",
+      label: ` 批准${passed} 项，共 ${pr.checks.length} 项`,
+      title: passed === pr.checks.length ? "所有检查均已通过" : "检查已完成",
       count,
       icon: "checkmark.circle",
       tint: "accent-adaptive-emerald-600-400",
     } as const;
   return {
-    label: pr.checks.length ? `${pr.checks.length} completed` : "No checks reported",
-    title: pr.checks.length ? "Checks completed" : "No checks reported",
+    label: pr.checks.length ? ` 批准${pr.checks.length} 项` : "未报告检查结果",
+    title: pr.checks.length ? "检查已完成" : "未报告检查结果",
     count,
     icon: "minus",
     tint: "accent-icon-muted",
@@ -175,7 +175,7 @@ export function pullRequestReviewSummary(
   );
   if (requested.length)
     return {
-      title: "Changes requested",
+      title: "已要求修改",
       count: `${requested.length} ${requested.length === 1 ? "reviewer" : "reviewers"}`,
       icon: "xmark.circle.fill",
       tint: "accent-danger-foreground",
@@ -185,8 +185,8 @@ export function pullRequestReviewSummary(
     return {
       title:
         approved.length === 1 && approved[0]?.author
-          ? `Approved by ${approved[0].author.login}`
-          : "Reviews approved",
+          ? `已获 ${approved[0].author.login} 批准`
+          : "审查已批准",
       count: `${approved.length} approved`,
       icon: "checkmark.circle",
       tint: "accent-adaptive-emerald-600-400",
@@ -195,14 +195,14 @@ export function pullRequestReviewSummary(
   const commented = reviews.filter((review) => review.reviewState === "COMMENTED");
   if (commented.length && !pr.reviewers.length)
     return {
-      title: "Reviews",
+      title: "审查",
       count: `${commented.length} commented`,
       icon: "bubble.left",
       tint: "accent-icon-muted",
       reviews,
     } as const;
   return {
-    title: pr.reviewers.length ? "Awaiting review" : "Request a review",
+    title: pr.reviewers.length ? "等待评审" : "请求评审",
     count: pr.reviewers.length ? `${pr.reviewers.length} requested` : "None assigned",
     icon: "person.2",
     tint: "accent-icon-muted",

@@ -50,16 +50,16 @@ import { PROVIDER_LABEL, useProviderColors, useUsageMixColors } from "./usagePro
 
 type UsageView = UsageChartMetric | "limits";
 const VIEW_OPTIONS = [
-  { value: "cost", label: "Cost" },
-  { value: "tokens", label: "Tokens" },
-  { value: "limits", label: "Limits" },
+  { value: "cost", label: "费用" },
+  { value: "tokens", label: "Token" },
+  { value: "limits", label: "限额" },
 ] as const satisfies readonly { value: UsageView; label: string }[];
 
 const WINDOW_OPTIONS = [
-  { value: 1, label: "24h", accessibilityLabel: "Past 24 hours" },
-  { value: 7, label: "7d", accessibilityLabel: "Past 7 days" },
-  { value: 30, label: "30d", accessibilityLabel: "Past 30 days" },
-  { value: 90, label: "90d", accessibilityLabel: "Past 90 days" },
+  { value: 1, label: "24 小时", accessibilityLabel: "过去 24 小时" },
+  { value: 7, label: "7 天", accessibilityLabel: "过去 7 天" },
+  { value: 30, label: "30 天", accessibilityLabel: "过去 30 天" },
+  { value: 90, label: "90 天", accessibilityLabel: "过去 90 天" },
 ] as const;
 
 const CHART_HEIGHT = 180;
@@ -185,7 +185,7 @@ function UsageScreen(props: {
     setSelectedEnvironmentIds((selected) => toggleUsageEnvironment(selected, environments, id));
   };
   const environmentMenu = {
-    title: "Filter usage environments",
+    title: "筛选用量环境",
     icon:
       selectedEnvironmentIds === null
         ? ("line.3.horizontal.decrease" as const)
@@ -193,7 +193,7 @@ function UsageScreen(props: {
     items: [
       {
         id: "all",
-        title: "All environments",
+        title: "全部环境",
         selected: selectedEnvironmentIds === null,
         onPress: () => selectEnvironment("all"),
       },
@@ -210,7 +210,7 @@ function UsageScreen(props: {
 
   return (
     <SettingsScreen
-      title="Usage"
+      title="用量"
       menus={showEnvironmentFilter ? [environmentMenu] : undefined}
       workspaceRoot={props.workspace}
     >
@@ -333,7 +333,7 @@ function UsageScreen(props: {
                               {...chart}
                               height={WIDE_CHART_HEIGHT}
                               fill
-                              title={`${isPast24Hours ? "Hourly" : "Daily"} ${metric === "cost" ? "cost" : "processed tokens"}`}
+                              title={`占费用 ${isPast24Hours ? "Hourly" : "Daily"} ${metric === "cost" ? "cost" : "processed tokens"}占费用 `}
                             />
                           </View>
                         </View>
@@ -426,7 +426,7 @@ function ChartCard(props: {
     <UsageDailyChart days={props.days} daily={props.daily} metric={metric} height={height} />
   ) : (
     <View style={{ height }} className="items-center justify-center">
-      <Text className="text-base text-foreground-muted">No activity in this window.</Text>
+      <Text className="text-base text-foreground-muted">{"此时间范围内没有活动。"}</Text>
     </View>
   );
 
@@ -519,7 +519,7 @@ function ProviderSection(props: {
   );
 
   return (
-    <SettingsSection title="Providers">
+    <SettingsSection title="服务提供方">
       {ordered.map((provider, index) => {
         const share = metric === "cost" ? provider.costShare : provider.tokenShare;
         return (
@@ -591,45 +591,45 @@ function TotalsSection(props: {
   const cachedShare = observedInput === 0 ? 0 : merged.cachedInputTokens / observedInput;
 
   return (
-    <SettingsSection title="Totals">
+    <SettingsSection title="总计">
       <View className="flex-row flex-wrap">
         <MetricCell
           columns={props.columns}
-          label="Processed tokens"
+          label="已处理 Token"
           value={formatTokens(merged.totalTokens)}
-          detail={`${formatTokens(periodAverage)} per active ${props.isPast24Hours ? "hour" : "day"}`}
+          detail={`占费用 ${formatTokens(periodAverage)} per active ${props.isPast24Hours ? "hour" : "day"}占费用 `}
         />
         <MetricCell
           columns={props.columns}
-          label="Cache savings"
+          label="缓存节省"
           value={formatUsd(merged.costQuality.cacheSavingsUsd)}
           detail={
             merged.costUsd > 0
-              ? `${(merged.costQuality.cacheSavingsUsd / merged.costUsd).toFixed(1)}x the raw cost`
+              ? `占费用 ${(merged.costQuality.cacheSavingsUsd / merged.costUsd).toFixed(1)}x the raw cost`
               : "vs full input rates"
           }
         />
         <MetricCell
           columns={props.columns}
-          label="Cached input"
+          label="缓存输入"
           value={formatTokens(merged.cachedInputTokens)}
-          detail={`${formatPercent(cachedShare)} of observed input`}
+          detail={`占费用 ${formatPercent(cachedShare)} of observed input`}
         />
         <MetricCell
           columns={props.columns}
-          label="Uncached input"
+          label="未缓存输入"
           value={formatTokens(merged.uncachedInputTokens)}
-          detail={`${formatTokens(merged.cacheCreationTokens)} cache writes`}
+          detail={`占费用 ${formatTokens(merged.cacheCreationTokens)} cache writes`}
         />
         <MetricCell
           columns={props.columns}
-          label="Output"
+          label="输出"
           value={formatTokens(merged.outputTokens)}
           detail={`incl. ${formatTokens(merged.reasoningTokens)} reasoning`}
         />
         <MetricCell
           columns={props.columns}
-          label="Unpriced"
+          label="未定价"
           value={formatPercent(merged.costQuality.unpricedShare)}
           detail="of records, excluded from cost"
         />
@@ -642,30 +642,30 @@ function CostSection(props: { readonly merged: MergedUsage; readonly wide: boole
   const { categoryCost, speedCost } = props.merged;
   const colors = useUsageMixColors();
   const byType = [
-    { label: "Input", value: categoryCost.input, color: colors.input },
-    { label: "Cache read", value: categoryCost.cacheRead, color: colors.cacheRead },
-    { label: "Cache write", value: categoryCost.cacheWrite, color: colors.cacheWrite },
-    { label: "Output", value: categoryCost.output, color: colors.output },
+    { label: "输入", value: categoryCost.input, color: colors.input },
+    { label: "缓存读取", value: categoryCost.cacheRead, color: colors.cacheRead },
+    { label: "缓存写入", value: categoryCost.cacheWrite, color: colors.cacheWrite },
+    { label: "输出", value: categoryCost.output, color: colors.output },
     // Reported cost with no rates to split it, or from older servers. Below a
     // cent it is rounding, not usage.
     {
-      label: "Other",
+      label: "其他",
       value: categoryCost.unsplit >= 0.005 ? categoryCost.unsplit : 0,
       color: colors.other,
     },
   ];
   const bySpeed = [
-    { label: "Standard", value: speedCost.standard, color: colors.standard },
-    { label: "Fast", value: speedCost.fast, color: colors.fast },
-    { label: "Ultrafast", value: speedCost.ultrafast, color: colors.ultrafast },
+    { label: "标准", value: speedCost.standard, color: colors.standard },
+    { label: "快速", value: speedCost.fast, color: colors.fast },
+    { label: "极速", value: speedCost.ultrafast, color: colors.ultrafast },
   ];
   if (props.merged.costUsd <= 0) return null;
 
   return (
-    <SettingsSection title="Cost">
+    <SettingsSection title="费用">
       <View className={props.wide ? "flex-row" : undefined}>
         <View className={props.wide ? "min-w-0 flex-1" : undefined}>
-          <ShareBar label="By type" segments={byType} />
+          <ShareBar label="按类型" segments={byType} />
         </View>
         {speedCost.fast + speedCost.ultrafast > 0 ? (
           <View
@@ -676,7 +676,7 @@ function CostSection(props: { readonly merged: MergedUsage; readonly wide: boole
             }
           >
             <ShareBar
-              label="By speed"
+              label="按速度"
               segments={bySpeed}
               aside={`${formatUsd(speedCost.premium)} premium`}
             />
@@ -757,7 +757,7 @@ function ModelsSection(props: {
   );
 
   return (
-    <SettingsSection title="By model">
+    <SettingsSection title="按模型">
       <View className="flex-row flex-wrap">
         {ordered.map((model, index) => (
           <View

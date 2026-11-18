@@ -47,9 +47,9 @@ export function SettingsClientStorageRouteScreen() {
       savedConnectionsById[environment.environmentId]?.environmentLabel ??
       environment.environmentId;
     Dialog.confirm({
-      title: `Clear cache for ${label}?`,
+      title: `清除 ${label} 的缓存？`,
       message:
-        "This removes offline threads, server metadata, and cached branches for this environment. The saved connection and credentials stay intact.",
+        "这将移除此环境的离线任务、服务端元数据和分支缓存，已保存的连接和凭据将保留。",
       confirmText: "Clear Cache",
       destructive: true,
       onConfirm: () =>
@@ -59,9 +59,9 @@ export function SettingsClientStorageRouteScreen() {
 
   const confirmClearAll = () => {
     Dialog.confirm({
-      title: "Clear all client caches?",
+      title: "清除所有客户端缓存？",
       message:
-        "This removes offline data for every environment. Connections, credentials, account data, and app preferences stay intact.",
+        "这会移除所有环境的离线数据，连接、凭据、账号数据和应用偏好设置将保留。",
       confirmText: "Clear All Caches",
       destructive: true,
       onConfirm: () => clearCache({ type: "all" }),
@@ -69,7 +69,7 @@ export function SettingsClientStorageRouteScreen() {
   };
 
   return (
-    <SettingsScreen title="Client Storage">
+    <SettingsScreen title="客户端存储">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentInset={{ bottom: Math.max(insets.bottom, 18) }}
@@ -77,7 +77,7 @@ export function SettingsClientStorageRouteScreen() {
         className="flex-1"
         contentContainerClassName="gap-6 px-5 pt-4 pb-[18px]"
       >
-        <SettingsSection title="Environment caches">
+        <SettingsSection title="环境缓存">
           {AsyncResult.isFailure(summaryResult) ? (
             <View className="items-center gap-2 px-6 py-8">
               <SymbolView
@@ -87,17 +87,13 @@ export function SettingsClientStorageRouteScreen() {
                 type="monochrome"
                 weight="regular"
               />
-              <Text className="text-center text-base text-foreground">Storage unavailable</Text>
-              <Text className="text-center text-sm text-foreground-muted">
-                Restart the app and try again.
-              </Text>
+              <Text className="text-center text-base text-foreground">{"存储不可用"}</Text>
+              <Text className="text-center text-sm text-foreground-muted">{"请重启应用后重试。"}</Text>
             </View>
           ) : !summary ? (
             <View className="items-center gap-3 px-6 py-8">
               <AppActivityIndicator />
-              <Text className="text-center text-sm text-foreground-muted">
-                Inspecting cached data…
-              </Text>
+              <Text className="text-center text-sm text-foreground-muted">{"正在检查缓存数据…"}</Text>
             </View>
           ) : environmentSummaries.length > 0 ? (
             environmentSummaries.map((environment, index) => (
@@ -125,16 +121,14 @@ export function SettingsClientStorageRouteScreen() {
                 type="monochrome"
                 weight="regular"
               />
-              <Text className="text-center text-base text-foreground">No cached data</Text>
-              <Text className="text-center text-sm text-foreground-muted">
-                Offline cache records will appear here after environments are used.
-              </Text>
+              <Text className="text-center text-base text-foreground">{"没有缓存数据"}</Text>
+              <Text className="text-center text-sm text-foreground-muted">{"使用环境后，离线缓存记录将显示在此处。"}</Text>
             </View>
           )}
         </SettingsSection>
 
         <View className="gap-3">
-          <SettingsSection title="Actions">
+          <SettingsSection title="操作">
             <SettingsActionRow
               icon="trash"
               label={summary ? `Clear ${formatBytes(summary.payloadBytes)}` : "Clear caches"}
@@ -144,14 +138,9 @@ export function SettingsClientStorageRouteScreen() {
               onPress={confirmClearAll}
             />
           </SettingsSection>
-          <Text className="px-2 text-sm leading-normal text-foreground-muted">
-            Clearing caches never removes environment connections, credentials, account data, or
-            appearance preferences.
-          </Text>
+          <Text className="px-2 text-sm leading-normal text-foreground-muted">{"清除缓存不会移除环境连接、凭据、账号数据或外观偏好设置。"}</Text>
           {AsyncResult.isFailure(summaryResult) || AsyncResult.isFailure(clearResult) ? (
-            <Text selectable className="px-2 text-sm text-danger-foreground">
-              Client storage is temporarily unavailable. Try again after restarting the app.
-            </Text>
+            <Text selectable className="px-2 text-sm text-danger-foreground">{"客户端存储暂不可用，请重启应用后重试。"}</Text>
           ) : null}
         </View>
       </ScrollView>

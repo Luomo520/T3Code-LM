@@ -142,7 +142,7 @@ export function usePullRequestListActions(
       sourceControlClients.get(entry.provider).changeRequest,
     );
     Dialog.alert(`${label}?`, `#${entry.number} · ${entry.title}`, [
-      { text: "Cancel", style: "cancel" },
+      { text: "取消", style: "cancel" },
       {
         text: label,
         style: supported === "close" ? "destructive" : "default",
@@ -162,12 +162,12 @@ export function usePullRequestListActions(
         ? [
             {
               id: "request-review",
-              title: "Request review",
+              title: "请求审查",
               image: "person.badge.plus",
             },
             {
               id: entry.isDraft ? "ready" : "draft",
-              title: entry.isDraft ? "Mark ready for review" : "Convert to draft",
+              title: entry.isDraft ? "标记为可供审查" : "转换为草稿",
               image: "pencil",
             },
             {
@@ -188,10 +188,10 @@ export function usePullRequestListActions(
           : []),
       {
         id: "share",
-        title: "Share…",
+        title: "分享…",
         image: "square.and.arrow.up",
       },
-      { id: "copy", title: "Copy link", image: "link" },
+      { id: "copy", title: "复制链接", image: "link" },
       {
         id: "provider",
         title: openOnProviderLabel(entry.provider),

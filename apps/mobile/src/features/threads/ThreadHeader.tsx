@@ -13,6 +13,7 @@ import {
 } from "./ThreadGitControls";
 
 export function ThreadHeader(props: {
+  readonly headerUsage?: import("react").ReactNode;
   readonly title: string;
   readonly subtitle: string;
   readonly gitControls: ThreadGitControlsProps;
@@ -46,6 +47,7 @@ export function ThreadHeader(props: {
     <AppBar
       title={props.title}
       subtitle={props.subtitle}
+      subtitleAccessory={props.headerUsage}
       onBackToList={goBack}
       onCompose={props.draft ? undefined : startNewTask}
       backInSplitView={

@@ -1379,6 +1379,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverReclaimDatabaseSpace,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    restartServer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:restart",
+      tag: WS_METHODS.serverRestart,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     storageCleanupReport: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:storage-cleanup-report",
       tag: WS_METHODS.serverGetStorageCleanupReport,
@@ -1500,6 +1505,16 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.scheduledTasksSubscribe,
     }),
     // A cold transcript scan is measured in seconds, so keep the result around
+    refreshHeaderUsage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:refresh-header-usage",
+      tag: WS_METHODS.serverGetHeaderUsage,
+    }),
+    headerUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:header-usage",
+      tag: WS_METHODS.serverGetHeaderUsage,
+      staleTimeMs: 2000,
+      idleTtlMs: 60_000,
+    }),
     // long enough that switching windows or re-rendering does not rescan. With
     // nothing to show yet, the server's last scan answers first, then a plain
     // read, then a read that waits for slow sources.

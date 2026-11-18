@@ -218,9 +218,9 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
     >
       {workflow?.isHeld && queuedRuns.length > 0 ? (
         <View className="gap-2 py-3">
-          <Text className="text-sm text-foreground-muted">Queue paused</Text>
+          <Text className="text-sm text-foreground-muted">{"队列已暂停"}</Text>
           <Button
-            label="Resume queue"
+            label="继续队列"
             disabled={resuming || busyRunId !== null}
             onPress={async () => {
               if (busyRef.current) return;
@@ -248,9 +248,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
         <Text className="py-3 text-sm text-foreground-muted">{editBlockedReason}</Text>
       ) : null}
       {queuedRuns.length === 0 ? (
-        <Text className="pt-6 text-center text-sm text-foreground-muted">
-          No messages waiting in this queue.
-        </Text>
+        <Text className="pt-6 text-center text-sm text-foreground-muted">{"此队列中没有等待的消息。"}</Text>
       ) : null}
       {queuedRuns.map(({ run, text, attachments, context, message }, index) => {
         const controls = resolveThreadQueueRowControls({
@@ -284,7 +282,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       ? [
                           {
                             id: "steer",
-                            title: "Send now",
+                            title: "立即发送",
                             attributes: { disabled: !controls.canSend },
                             image: "arrow.up",
                           },
@@ -292,13 +290,13 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       : []),
                     {
                       id: "edit",
-                      title: "Edit",
+                      title: "编辑",
                       attributes: { disabled: !controls.canEdit },
                       image: "pencil",
                     },
                     {
                       id: "remove",
-                      title: "Remove",
+                      title: "移除",
                       attributes: { disabled: !controls.canDismiss, destructive: true },
                     },
                   ]}
@@ -311,7 +309,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                     accessibilityLabel={title}
                     accessibilityHint={
                       controls.canEdit
-                        ? "Opens this message in the composer for editing"
+                        ? "在输入框中打开此消息以进行编辑"
                         : (editBlockedReason ?? undefined)
                     }
                     disabled={!controls.canEdit}
@@ -343,9 +341,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       </Text>
                     </View>
                     {controls.isEditing ? (
-                      <Text className="shrink-0 text-2xs uppercase tracking-wide text-primary">
-                        Editing
-                      </Text>
+                      <Text className="shrink-0 text-2xs uppercase tracking-wide text-primary">{"正在编辑"}</Text>
                     ) : null}
                   </Pressable>
                 </Menu>
@@ -381,7 +377,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View collapsable={false} className="flex-1 bg-sheet">
-        <SheetHeader title="Queued" onClose={() => navigation.goBack()} />
+        <SheetHeader title="已排队" onClose={() => navigation.goBack()} />
         <ScreenContent>{content}</ScreenContent>
       </View>
     </GestureHandlerRootView>
@@ -424,7 +420,7 @@ function QueueRowSwipeable(props: {
           style={{ width: REMOVE_ACTION_WIDTH }}
         >
           <SymbolView name="trash" size={16} tintColorClassName="accent-danger-foreground" />
-          <Text className="pt-1 text-2xs font-t3-medium text-danger-foreground">Remove</Text>
+          <Text className="pt-1 text-2xs font-t3-medium text-danger-foreground">{"移除"}</Text>
         </Pressable>
       )}
     >

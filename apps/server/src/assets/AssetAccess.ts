@@ -67,6 +67,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
 const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
+const DOWNLOAD_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const HTML_ATTACHMENT_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const PROJECT_FAVICON_VERSION_PREFIX = "v";
@@ -104,6 +105,19 @@ const PREVIEW_ASSET_EXTENSIONS = new Set([
 ]);
 
 const AssetClaimsSchema = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("workspace-download-exact"),
+    workspaceRoot: Schema.String,
+    relativePath: Schema.String,
+    filePath: Schema.String,
+    device: Schema.String,
+    inode: Schema.String,
+    size: Schema.String,
+    mtimeNs: Schema.String,
+    ctimeNs: Schema.String,
+    expiresAt: Schema.Number,
+  }),
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("workspace-file"),
@@ -460,11 +474,15 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
             }),
         ),
       );
+    const download =
+      (input.resource._tag === "workspace-file" ||
+        input.resource._tag === "draft-workspace-file") &&
+      input.resource.disposition === "attachment";
     const isDraftMedia =
       input.resource._tag === "draft-workspace-file" &&
       (isWorkspaceAudioPreviewPath(resolved.relativePath) ||
         isWorkspaceVideoPreviewPath(resolved.relativePath));
-    if (!isDraftMedia && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
+    if (!download && !isDraftMedia && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
       return yield* new AssetPreviewTypeValidationError({
         resource: input.resource,
       });
@@ -502,6 +520,32 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
           }),
       ),
     );
+    if (download) {
+      const file = yield* openMediaFile(canonicalFile).pipe(
+        Effect.scoped,
+        Effect.mapError(
+          (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        ),
+      );
+      if (!file) return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      return {
+        claims: {
+          version: 1 as const,
+          kind: "workspace-download-exact" as const,
+          workspaceRoot: canonicalWorkspaceRoot,
+          relativePath: resolved.relativePath,
+          filePath: canonicalFile,
+          device: file.info.dev.toString(),
+          inode: file.info.ino.toString(),
+          size: file.info.size.toString(),
+          mtimeNs: file.info.mtimeNs.toString(),
+          ctimeNs: file.info.ctimeNs.toString(),
+          expiresAt: input.expiresAt,
+        },
+        fileName: path.basename(resolved.relativePath),
+        imageDimensions: null,
+      };
+    }
     const imageDimensions = HEADER_IMAGE_EXTENSIONS.has(
       path.extname(resolved.relativePath).toLowerCase(),
     )
@@ -540,7 +584,11 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
-  let expiresAt = (yield* Clock.currentTimeMillis) + ASSET_TOKEN_TTL_MS;
+  const download =
+    (input.resource._tag === "workspace-file" || input.resource._tag === "draft-workspace-file") &&
+    input.resource.disposition === "attachment";
+  let expiresAt =
+    (yield* Clock.currentTimeMillis) + (download ? DOWNLOAD_TOKEN_TTL_MS : ASSET_TOKEN_TTL_MS);
   let claims: AssetClaims;
   let fileName: string;
   let sourcePath: string | undefined;
@@ -611,7 +659,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         input.resource.path.startsWith("~/") || input.resource.path.startsWith("~\\")
           ? expandHomePath(input.resource.path, yield* HostProcess.HomeDirectory)
           : yield* toWslDrivePath(input.resource.path);
-      if (path.isAbsolute(hostPath)) {
+      if (!download && path.isAbsolute(hostPath)) {
         const finalized = yield* finalizeAbsoluteMediaFileAsset({
           requestedPath: hostPath,
           workspaceRoot: draftWorkspaceRoot,
@@ -873,6 +921,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   const token = `${encodedPayload}.${signature}`;
   return {
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
+    ...(download ? { download: true, fileName } : {}),
     expiresAt,
     ...(sourcePath !== undefined ? { sourcePath } : {}),
     ...(imageDimensions !== null ? { imageDimensions } : {}),
@@ -979,6 +1028,30 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   const decodedPath = decodeRelativePath(relativePath);
   if (decodedPath === null) return null;
   const path = yield* Path.Path;
+  if (claims.kind === "workspace-download-exact") {
+    if (decodedPath !== path.basename(claims.relativePath)) return null;
+    const canonicalFile = yield* resolveCanonicalWorkspaceFileForRequest({
+      workspaceRoot: claims.workspaceRoot,
+      relativePath: claims.relativePath,
+    });
+    if (canonicalFile !== claims.filePath) return null;
+    const file = yield* openMediaFile(canonicalFile, claims).pipe(Effect.orElseSucceed(() => null));
+    if (
+      !file ||
+      file.info.size.toString() !== claims.size ||
+      file.info.mtimeNs.toString() !== claims.mtimeNs ||
+      file.info.ctimeNs.toString() !== claims.ctimeNs
+    )
+      return null;
+    return {
+      kind: "file",
+      path: canonicalFile,
+      download: true,
+      fileName: path.basename(claims.relativePath),
+      mimeType: "application/octet-stream",
+      file,
+    } satisfies ResolvedAsset;
+  }
   if (claims.kind === "media-file-exact") {
     if (decodedPath !== path.basename(claims.filePath)) return null;
     const canonicalFile = yield* resolveCanonicalFile(claims.filePath).pipe(

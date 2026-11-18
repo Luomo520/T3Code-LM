@@ -304,8 +304,8 @@ const bundleLinuxLibatomic = Effect.fn("bundleLinuxLibatomic")(function* (input:
     });
   }
   const header = [
-    `libatomic.so.1 is copied from the Ubuntu package ${pkg} ${version}.`,
-    `Source: https://launchpad.net/ubuntu/+source/${sourcePackage}/${sourceVersion}`,
+    `libatomic.so.1 is copied from the package ${pkg} ${version}.`,
+    `Source package: ${sourcePackage} ${sourceVersion}.`,
   ].join("\n");
   // Vendored because CI runner images strip /usr/share/doc.
   const license = yield* fs.readFileString(

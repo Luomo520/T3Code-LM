@@ -89,7 +89,11 @@ export function resolveInteractionMode(
 
 /** The task as its child receives it, with the role the caller asked for. */
 export function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
-  return input.role === undefined || input.role === "general"
-    ? input.task
-    : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
+  const task =
+    input.role === undefined || input.role === "general"
+      ? input.task
+      : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
+  // Codex uses the first user text as a fallback title for independent tasks.
+  const title = input.title?.trim().replace(/\s+/g, " ") || "委派任务";
+  return `[T3子任务] ${title}\n\n${task}`;
 }

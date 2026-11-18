@@ -1281,6 +1281,7 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(AssetSigner.layer.pipe(Layer.provideMerge(ServerSecretStore.layer))),
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-attachment-" })),
         Layer.provide(
           DocumentText.layer.pipe(

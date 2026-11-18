@@ -138,6 +138,28 @@ const ROUTE_KIND_RANK: Record<ConnectionRouteKind, number> = {
   relay: 5,
 };
 
+export function preferLanRoutes(
+  entry: ConnectionCatalogEntry,
+  lastSuccessfulRouteId?: string,
+): ConnectionCatalogEntry {
+  const routes = connectionRoutes(entry);
+  const recent = (route: ConnectionRoute): number => {
+    if (connectionRouteId(route.target) === lastSuccessfulRouteId) return Infinity;
+    const profile = Option.getOrUndefined(route.profile);
+    const at = profile?._tag === "BearerConnectionProfile" ? profile.lastConnectedAtEpochMs : 0;
+    return at !== undefined && Number.isFinite(at) && at > 0 ? at : 0;
+  };
+  return entryWithRoutes(
+    entry,
+    [...routes].sort((a, b) => {
+      const kindA = connectionRouteKind(a);
+      const kindB = connectionRouteKind(b);
+      const rank = ROUTE_KIND_RANK[kindA] - ROUTE_KIND_RANK[kindB];
+      return rank || (kindA === "lan" && kindB === "lan" ? recent(b) - recent(a) : 0);
+    }),
+  );
+}
+
 export function insertRoute(
   routes: ReadonlyArray<ConnectionRoute>,
   route: ConnectionRoute,
@@ -400,6 +422,9 @@ function withNetwork(route: ConnectionRoute, tailscale: boolean): ConnectionRout
         label: profile.label,
         httpBaseUrl: profile.httpBaseUrl,
         wsBaseUrl: profile.wsBaseUrl,
+        ...(profile.lastConnectedAtEpochMs === undefined
+          ? {}
+          : { lastConnectedAtEpochMs: profile.lastConnectedAtEpochMs }),
         ...(profile.learned === undefined ? {} : { learned: profile.learned }),
         ...(profile.authorization === undefined ? {} : { authorization: profile.authorization }),
         ...(tailscale ? { network: "tailscale" as const } : {}),

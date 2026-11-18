@@ -19,6 +19,7 @@ function PopoverTrigger({ className, children, ...props }: PopoverPrimitive.Trig
 const popoverPopupWidthClassName = {
   auto: "",
   sm: "w-64",
+  compact: "w-72",
   md: "w-80",
   lg: "w-96",
 } as const;

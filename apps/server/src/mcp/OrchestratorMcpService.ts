@@ -135,6 +135,10 @@ import { isLiveCallerShell, threadNotFound } from "./threadAccess.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
+import {
+  CODEX_NATIVE_SUBAGENTS_ONLY,
+  isNativeOnlyCodexTarget,
+} from "../orchestration-v2/codexSubagentPolicy.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 // Nothing is written while a task wait blocks, and Node fetch drops a silent call at 300 s.
@@ -2503,6 +2507,12 @@ const make = Effect.gen(function* () {
             enabledForCaller ? provider : { ...provider, enabled: false },
             orchestrationCapableInstanceIds.has(provider.instanceId),
           );
+          const childConstraints = isNativeOnlyCodexTarget({
+            instanceId: provider.instanceId,
+            driver: provider.driver,
+          })
+            ? [...constraints, CODEX_NATIVE_SUBAGENTS_ONLY]
+            : constraints;
           const { listed, omitted } = listCapabilityModels({
             provider,
             preferences: settings.providerModelPreferences?.[provider.instanceId],
@@ -2534,9 +2544,9 @@ const make = Effect.gen(function* () {
             provider.supportedRuntimeModes.length === 0
               ? {}
               : { runtimeModes: [...provider.supportedRuntimeModes] }),
-            canRunChildTask: constraints.length === 0,
-            canRunCrossProviderChildTask: constraints.length === 0,
-            constraints: [...constraints],
+            canRunChildTask: childConstraints.length === 0,
+            canRunCrossProviderChildTask: childConstraints.length === 0,
+            constraints: [...childConstraints],
           };
         }),
         features: {
@@ -2605,6 +2615,17 @@ const make = Effect.gen(function* () {
         providers,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });
+      if (
+        !isRetryOfAcceptedDelegation &&
+        isNativeOnlyCodexTarget({
+          instanceId: target.modelSelection.instanceId,
+          driver: providers.find(
+            (provider) => provider.instanceId === target.modelSelection.instanceId,
+          )?.driver,
+        })
+      ) {
+        return yield* failure("invalid_request", CODEX_NATIVE_SUBAGENTS_ONLY);
+      }
       const runtimeMode = yield* resolveRuntimeMode(
         parent.thread.runtimeMode,
         input.runtimeMode,

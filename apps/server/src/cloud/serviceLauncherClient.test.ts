@@ -1,12 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Logger from "effect/Logger";
+import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import { assert, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Deferred from "effect/Deferred";
 
 import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
@@ -20,6 +23,7 @@ class FakeLauncherProcess {
   readonly connected: boolean;
   readonly env: Record<string, string | undefined>;
   readonly sent: ServiceLauncherChildMessage[] = [];
+  onSend: ((message: ServiceLauncherChildMessage) => void) | undefined;
   readonly #listeners = new Map<string, Set<(...args: ReadonlyArray<unknown>) => void>>();
 
   constructor(context: unknown, connected = true) {
@@ -29,6 +33,7 @@ class FakeLauncherProcess {
 
   send = (message: ServiceLauncherChildMessage, callback?: (error: Error | null) => void) => {
     this.sent.push(message);
+    this.onSend?.(message);
     callback?.(null);
     return true;
   };
@@ -52,7 +57,7 @@ const makeClient = (host: FakeLauncherProcess, currentVersion: string) =>
   ServiceLauncherClient.make({ currentVersion }).pipe(
     Effect.provideService(ServiceLauncherClient.ServiceLauncherHostProcess, host),
     Effect.provideService(HostProcess.Environment, host.env),
-    Effect.provide(NodeServices.layer),
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
 // regression: #34502 a remote update never replaces the launcher, so an installed one stays protocol 3
@@ -324,3 +329,33 @@ it.layer(NodeServices.layer)("self-update launchers", (it) => {
     }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 });
+
+it.effect(
+  "advertises restart only when the launcher explicitly supports it and correlates acknowledgements",
+  () =>
+    Effect.gen(function* () {
+      const legacyHost = new FakeLauncherProcess({
+        protocol: SERVICE_LAUNCHER_PROTOCOL,
+        childVersion: "1.0.0",
+      });
+      const legacy = yield* makeClient(legacyHost, "1.0.0");
+      expect(legacy.requestRestart).toBeUndefined();
+      const host = new FakeLauncherProcess({
+        protocol: SERVICE_LAUNCHER_PROTOCOL,
+        childVersion: "1.0.0",
+        restart: true,
+      });
+      const client = yield* makeClient(host, "1.0.0");
+      assert.isDefined(client.requestRestart);
+      const sent = yield* Deferred.make<ServiceLauncherChildMessage>();
+      host.onSend = (message) => Deferred.doneUnsafe(sent, Effect.succeed(message));
+      const requested = yield* Effect.forkChild(client.requestRestart!, { startImmediately: true });
+      const message = yield* Deferred.await(sent);
+      assert.equal(message?.type, "request-restart");
+      if (message?.type !== "request-restart") return;
+      host.emit({ type: "restart-accepted", requestId: "unrelated-request" });
+      expect(requested.pollUnsafe()).toBeUndefined();
+      host.emit({ type: "restart-accepted", requestId: message.requestId });
+      yield* Fiber.join(requested);
+    }),
+);

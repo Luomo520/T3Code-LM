@@ -93,7 +93,7 @@ export function SettingsDiagnosticsRouteScreen() {
   };
 
   return (
-    <SettingsScreen title="Diagnostics">
+    <SettingsScreen title="诊断">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentInset={{ bottom: Math.max(insets.bottom, 18) }}
@@ -103,22 +103,22 @@ export function SettingsDiagnosticsRouteScreen() {
       >
         {crashReportingAvailable ? <CrashReportsSetting /> : null}
 
-        <SettingsSection title="Startup crashes">
+        <SettingsSection title="启动崩溃">
           {state.status === "loading" ? (
             <View className="items-center gap-3 px-6 py-8">
               <AppActivityIndicator />
-              <Text className="text-center text-sm text-foreground-muted">Reading crash log…</Text>
+              <Text className="text-center text-sm text-foreground-muted">{"正在读取崩溃日志…"}</Text>
             </View>
           ) : state.status === "unavailable" ? (
             <EmptyState
               icon="exclamationmark.triangle"
-              title="Crash log unavailable"
+              title="崩溃日志不可用"
               detail="Startup crash records are only kept in store and TestFlight builds."
             />
           ) : records.length === 0 ? (
             <EmptyState
               icon="checkmark.circle"
-              title="No startup crashes"
+              title="没有启动崩溃记录"
               detail="Nothing has taken the app down during launch in the last 7 days."
             />
           ) : (
@@ -129,7 +129,7 @@ export function SettingsDiagnosticsRouteScreen() {
         </SettingsSection>
 
         <View className="gap-3">
-          <SettingsSection title="Actions">
+          <SettingsSection title="操作">
             <SettingsActionRow
               icon={copied ? "checkmark" : "doc.on.doc"}
               label={copied ? "Copied" : "Copy crash report"}
@@ -137,11 +137,7 @@ export function SettingsDiagnosticsRouteScreen() {
               onPress={() => void copyReport()}
             />
           </SettingsSection>
-          <Text className="px-2 text-sm leading-normal text-foreground-muted">
-            Paste the report into a GitHub issue. It contains the app version, the JavaScript error
-            message, and the component stack. Error messages can quote values from the app, so read
-            it over before sharing.
-          </Text>
+          <Text className="px-2 text-sm leading-normal text-foreground-muted">{"将报告粘贴到 GitHub 问题中。报告包含应用版本、JavaScript 错误信息和组件堆栈。错误信息可能包含应用中的数据，请在分享前检查。"}</Text>
         </View>
       </ScrollView>
     </SettingsScreen>

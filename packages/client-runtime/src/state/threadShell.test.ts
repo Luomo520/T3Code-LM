@@ -16,6 +16,7 @@ import { PrimaryConnectionTarget } from "../connection/model.ts";
 import { v2Now, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
 import { isThreadWorking } from "./threadInbox.ts";
+import { presentThreadShell } from "./models.ts";
 import { childThreadInputsTitle, createEnvironmentThreadShellAtoms } from "./threadShell.ts";
 
 const environmentId = EnvironmentId.make("environment-v2");
@@ -57,6 +58,25 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
 }
 
 describe("v2 thread shell lists", () => {
+  it("presents conversation message times without inventing values for older shells", () => {
+    expect(presentThreadShell(environmentId, v2ThreadShell)).not.toHaveProperty(
+      "latestConversationMessageAt",
+    );
+    expect(
+      presentThreadShell(environmentId, {
+        ...v2ThreadShell,
+        latestConversationMessageAt: null,
+      }).latestConversationMessageAt,
+    ).toBeNull();
+    expect(
+      presentThreadShell(environmentId, {
+        ...v2ThreadShell,
+        latestConversationMessageAt: v2Now,
+        updatedAt: DateTime.add(v2Now, { days: 5 }),
+      }).latestConversationMessageAt,
+    ).toBe(DateTime.formatIso(v2Now));
+  });
+
   it("preserves ordered reference arrays when a middle thread changes", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const snapshot = {

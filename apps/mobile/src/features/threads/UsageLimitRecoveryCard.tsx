@@ -63,7 +63,7 @@ export function UsageLimitRecoveryCard({
     ? `${canSchedule && scheduled ? "Resumes" : "Resets"} ${new Date(displayAt).toLocaleString(
         undefined,
         { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
-      )}.`
+      )} 重置。`
     : null;
   const snoozed =
     limitRecoveryOwnsSnooze({

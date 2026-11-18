@@ -8,7 +8,11 @@ import {
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  executeAtomQuery,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { sessionPermissionsUnavailableMessage } from "@t3tools/shared/authScopeOptions";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
@@ -29,6 +33,7 @@ import { useRemoteConnections } from "../../state/use-remote-environment-registr
 import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
 import { EnvironmentRoutesSection } from "./EnvironmentRoutesSection";
 import { OutdatedServerUpdateSection } from "./OutdatedServerUpdateSection";
+import { HeaderUsageSettings } from "../usage/HeaderUsageSettings";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
@@ -36,6 +41,7 @@ import {
   canMaintainEnvironment,
   canUpdateEnvironmentProvider,
   supportsEnvironmentUpdate,
+  ENVIRONMENT_RELEASES_PAGE_URL,
 } from "./environment-maintenance";
 import { environmentReleaseCheckAtom, releaseCheckValue } from "./environmentUpdateCheck";
 
@@ -122,12 +128,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
     if (disabled || !targetVersion || !capabilities || !supportsEnvironmentUpdate(capabilities))
       return;
     Dialog.alert(
-      `Update ${environment?.environmentLabel ?? "environment"}?`,
-      `Install T3 Code ${targetVersion}. ${capabilities.serverSelfUpdate === "desktop-managed" ? "The desktop app will close and relaunch." : "The server will restart and reconnect."} Running threads may be interrupted.`,
+      `更新 ${environment?.environmentLabel ?? "环境"}？`,
+      `安装 T3 Code ${targetVersion}。${capabilities.serverSelfUpdate === "desktop-managed" ? "桌面应用将关闭并重新启动。" : "服务器将重启并重新连接。"} 正在运行的会话可能会中断。`,
       [
-        { text: "Cancel", style: "cancel" },
+        { text: "取消", style: "cancel" },
         {
-          text: "Update",
+          text: "更新",
           onPress: () =>
             void run("server", async () => {
               if (
@@ -180,12 +186,10 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         {!environment ? (
-          <Text className="text-base text-foreground-muted">
-            This environment is no longer saved on this device.
-          </Text>
+          <Text className="text-base text-foreground-muted">{"此设备已不再保存该环境。"}</Text>
         ) : (
           <>
-            <SettingsSection title="Connection">
+            <SettingsSection title="连接">
               <ConnectionEnvironmentRow
                 environment={environment}
                 expanded={connectionExpanded}
@@ -210,7 +214,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
               />
             ) : !connected ? (
               <Text className="px-2 text-sm text-foreground-muted">
-                Connect this environment to manage it.
+                {"请连接此环境以进行管理。"}
               </Text>
             ) : !allowed ? (
               <Text className="px-2 text-sm text-foreground-muted">
@@ -245,9 +249,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                     ) : null}
                     {running ? (
                       <Text className="text-sm text-foreground-muted">
-                        {updateState.stage === "resuming"
-                          ? "Restarting and reconnecting…"
-                          : "Downloading update…"}
+                        {updateState.stage === "resuming" ? "正在重启并重新连接…" : "正在下载更新…"}
                       </Text>
                     ) : updateState.status === "failed" ? (
                       <Text selectable className="text-sm text-danger-foreground">
@@ -257,8 +259,10 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                     {checkedRelease && !updatesDenial ? (
                       <Text className="text-sm text-foreground-muted">
                         {checkedRelease.targetVersion
-                          ? `Version ${checkedRelease.targetVersion} is available.`
-                          : "You are up to date."}
+                          ? `版本 ${checkedRelease.targetVersion} 已可用。`
+                          : checkedRelease.manualCheckRequired
+                            ? "此环境无法确认适用更新，请查看发布页手动核对。"
+                            : "未发现适用于此环境的更新。"}
                       </Text>
                     ) : null}
                     {checkedRelease?.targetVersion &&
@@ -266,8 +270,8 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                     !supportsEnvironmentUpdate(config.environment.capabilities) ? (
                       <Text className="text-sm text-foreground-muted">
                         {capabilities?.serverSelfUpdate === "desktop-managed"
-                          ? "Update the desktop app on this machine."
-                          : "Update and restart T3 Code on this machine."}
+                          ? "更新此电脑上的桌面应用。"
+                          : "更新并重启此电脑上的 T3 Code。"}
                       </Text>
                     ) : null}
                   </View>
@@ -281,20 +285,50 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                   {updatesDenial ? null : (
                     <SettingsActionRow
                       icon="arrow.clockwise"
-                      label="Check for updates"
+                      label="检查更新"
                       disabled={disabled}
                       loading={pending === "check"}
                       onPress={() => {
                         if (disabled) return;
                         const fromVersion = config.environment.serverVersion;
                         void run("check", async () => {
-                          const exit = await checkRelease(async () => fromVersion);
+                          const exit = await checkRelease({
+                            readServerVersion: async () => fromVersion,
+                            ...(capabilities?.npmReleaseLookup === true
+                              ? {
+                                  lookupRelease: async (signal) => {
+                                    const result = await executeAtomQuery(
+                                      appAtomRegistry,
+                                      serverEnvironment.npmRelease({
+                                        environmentId,
+                                        input: { spec: "latest" },
+                                      }),
+                                      { signal, refresh: true, reportFailure: false },
+                                    );
+                                    if (result._tag === "Failure")
+                                      throw squashAtomCommandFailure(result);
+                                    return result.value;
+                                  },
+                                }
+                              : {}),
+                          });
                           // `run` owns the error message, so a failed lookup rethrows to it.
                           if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
                         });
                       }}
                     />
                   )}
+                  {checkedRelease?.manualCheckRequired && !updatesDenial ? (
+                    <SettingsActionRow
+                      icon="arrow.up.right"
+                      label="查看 GitHub 发布页"
+                      onPress={() =>
+                        void Linking.openURL(ENVIRONMENT_RELEASES_PAGE_URL).catch(() =>
+                          setError("无法打开发布页，请检查网络后重试。"),
+                        )
+                      }
+                    />
+                  ) : null}
                   {checkedRelease?.targetVersion &&
                   !updatesDenial &&
                   supportsEnvironmentUpdate(config.environment.capabilities) ? (
@@ -307,10 +341,10 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                     />
                   ) : null}
                 </SettingsSection>
-                <SettingsSection title="Providers">
+                <SettingsSection title="服务提供方">
                   <SettingsActionRow
                     icon="arrow.clockwise"
-                    label="Refresh providers"
+                    label="刷新服务提供方"
                     disabled={busy || !canRead}
                     loading={pending === "refresh"}
                     onPress={() => {
@@ -343,11 +377,9 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                             </Text>
                           </View>
                           <Text className="text-sm text-foreground-muted">
-                            {provider.installed
-                              ? (provider.version ?? "Version unknown")
-                              : "Not installed"}
+                            {provider.installed ? (provider.version ?? "版本未知") : "未安装"}
                             {provider.versionAdvisory?.latestVersion
-                              ? ` · Latest ${provider.versionAdvisory.latestVersion}`
+                              ? ` · 最新版本 ${provider.versionAdvisory.latestVersion}`
                               : ""}
                           </Text>
                           {provider.updateState && provider.updateState.status !== "idle" ? (
@@ -360,7 +392,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                               }
                             >
                               {provider.updateState.message ??
-                                `Update ${provider.updateState.status}`}
+                                `更新 ${provider.updateState.status}`}
                             </Text>
                           ) : null}
                           {provider.compatibilityAdvisory?.message ? (
@@ -376,7 +408,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                           {provider.versionAdvisory?.status === "behind_latest" &&
                           !provider.versionAdvisory.canUpdate ? (
                             <Text className="text-sm text-foreground-muted">
-                              Update this provider on the environment's machine.
+                              {"更新环境所在电脑上的此服务提供方。"}
                             </Text>
                           ) : null}
                         </View>
@@ -387,6 +419,15 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                             disabled={busy || !canManageProviders}
                             loading={pending === provider.instanceId}
                             onPress={() => requestProviderUpdate(provider)}
+                          />
+                        ) : null}
+                        {config.environment.capabilities.headerUsage &&
+                        (provider.driver === "codex" || provider.driver === "claudeAgent") ? (
+                          <HeaderUsageSettings
+                            environmentId={environmentId}
+                            instanceId={provider.instanceId}
+                            driver={provider.driver}
+                            disabled={busy || !canManageProviders}
                           />
                         ) : null}
                       </View>

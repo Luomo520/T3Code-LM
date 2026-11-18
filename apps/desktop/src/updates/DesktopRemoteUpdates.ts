@@ -182,6 +182,17 @@ export const listen: Effect.Effect<
           requestId: request.requestId,
           channel: request.channel,
         });
+        if (request.channel === "nightly") {
+          yield* publishReport(
+            yield* updates.getState,
+            {
+              outcome: "failed",
+              reason: "T3Code-LM has a single release channel; Nightly updates are unavailable.",
+            },
+            request.requestId,
+          );
+          return;
+        }
         // A switch saves its track first, so the step machine never sees the old track's offer.
         // The saved track is the user's intent and stays even if this request fails: a track saved
         // toward Stable never offers an older build outside a guarded switch.

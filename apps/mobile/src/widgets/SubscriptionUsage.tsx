@@ -212,8 +212,7 @@ function SubscriptionUsage(
                   ),
                 ]}
               >
-                {window.remaining}% left
-              </Text>
+                {window.remaining}{"% 剩余"}</Text>
             </HStack>
             <ProgressView value={window.remaining / 100} modifiers={barModifiers} />
             {!compact ? (
@@ -230,9 +229,7 @@ function SubscriptionUsage(
             modifiers={[font({ textStyle: "caption2" }), foregroundStyle(secondary), lineLimit(1)]}
           >
             {(period === "auto" ? (provider.totalWindows ?? windows.length) : windows.length) -
-              limit}{" "}
-            more in T3
-          </Text>
+              limit}{" "}{"在 T3 中查看更多"}</Text>
         ) : null}
       </VStack>
     );
@@ -252,9 +249,7 @@ function SubscriptionUsage(
       ]}
     >
       {providers.length === 0 ? (
-        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(secondary)]}>
-          No subscription limits available.
-        </Text>
+        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(secondary)]}>{"没有可用的订阅额度信息。"}</Text>
       ) : compact ? (
         <VStack alignment="leading" spacing={accessory || dense ? 4 : 8}>
           {columns}

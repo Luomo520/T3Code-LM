@@ -13,7 +13,7 @@ export function BrowserPreviewButton(props: {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={props.count === 1 ? "View browser" : `View ${props.count} browser tabs`}
-      accessibilityHint="Watch and control browser tabs open in this thread"
+      accessibilityHint="查看并操作此任务中的浏览器标签页"
       onPress={props.onPress}
       className={
         compact

@@ -203,7 +203,7 @@ function DeviceStreamDocumentView({
           </AppText>
           {status === "error" ? (
             <View className="items-center">
-              <Button label="Reconnect" tone="secondary" onPress={onRetry} />
+              <Button label="重新连接" tone="secondary" onPress={onRetry} />
             </View>
           ) : null}
         </View>

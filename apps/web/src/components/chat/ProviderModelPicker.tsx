@@ -1,3 +1,4 @@
+import "./model-picker.css";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
@@ -193,7 +194,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     const column = popupRef.current?.querySelector("[data-model-picker-effort]");
     const level =
       column?.querySelector<HTMLElement>(
-        '[data-effort-level][aria-checked="true"]:not(:disabled)',
+        '[data-effort-level]:is([aria-checked="true"],input):not(:disabled)',
       ) ?? column?.querySelector<HTMLElement>("[data-effort-level]:not(:disabled)");
     // No aria-checked here: an On switch is checked but is not where focus belongs.
     const row =
@@ -437,6 +438,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       </PopoverTrigger>
       <PopoverPopup
         {...(props.isComposerOwned ? composerFloatingLayerProps : {})}
+        tabIndex={-1}
         ref={(popup) => {
           popupRef.current = popup;
           const unlock = lockBackgroundScroll(popup);
@@ -445,33 +447,35 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             unlock?.();
           };
         }}
-        initialFocus={searchInputRef}
+        initialFocus={popupRef}
         align={props.popupAlign ?? "start"}
         // Docked, the popup opens above the composer and slides over it when that space is short,
         // so a short window gets its full height (Floating UI sizes to the viewport) instead of a sliver.
         {...(docked
-          ? { side: "top" as const, collisionAvoidance: { side: "shift", align: "shift" } as const }
+          ? { side: "top" as const, collisionAvoidance: { side: "flip", align: "shift" } as const }
           : {})}
-        className="before:hidden"
+        className="model-picker-popup dark before:hidden"
         padding="none"
         touchBackdrop
       >
         {props.effortColumn ? (
           <DockedPickerContext value={{ modelLabel: triggerTitle }}>
-            <div className="flex max-h-(--available-height) flex-col">
+            <div className="flex max-h-(--available-height) flex-col overflow-y-auto overscroll-contain">
               {/* One fixed height, so a model with more options never resizes the popup. Short
                   windows shrink it and keep the footer. */}
-              <div className="flex h-86.5 min-h-0 max-sm:h-auto max-sm:flex-col">
+              <div className="flex min-h-0 flex-col">
                 {picker}
                 <div
                   data-model-picker-effort
-                  className="flex min-h-0 w-48 flex-col sm:shrink-0 border-l border-border/70 bg-muted/40 max-sm:h-64 max-sm:w-full max-sm:border-t max-sm:border-l-0"
+                  className="flex min-h-0 w-full flex-col border-t border-border/70"
                   onKeyDown={(event) => {
+                    if (event.target instanceof HTMLInputElement && event.target.type === "range") return;
                     if (event.key !== "ArrowLeft" || event.altKey || event.ctrlKey || event.metaKey)
                       return;
                     event.preventDefault();
                     event.stopPropagation();
-                    searchInputRef.current?.focus();
+                    if (searchInputRef.current?.offsetParent !== null) searchInputRef.current?.focus();
+                    else popupRef.current?.querySelector<HTMLButtonElement>("[data-model-search-toggle]")?.click();
                   }}
                 >
                   {props.effortColumn}

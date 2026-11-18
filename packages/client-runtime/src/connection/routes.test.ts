@@ -11,6 +11,7 @@ import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions
 import { BearerConnectionTarget, RelayConnectionTarget } from "./model.ts";
 import {
   connectionRouteId,
+  preferLanRoutes,
   connectionRouteKind,
   connectionRouteLabel,
   credentialConnectionId,
@@ -66,6 +67,54 @@ function learned(id: string, httpBaseUrl: string): ConnectionRoute {
 }
 
 describe("connection routes", () => {
+  it("prefers the last successful LAN without promoting a public route", () => {
+    const second = direct("lan2", "http://192.168.1.11:3773/");
+    const firstProfile = Option.getOrThrow(LAN.profile) as BearerConnectionProfile;
+    const secondProfile = Option.getOrThrow(second.profile) as BearerConnectionProfile;
+    const entry = entryWithRoutes({ target: RELAY.target, profile: RELAY.profile, enabled: true }, [
+      RELAY,
+      {
+        ...LAN,
+        profile: Option.some(
+          new BearerConnectionProfile({ ...firstProfile, lastConnectedAtEpochMs: 10 }),
+        ),
+      },
+      PUBLIC,
+      {
+        ...second,
+        profile: Option.some(
+          new BearerConnectionProfile({ ...secondProfile, lastConnectedAtEpochMs: 20 }),
+        ),
+      },
+    ]);
+    const ids = (value: ConnectionCatalogEntry) =>
+      [value.target, ...(value.alternateRoutes ?? []).map((route) => route.target)].map(
+        connectionRouteId,
+      );
+    expect(ids(preferLanRoutes(entry))).toEqual(["lan2", "lan", "public", "relay"]);
+    expect(ids(preferLanRoutes(entry, "lan"))).toEqual(["lan", "lan2", "public", "relay"]);
+    expect(ids(preferLanRoutes(entry, "public"))).toEqual(["lan2", "lan", "public", "relay"]);
+  });
+
+  it("keeps loopback ahead of LAN and ignores invalid success timestamps", () => {
+    const loopback = direct("local", "http://127.0.0.1:3773/");
+    const invalid = {
+      ...LAN,
+      profile: Option.some(
+        new BearerConnectionProfile({
+          ...(Option.getOrThrow(LAN.profile) as BearerConnectionProfile),
+          lastConnectedAtEpochMs: Infinity,
+        }),
+      ),
+    };
+    const entry = entryWithRoutes({ target: RELAY.target, profile: RELAY.profile, enabled: true }, [
+      invalid,
+      loopback,
+      RELAY,
+    ]);
+    expect(connectionRouteId(preferLanRoutes(entry, "lan").target)).toBe("local");
+  });
+
   it("classifies direct routes by address", () => {
     expect(connectionRouteKind(LAN)).toBe("lan");
     // Tailscale, Cloudflare WARP and Mesh, and other VPNs share 100.64.0.0/10.

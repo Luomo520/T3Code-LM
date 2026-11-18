@@ -1,3 +1,9 @@
+import { headerUsageRequestTiming } from "../../usage/headerUsageRequestTiming.ts";
+import {
+  headerUsageTiming,
+  HEADER_USAGE_TIMING_VERSION,
+  HEADER_USAGE_TIMING_BASIS,
+} from "../../usage/headerUsageTiming.ts";
 import { pipe } from "effect/Function";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
@@ -1625,27 +1631,40 @@ export function makeCodexAppServerProtocolLogger(input: {
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }): CodexClient.CodexAppServerClientOptions["logger"] | undefined {
   const { nativeEventLogger } = input;
-  if (nativeEventLogger === undefined) {
-    return undefined;
-  }
-
   const routeThread = makeCodexProtocolThreadRouter();
-  return (event) => {
-    if (!shouldPersistProviderEvent("native", event)) return Effect.void;
-    const threadId = event.stage === "decoded" ? routeThread(event.direction, event.payload) : null;
-    return nativeEventLogger
-      .write(
-        {
-          provider: CODEX_PROVIDER,
-          protocol: "codex.app-server",
-          kind: "protocol",
-          providerSessionId: input.providerSessionId,
-          event: redactCodexProtocolValue(boundProviderEventForLogging(event)),
-        },
-        threadId,
-      )
-      .pipe(Effect.ignore);
-  };
+  return (event) =>
+    Effect.sync(() => {
+      const now = performance.now();
+      headerUsageRequestTiming.observe(event, now);
+      return headerUsageTiming.observe(event, now);
+    }).pipe(
+      Effect.flatMap((sample) => {
+        if (!nativeEventLogger || !shouldPersistProviderEvent("native", event)) return Effect.void;
+        const threadId =
+          event.stage === "decoded" ? routeThread(event.direction, event.payload) : null;
+        return nativeEventLogger
+          .write(
+            {
+              provider: CODEX_PROVIDER,
+              protocol: "codex.app-server",
+              kind: "protocol",
+              providerSessionId: input.providerSessionId,
+              ...(sample === undefined
+                ? {}
+                : {
+                    headerUsageTiming: {
+                      version: HEADER_USAGE_TIMING_VERSION,
+                      basis: HEADER_USAGE_TIMING_BASIS,
+                      sample,
+                    },
+                  }),
+              event: redactCodexProtocolValue(boundProviderEventForLogging(event)),
+            },
+            threadId,
+          )
+          .pipe(Effect.ignore);
+      }),
+    );
 }
 
 function redactCodexProtocolValue(value: unknown): unknown {
@@ -7942,6 +7961,27 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       driver: CODEX_PROVIDER,
                       providerThreadId: turnInput.providerThread.id,
                       providerTurnId: turnInput.providerTurnId,
+                      cause,
+                    }),
+                ),
+              ),
+          ),
+          archiveThread: Effect.fn("CodexAdapterV2.archiveThread")(
+            function* (archiveInput) {
+              const nativeThreadId = yield* getNativeThreadId(archiveInput.providerThread);
+              // Release our writer first. Another client may still hold a writer;
+              // its -32600 is a failure, never evidence that archival succeeded.
+              yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+              yield* client.request("thread/archive", { threadId: nativeThreadId });
+              sessionApprovals.delete(nativeThreadId);
+            },
+            (effect, archiveInput) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterProtocolError({
+                      driver: CODEX_PROVIDER,
+                      detail: `Failed to archive Codex provider thread ${archiveInput.providerThread.id}`,
                       cause,
                     }),
                 ),

@@ -35,9 +35,7 @@ export function BrandMark(props: { readonly compact?: boolean; readonly stageLab
           </View>
         </View>
         {!compact ? (
-          <Text className="text-xs font-medium text-foreground-muted">
-            Mobile control surface for your live coding environments
-          </Text>
+          <Text className="text-xs font-medium text-foreground-muted">{"在手机上管理正在运行的编程环境"}</Text>
         ) : null}
       </View>
     </View>

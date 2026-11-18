@@ -193,7 +193,7 @@ export function PullRequestMergeControls(props: {
             ? `Stop the provider from automatically merging this ${terminology.singular}.`
             : `Merge #${pr.number} into ${pr.baseBranch} using ${method}.`;
     Dialog.alert(title, message, [
-      { text: "Cancel", style: "cancel" },
+      { text: "取消", style: "cancel" },
       {
         text: action === "merge" ? label : title.replace("?", ""),
         onPress: () => void perform(action),
@@ -205,9 +205,9 @@ export function PullRequestMergeControls(props: {
       <SplitButton
         label={
           busy || stateAction.busy
-            ? "Working…"
+            ? "正在运行…"
             : !permissions.connected
-              ? "Reconnect to merge"
+              ? "重新连接以合并"
               : (status?.label ?? label)
         }
         accessibilityLabel={
@@ -238,7 +238,7 @@ export function PullRequestMergeControls(props: {
                   ? [
                       {
                         id: autoAction,
-                        title: pr.autoMergeEnabled ? "Disable auto-merge" : "Enable auto-merge",
+                        title: pr.autoMergeEnabled ? "停用自动合并" : "启用自动合并",
                         image: "clock",
                       },
                     ]
@@ -257,7 +257,7 @@ export function PullRequestMergeControls(props: {
         <Text className="px-1 text-xs text-foreground-muted">{reason}</Text>
       ) : null}
       {stack.error && stack.supportsStackActions ? (
-        <Button label="Retry stack lookup" tone="text" onPress={stack.refresh} />
+        <Button label="重试查找堆叠" tone="text" onPress={stack.refresh} />
       ) : null}
     </View>
   );

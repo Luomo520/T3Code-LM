@@ -192,3 +192,24 @@ describe("composer attachment files", () => {
     expect(released.map((attachment) => attachment.id)).toEqual(["image-1", "file-uploading"]);
   });
 });
+
+it("uses the configured limit for large files and rejects only above it", () => {
+  const limits = {
+    attachmentUploadsCapabilityKnown: true,
+    supportsAttachmentUploads: true,
+    maxFileAttachmentBytes: 256 * 1024 * 1024,
+  };
+  expect(fileAttachmentStagingLimit(limits)).toBe(256 * 1024 * 1024);
+  expect(
+    fileAttachmentCapabilityBlockReason({
+      ...limits,
+      files: [{ name: "large.zip", sizeBytes: 51 * 1024 * 1024 }],
+    }),
+  ).toBeNull();
+  expect(
+    fileAttachmentCapabilityBlockReason({
+      ...limits,
+      files: [{ name: "large.zip", sizeBytes: 256 * 1024 * 1024 + 1 }],
+    }),
+  ).toContain("256");
+});

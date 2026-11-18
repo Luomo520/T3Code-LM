@@ -44,6 +44,7 @@ import {
   resolveMacPasskeySigningConfiguration,
   resolveMergedStageDependencies,
   resolveBuildOptions,
+  resolveWindowsBuildVersion,
   stageWslRuntimeArchive,
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
@@ -540,15 +541,70 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
-          owner: "pingdotgg",
-          repo: "t3code",
+          owner: "Luomo520",
+          repo: "T3Code-LM",
           releaseType: "release",
+          channel: "latest",
         },
       ]);
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+        ),
+      ),
+    ),
+  );
+
+  it("maps numeric build versions to Windows resources without changing the app version", () => {
+    assert.equal(resolveWindowsBuildVersion("0.1.0-1"), "0.1.0.1");
+    assert.equal(resolveWindowsBuildVersion("0.1.0-10"), "0.1.0.10");
+    assert.equal(resolveWindowsBuildVersion("0.1.1-t3usage.25"), "0.1.1-t3usage.25");
+    assert.throws(() => resolveWindowsBuildVersion("0.1.0-65536"), /65535/);
+  });
+
+  it.effect("builds matching Windows installer and portable packages on the fork feed", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.1.0-1",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      assert.equal(config.buildVersion, "0.1.0.1");
+      assert.equal(config.buildNumber, "1");
+      assert.nestedPropertyVal(config, "nsis.oneClick", false);
+      assert.nestedPropertyVal(config, "nsis.allowToChangeInstallationDirectory", true);
+      assert.nestedPropertyVal(config, "nsis.deleteAppDataOnUninstall", false);
+      assert.nestedPropertyVal(config, "nsis.runAfterFinish", false);
+      assert.nestedPropertyVal(
+        config,
+        "nsis.artifactName",
+        "T3Code-LM-${version}-windows-${arch}-installer.${ext}",
+      );
+      assert.equal(config.artifactName, "T3Code-LM-${version}-windows-${arch}-portable.${ext}");
+      assert.deepEqual((config.win as { target: string[] }).target, ["nsis", "zip"]);
+      assert.deepEqual(config.publish, [
+        {
+          provider: "github",
+          owner: "Luomo520",
+          repo: "T3Code-LM",
+          releaseType: "release",
+          channel: "latest",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              GITHUB_REPOSITORY: "pingdotgg/t3code",
+              T3CODE_DESKTOP_UPDATE_REPOSITORY: "other/repo",
+            },
+          }),
         ),
       ),
     ),

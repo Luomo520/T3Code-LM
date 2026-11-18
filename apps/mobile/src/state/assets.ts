@@ -220,3 +220,28 @@ export function useFreshAssetUrl(
   });
   return useAtomValue(atom);
 }
+
+/** An explicit action, never a subscribed query that refreshes credentials while idle. */
+export function useWorkspaceDownloadUrl(
+  environmentId: EnvironmentId | null,
+  resource: AssetResource | null,
+) {
+  const connection = usePreparedConnection(environmentId);
+  const create = useAtomQueryRunner(assetEnvironment.createDownloadUrl, {
+    refresh: true,
+    reportFailure: false,
+  });
+  return async () => {
+    if (!environmentId || !resource || connection._tag !== "Some")
+      throw new Error("环境未连接，请连接后重试。");
+    const result = await create({ environmentId, input: { resource } });
+    if (result._tag !== "Success")
+      throw new Error("无法申请下载授权，请检查文件是否仍存在、连接及文件读取权限。");
+    if (!result.value.download || !result.value.fileName)
+      throw new Error("当前服务端未提供此文件的下载能力。");
+    return {
+      url: new URL(result.value.relativeUrl, connection.value.httpBaseUrl).href,
+      fileName: result.value.fileName,
+    };
+  };
+}

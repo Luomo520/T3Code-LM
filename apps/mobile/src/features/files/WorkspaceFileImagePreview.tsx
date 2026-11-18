@@ -60,7 +60,7 @@ function ResolvedWorkspaceFileImagePreview(props: {
           pointerEvents="none"
           className="absolute inset-0 items-center justify-center bg-card px-6"
         >
-          <EmptyState title="Image unavailable" detail={loadError} />
+          <EmptyState title="图片不可用" detail={loadError} />
         </View>
       ) : null}
       <FilePreviewModal source={preview} onRequestClose={() => setPreview(null)} />
@@ -74,7 +74,7 @@ export function WorkspaceFileImagePreview(props: {
   readonly actionsSource?: MediaActionsSource;
 }) {
   if (props.uri === null) {
-    return <FilePreviewLoading message="Preparing image preview..." background="card" />;
+    return <FilePreviewLoading message="正在准备图片预览…" background="card" />;
   }
 
   return (

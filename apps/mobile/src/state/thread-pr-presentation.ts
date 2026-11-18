@@ -55,7 +55,7 @@ export function presentThreadPr(
     url: pr.url,
     changeRequest,
     label: String(pr.number),
-    accessibilityLabel: `#${pr.number} ${changeRequest.singular} ${isDraft ? "draft" : pr.state}`,
+    accessibilityLabel: `#${pr.number} ${changeRequest.singular} ${isDraft ? "草稿" : pr.state}已关联 `,
     textClassName: isDraft ? "text-foreground-muted" : PR_STATE_TEXT_CLASS[pr.state],
   };
 }
@@ -97,10 +97,10 @@ export function presentThreadLinkedPullRequests(
     label,
     accessibilityLabel:
       badge.kind === "stack"
-        ? `${badge.layers} ${changeRequest.singular}s in stack, ${isDraft ? "draft" : (state ?? "status pending")}`
+        ? `已关联 ${badge.layers} ${changeRequest.singular}s in stack, ${isDraft ? "草稿" : (state ?? "状态待定")}已关联 `
         : linkedCount !== null
-          ? `${linkedCount} linked ${changeRequest.plural}, overall ${badge.state}`
-          : `#${link.number} ${changeRequest.singular} ${state === null ? "status pending" : isDraft ? "draft" : state}`,
+          ? `已关联 ${linkedCount} linked ${changeRequest.plural}, overall ${badge.state}已关联 `
+          : `#${link.number} ${changeRequest.singular} ${state === null ? "状态待定" : isDraft ? "草稿" : state}已关联 `,
     textClassName: state === null || isDraft ? "text-foreground-muted" : PR_STATE_TEXT_CLASS[state],
   };
 }
@@ -124,8 +124,8 @@ export function resolveThreadPrSource(
 
 export function resolveThreadPrBadgeAction(pr: ThreadPrPresentation) {
   return pr.kind === "stack" || pr.others > 0
-    ? { kind: "list" as const, accessibilityLabel: `Show ${pr.accessibilityLabel}` }
-    : { kind: "open" as const, accessibilityLabel: `Open ${pr.accessibilityLabel}` };
+    ? { kind: "list" as const, accessibilityLabel: `显示 ${pr.accessibilityLabel}已关联 ` }
+    : { kind: "open" as const, accessibilityLabel: `打开 ${pr.accessibilityLabel}已关联 ` };
 }
 
 /** Records `value` as the newest entry, evicting the least recently answered beyond `limit`. */

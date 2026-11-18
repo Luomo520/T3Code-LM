@@ -1,3 +1,4 @@
+import { AppText } from "./AppText";
 import { AppActivityIndicator } from "./AppActivityIndicator";
 import { Column, Text as NativeText, RNHostView } from "@expo/ui/jetpack-compose";
 import { use, useState, type ReactNode } from "react";
@@ -39,6 +40,7 @@ export function AndroidScreenHeader(props: {
   readonly title: string;
   readonly titleContent?: ReactNode;
   readonly subtitle?: string | null;
+  readonly subtitleAccessory?: ReactNode;
   readonly actions?: ReadonlyArray<AndroidHeaderAction>;
   readonly leading?: ReactNode;
   readonly trailing?: ReactNode;
@@ -95,7 +97,7 @@ export function AndroidScreenHeader(props: {
             <RNHostView matchContents={{ vertical: true }}>
               <View collapsable={false}>{props.titleContent}</View>
             </RNHostView>
-          ) : !props.subtitle ? (
+          ) : !props.subtitle || props.subtitleAccessory ? (
             <NativeText
               color={colors["--color-header-foreground"]}
               maxLines={1}
@@ -181,6 +183,27 @@ export function AndroidScreenHeader(props: {
           ) : undefined
         }
       />
+      {props.subtitleAccessory ? (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            paddingLeft: 20,
+            paddingRight: 14,
+          }}
+        >
+          <AppText
+            className="text-foreground-muted"
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={{ flex: 1, minWidth: 0, fontSize: 10 }}
+          >
+            {props.subtitle}
+          </AppText>
+          {props.subtitleAccessory}
+        </View>
+      ) : null}
     </View>
   );
 }

@@ -36,7 +36,13 @@ describe("environmentReleaseCheckAtom", () => {
     const atom = environmentReleaseCheckAtom(EnvironmentId.make("env-unmount"));
     const unmount = registry.mount(atom);
 
-    registry.set(atom, async () => "0.0.40");
+    registry.set(atom, {
+      readServerVersion: async () => "0.1.0-1",
+      lookupRelease: async (signal) => {
+        await fetch("https://example.test/remote-release", { signal });
+        return null;
+      },
+    });
     const signal = await fetchStub.called;
     expect(signal.aborted).toBe(false);
 
@@ -53,14 +59,18 @@ describe("environmentReleaseCheckAtom", () => {
     const atom = environmentReleaseCheckAtom(EnvironmentId.make("env-timeout"));
     const unmount = registry.mount(atom);
 
-    registry.set(atom, async () => "0.0.40");
+    registry.set(atom, {
+      readServerVersion: async () => "0.1.0-1",
+      lookupRelease: async (signal) => {
+        await fetch("https://example.test/remote-release", { signal });
+        return null;
+      },
+    });
     const signal = await fetchStub.called;
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(signal.aborted).toBe(true);
-    expect(releaseCheckError(registry.get(atom))).toBe(
-      "Checking for updates timed out. Try again.",
-    );
+    expect(releaseCheckError(registry.get(atom))).toBe("检查更新超时，请重试。");
     unmount();
     flush();
   });

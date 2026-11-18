@@ -163,6 +163,100 @@ export const UsageSummary = Schema.Struct({
 });
 export type UsageSummary = typeof UsageSummary.Type;
 
+export const HeaderUsageInput = Schema.Struct({
+  threadId: Schema.optional(Schema.String),
+  providerInstanceId: Schema.optional(Schema.String),
+  /** Page entry/resume request; the server still enforces account cooldown/backoff. */
+  refresh: Schema.optional(Schema.Boolean),
+});
+export type HeaderUsageInput = typeof HeaderUsageInput.Type;
+
+export const HeaderUsageCounters = Schema.Struct({
+  tokens: Schema.NullOr(Schema.Number),
+  /** Tokens recorded since the start of the server's local calendar day. */
+  todayTokens: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  cacheRate: Schema.NullOr(Schema.Number),
+  recentRate: Schema.NullOr(Schema.Number),
+  lastRate: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  recentSpeed: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  lastSpeed: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  /** Request output rate estimate, including reasoning and first-token wait; never a text-stream sample. */
+  requestSpeed: Schema.optionalKey(
+    Schema.Struct({
+      recent: Schema.NullOr(Schema.Number),
+      last: Schema.NullOr(Schema.Number),
+      sampleAt: Schema.NullOr(Schema.String),
+      stale: Schema.Boolean,
+    }),
+  ),
+  speedSamples: Schema.optionalKey(NonNegativeInt),
+  /** Latest valid measurement, independent of later unmeasurable requests. */
+  speedSampleAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  speedStale: Schema.optionalKey(Schema.Boolean),
+  /** Latest five requests, newest first; all measurements in a row share one request. */
+  recentRequestSamples: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        timestamp: Schema.String,
+        totalTokens: NonNegativeInt,
+        cacheRate: Schema.NullOr(Schema.Number),
+        tokensPerSecond: Schema.NullOr(Schema.Number),
+        estimatedTokensPerSecond: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+      }),
+    ).check(Schema.isMaxLength(5)),
+  ),
+  /** Exact C5 request window, newest first. Absent on older servers. */
+  recentCacheSamples: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        timestamp: Schema.String,
+        inputTokens: NonNegativeInt,
+        cachedInputTokens: Schema.NullOr(NonNegativeInt),
+        cacheRate: Schema.NullOr(Schema.Number),
+      }),
+    ),
+  ),
+  /** Exact t/s5 valid-measurement window; independent of the cache window. */
+  recentSpeedSamples: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        timestamp: Schema.String,
+        outputTokens: NonNegativeInt,
+        seconds: Schema.Number,
+        tokensPerSecond: Schema.Number,
+      }),
+    ),
+  ),
+  recentSamples: NonNegativeInt,
+  partial: Schema.Boolean,
+});
+export type HeaderUsageCounters = typeof HeaderUsageCounters.Type;
+
+export const HeaderUsageSummary = Schema.Struct({
+  providerInstanceId: Schema.NullOr(Schema.String),
+  providerLabel: Schema.String,
+  readAt: Schema.String,
+  localReadAt: Schema.NullOr(Schema.String),
+  localRefreshing: Schema.Boolean,
+  account: Schema.Struct({
+    /** Opaque billing-account fingerprint; never an endpoint or credential. */
+    sourceId: Schema.optionalKey(Schema.String),
+    sourceLabel: Schema.optionalKey(Schema.String),
+    balance: Schema.NullOr(Schema.Number),
+    balanceKind: Schema.Literals(["balance", "quota", "subscription", "unknown"]),
+    currency: Schema.NullOr(Schema.String),
+    totalTokens: Schema.NullOr(Schema.Number),
+    todayCost: Schema.NullOr(Schema.Number),
+    readAt: Schema.NullOr(Schema.String),
+    stale: Schema.Boolean,
+    message: Schema.String,
+    refreshSeconds: Schema.Number,
+  }),
+  conversation: HeaderUsageCounters,
+  allConversations: HeaderUsageCounters,
+});
+export type HeaderUsageSummary = typeof HeaderUsageSummary.Type;
+
 export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageReadError", {
   reason: Schema.Literals(["scanFailed", "invalidWindow"]),
   detail: TrimmedNonEmptyString,

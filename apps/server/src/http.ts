@@ -8,6 +8,7 @@ import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as ByteSize from "effect/ByteSize";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -32,6 +33,7 @@ import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
 import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
+import { externalDownloadMaxBytes, permitsFileDownload } from "./assets/downloadNetworkPolicy.ts";
 import {
   ATTACHMENT_UPLOAD_ROUTE_PREFIX,
   storeAttachmentUpload,
@@ -195,6 +197,21 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
   const isMedia = /^(?:audio|video)\//i.test(headers["Content-Type"] ?? "");
+  let downloadValidator: string | undefined;
+  if (asset.download && mediaFile && mediaInfo) {
+    if (
+      mediaInfo.size !== mediaFile.info.size ||
+      mediaInfo.mtimeNs !== mediaFile.info.mtimeNs ||
+      mediaInfo.ctimeNs !== mediaFile.info.ctimeNs
+    ) {
+      return HttpServerResponse.text("文件已变化，请重新点击下载。", { status: 409 });
+    }
+    // Opaque file-version validator, not a content checksum. All range requests
+    // also revalidate the signed canonical identity and nanosecond timestamps.
+    downloadValidator = `"${mediaInfo.dev}-${mediaInfo.ino}-${mediaInfo.size}-${mediaInfo.mtimeNs}-${mediaInfo.ctimeNs}"`;
+    headers.ETag = downloadValidator;
+    headers["Cache-Control"] = "private, no-store";
+  }
   if (isMedia) {
     // Without file identity, validators cannot guarantee byte equality; attachments must also expire with their URL.
     headers["Cache-Control"] = "private, no-store";
@@ -205,7 +222,11 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   {
     headers["Accept-Ranges"] = "bytes";
     // If-Range requires a matching validator. A full response is safe when we cannot validate it.
-    if (method === "GET" && rangeHeader && ifRangeHeader === undefined) {
+    if (
+      method === "GET" &&
+      rangeHeader &&
+      (ifRangeHeader === undefined || ifRangeHeader === downloadValidator)
+    ) {
       const fs = yield* FileSystem.FileSystem;
       const info = mediaInfo ?? (yield* fs.stat(asset.path));
       const range = assetByteRange(rangeHeader, info.size);
@@ -230,7 +251,7 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
       () => "application/octet-stream",
     );
     headers["Content-Length"] = String(size);
-    if (!isMedia) {
+    if (!isMedia && !asset.download) {
       headers["Last-Modified"] = mediaInfo.mtime.toUTCString();
       headers.ETag = `W/"${mediaInfo.size.toString(16)}-${mediaInfo.mtimeMs.toString(16)}"`;
     }
@@ -449,6 +470,28 @@ export const layerAssetRoute = HttpRouter.add(
           }),
         ),
       );
+    }
+    if ("download" in asset && asset.download) {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const sizeBytes =
+        ("file" in asset ? asset.file?.info.size : undefined) ??
+        (yield* fileSystem.stat(asset.path)).size;
+      const configuredLimit = yield* Config.String("T3CODE_EXTERNAL_DOWNLOAD_MAX_MIB").pipe(
+        Config.withDefault(""),
+      );
+      if (
+        !permitsFileDownload({
+          sizeBytes,
+          source: request.source,
+          headers: request.headers,
+          externalMaxBytes: externalDownloadMaxBytes(configuredLimit),
+        })
+      ) {
+        return HttpServerResponse.text("大文件仅支持局域网直接下载，请连接局域网后重试。", {
+          status: 403,
+          headers: { "cache-control": "private, no-store" },
+        });
+      }
     }
     return yield* assetFileResponse(
       asset,

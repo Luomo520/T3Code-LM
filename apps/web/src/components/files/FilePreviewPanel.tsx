@@ -1,6 +1,8 @@
 import { DownloadIcon, CopyIcon, CheckIcon, Code2Icon, EyeIcon, Table2Icon } from "lucide-react";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Spinner } from "~/components/ui/spinner";
+import { WorkspaceDownloadButton } from "./WorkspaceDownloadButton";
+import { useFileMetadata } from "~/hooks/useFileMetadata";
 import {
   AuthPreviewOperateScope,
   type EditorId,
@@ -58,6 +60,7 @@ import {
 
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
+import { startFileDownload } from "~/lib/fileDownload";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
@@ -415,6 +418,8 @@ function WorkspaceDocumentPreview(props: {
   readonly name: string;
   readonly workspaceMutationId: string | null;
   readonly refreshRevision: number;
+  readonly relativePath?: string | undefined;
+  readonly sizeBytes?: number | undefined;
 }) {
   const resource =
     props.draft && props.document
@@ -456,7 +461,8 @@ function WorkspaceDocumentPreview(props: {
       key={`${revision}:${props.refreshRevision}`}
       name={props.name}
       mimeType="application/octet-stream"
-      sizeBytes={0}
+      sizeBytes={props.sizeBytes ?? 0}
+      relativePath={props.relativePath}
       asset={{ environmentId: props.environmentId, resource }}
       origin="File"
     />
@@ -1158,6 +1164,11 @@ export default function FilePreviewPanel({
     relativePath,
     attachment === undefined && relativePath !== null,
   );
+  const binaryDownloadMetadata = useFileMetadata(
+    file.readError?.failure === "binary_file" || isDocument ? environmentId : null,
+    relativePath ?? "",
+    cwd,
+  );
   const [fileRefreshRevision, setFileRefreshRevision] = useState(0);
   const attemptedPath = file.readError?.resolvedPath ?? file.readError?.operationPath;
   // Folder links fail file reads; retain mutation refresh to detect conversion to files. Host folders own
@@ -1445,6 +1456,18 @@ export default function FilePreviewPanel({
               revealFileManager={revealsInFileManager}
             />
           ) : null}
+          {attachment === undefined && relativePath && !isFolder && canReadFiles ? (
+            <WorkspaceDownloadButton
+              key={`${environmentId}:${cwd}:${relativePath}`}
+              environmentId={environmentId}
+              resource={{
+                _tag: "draft-workspace-file",
+                cwd,
+                path: relativePath,
+                disposition: "attachment",
+              }}
+            />
+          ) : null}
           {canToggleRendered && renderedMode ? (
             <FileSurfaceAction
               label={renderedToggleLabel(renderedMode, rendered)}
@@ -1602,7 +1625,23 @@ export default function FilePreviewPanel({
             />
           ) : relativePath &&
             absolutePath &&
-            (isDocument || file.readError?.failure === "binary_file") ? (
+            !isDocument &&
+            file.readError?.failure === "binary_file" ? (
+            <WorkspaceDownloadButton
+              environmentId={environmentId}
+              resource={{
+                _tag: "draft-workspace-file",
+                cwd,
+                path: relativePath,
+                disposition: "attachment",
+              }}
+              fallback={{
+                name: relativePath.split(/[\\/]/).at(-1) || relativePath,
+                relativePath,
+                sizeBytes: binaryDownloadMetadata?.byteLength,
+              }}
+            />
+          ) : relativePath && absolutePath && isDocument ? (
             <WorkspaceDocumentPreview
               key={`${environmentId}:${absolutePath}`}
               environmentId={environmentId}
@@ -1614,6 +1653,8 @@ export default function FilePreviewPanel({
               name={relativePath.split(/[\\/]/).at(-1) || relativePath}
               workspaceMutationId={workspaceMutationId}
               refreshRevision={fileRefreshRevision}
+              relativePath={isHostFile ? undefined : relativePath}
+              sizeBytes={binaryDownloadMetadata?.byteLength}
             />
           ) : relativePath && file.error && file.data === null ? (
             <div
@@ -1624,6 +1665,14 @@ export default function FilePreviewPanel({
                 <p className="text-destructive">
                   {file.readError ? filePreviewReadErrorMessage(file.readError) : file.error}
                 </p>
+                {file.readError?.failure === "binary_file" ? (
+                  <p className="text-foreground">
+                    {binaryDownloadMetadata?.byteLength !== undefined
+                      ? `${binaryDownloadMetadata.byteLength.toLocaleString()} 字节 · `
+                      : ""}
+                    使用右上方的“下载到本机”按钮保存此文件。
+                  </p>
+                ) : null}
                 {attemptedPath ? (
                   <p className="text-muted-foreground">
                     Attempted path
@@ -1824,14 +1873,10 @@ export function WorkspaceLargeTextPreview(props: {
             void (async () => {
               const url = await refreshAssetUrl();
               if (!url) throw new Error("Reconnect to the environment and try again.");
-              const response = await fetch(url);
-              if (!response.ok) throw new Error("The file could not be loaded. Try again.");
-              const downloadUrl = URL.createObjectURL(await response.blob());
-              setTimeout(() => URL.revokeObjectURL(downloadUrl), 30_000);
-              const anchor = document.createElement("a");
-              anchor.href = downloadUrl;
-              anchor.download = props.name.split(/[\\/]/).at(-1) || props.name;
-              anchor.click();
+              await startFileDownload({
+                url,
+                fileName: props.name.split(/[\\/]/).at(-1) || props.name,
+              });
             })()
               .catch(showError)
               .finally(() => setSaving(false));

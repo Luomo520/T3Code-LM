@@ -129,12 +129,12 @@ function DragHandle(props: {
         accessible
         accessibilityRole="adjustable"
         accessibilityLabel={`Reorder ${props.title}`}
-        accessibilityHint="Move up and Move down reorder within this section. Other actions move between sections."
+        accessibilityHint="上移和下移仅调整当前分区中的顺序，其他操作可将任务移至不同分区。"
         accessibilityState={{ disabled: props.disabled }}
         accessibilityActions={[
           ...props.sectionActions,
-          ...(props.canMoveUp ? [{ name: "decrement", label: "Move up" }] : []),
-          ...(props.canMoveDown ? [{ name: "increment", label: "Move down" }] : []),
+          ...(props.canMoveUp ? [{ name: "decrement", label: "上移" }] : []),
+          ...(props.canMoveDown ? [{ name: "increment", label: "下移" }] : []),
         ]}
         onAccessibilityAction={({ nativeEvent }) => {
           if (props.disabled) return;
@@ -396,13 +396,11 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
             <SafeAreaView style={{ flex: 1 }}>
               <SheetHeader
                 presentation="inline"
-                title="Arrange threads"
+                title="排列任务"
                 onClose={props.onClose}
-                accessibilityLabel="Close arrange threads"
+                accessibilityLabel="关闭任务排列"
               />
-              <Text className="px-5 pb-3 text-sm text-foreground-muted">
-                Drag to reorder, pin, or settle. Changes save when you drop.
-              </Text>
+              <Text className="px-5 pb-3 text-sm text-foreground-muted">{"拖动以排序、置顶或收起，松手后保存更改。"}</Text>
               <View
                 onLayout={(event) => {
                   geometry.current.height = event.nativeEvent.layout.height;

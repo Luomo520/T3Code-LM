@@ -69,7 +69,24 @@ vi.mock("../threads/thread-settings-options", () => ({
   withManagedRuntimeModeLimits: (choices: readonly unknown[]) => choices,
 }));
 vi.mock("../../components/ui/ScreenScrollView", () => ({ ScreenScrollView: Children }));
-vi.mock("../../components/ui/AppText", () => ({ AppText: Children }));
+vi.mock("../../components/ui/AppText", () => ({
+  AppText: Children,
+  AppTextInput: (props: {
+    accessibilityLabel: string;
+    defaultValue: string;
+    editable: boolean;
+    onChangeText: (text: string) => void;
+    onEndEditing: () => void;
+  }) => (
+    <input
+      aria-label={props.accessibilityLabel}
+      defaultValue={props.defaultValue}
+      disabled={!props.editable}
+      onChange={(event) => props.onChangeText(event.target.value)}
+      onBlur={props.onEndEditing}
+    />
+  ),
+}));
 vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
@@ -142,6 +159,8 @@ vi.mock("./settings-environment-filter", () => ({
 }));
 
 import {
+  SettingsEnvironmentSourceControlRouteScreen,
+  SettingsEnvironmentMaintenanceRouteScreen,
   SettingsThreadsRouteScreen,
   SettingsWorktreesRouteScreen,
 } from "./SettingsServerControlsRouteScreen";
@@ -158,7 +177,11 @@ function environment(environmentId: string, label: string) {
         sidebarAutoSettleOnMerge: false,
       },
       environment: {
-        capabilities: { projectSettingsOverrides: true, threadAutoSettlement: true },
+        capabilities: {
+          projectSettingsOverrides: true,
+          threadAutoSettlement: true,
+          configurableAttachmentLimit: true,
+        },
       },
     },
   };
@@ -235,4 +258,42 @@ describe("SettingsServerControlsRouteScreen", () => {
     )!;
     expect(autoSettle.disabled).toBe(true);
   });
+});
+
+it("saves the attachment limit on finished editing and rejects invalid input", async () => {
+  act(() => root.render(<SettingsEnvironmentMaintenanceRouteScreen />));
+  const input = container.querySelector<HTMLInputElement>(
+    'input[aria-label="单个附件大小上限（MiB）"]',
+  )!;
+  const setValue = (value: string) => {
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  setValue("0");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(mocks.updateSettings).not.toHaveBeenCalled();
+  setValue("256");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+    environmentId: "local",
+    input: { patch: { attachmentMaxFileSizeMiB: 256 } },
+  });
+});
+
+it("disables the attachment limit for project scope or old servers", () => {
+  mocks.projectSelected = true;
+  act(() => root.render(<SettingsEnvironmentMaintenanceRouteScreen />));
+  expect(
+    container.querySelector<HTMLInputElement>('input[aria-label="单个附件大小上限（MiB）"]')!
+      .disabled,
+  ).toBe(true);
+  mocks.projectSelected = false;
+  mocks.targets[0]!.serverConfig.environment.capabilities.configurableAttachmentLimit = false;
+  act(() => root.render(<SettingsEnvironmentMaintenanceRouteScreen />));
+  expect(
+    container.querySelector<HTMLInputElement>('input[aria-label="单个附件大小上限（MiB）"]')!
+      .disabled,
+  ).toBe(true);
 });

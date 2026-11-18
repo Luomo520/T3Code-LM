@@ -54,7 +54,7 @@ export function PullRequestDescription(props: {
   return (
     <View className="gap-5">
       <View className="gap-3">
-        <PullRequestSectionHeading>Description</PullRequestSectionHeading>
+        <PullRequestSectionHeading>{"描述"}</PullRequestSectionHeading>
         {props.markdown.trim() ? (
           <View className="overflow-hidden">
             <View
@@ -136,13 +136,13 @@ export function PullRequestDescription(props: {
             ) : null}
           </View>
         ) : (
-          <Text className="text-sm text-foreground-muted">No description provided.</Text>
+          <Text className="text-sm text-foreground-muted">{"未提供描述。"}</Text>
         )}
         {props.footer}
       </View>
       {content.attachments.length ? (
         <View className="gap-3">
-          <PullRequestSectionHeading>Attachments</PullRequestSectionHeading>
+          <PullRequestSectionHeading>{"附件"}</PullRequestSectionHeading>
           <ScrollView
             horizontal
             keyboardShouldPersistTaps="always"

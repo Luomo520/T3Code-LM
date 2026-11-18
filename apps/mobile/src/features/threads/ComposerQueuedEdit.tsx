@@ -15,13 +15,11 @@ export function ComposerQueuedEditBanner(props: {
   return (
     <View className="flex-row items-center gap-2 px-4 pb-2">
       <SymbolView name="pencil" size={12} tintColorClassName="accent-foreground-muted" />
-      <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-        Editing queued message
-      </Text>
+      <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>{"正在编辑队列消息"}</Text>
       <Button
-        label="Cancel"
+        label="取消"
         tone="text"
-        accessibilityLabel="Cancel editing queued message"
+        accessibilityLabel="取消编辑排队消息"
         disabled={props.saving}
         onPress={props.onCancel}
       />

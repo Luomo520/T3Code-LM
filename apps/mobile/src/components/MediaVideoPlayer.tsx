@@ -111,19 +111,19 @@ function LoadedMediaVideo(props: {
       />
       {loadState === "error" || (loadState === "complete" && status === "error") ? (
         <View className="absolute inset-0 items-center justify-center gap-2 bg-black px-4">
-          <AppText className="text-center text-sm text-white/80">Video unavailable</AppText>
+          <AppText className="text-center text-sm text-white/80">{"视频不可用"}</AppText>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Retry video"
+            accessibilityLabel="重试播放视频"
             onPress={() => setAttempt((value) => value + 1)}
             className="min-h-11 justify-center px-4"
           >
-            <AppText className="text-sm text-white">Retry</AppText>
+            <AppText className="text-sm text-white">{"重试"}</AppText>
           </Pressable>
         </View>
       ) : loadState === "pending" || status === "loading" ? (
         <View pointerEvents="none" className="absolute inset-0 items-center justify-center">
-          <AppActivityIndicator color="#ffffff" accessibilityLabel="Loading video" />
+          <AppActivityIndicator color="#ffffff" accessibilityLabel="正在加载视频" />
         </View>
       ) : null}
     </View>
@@ -231,7 +231,7 @@ function MediaVideoPlayerContent(props: MediaVideoPlayerProps) {
             {props.unavailable ? (
               <AppText className="text-center text-sm text-white/80">{unavailableText}</AppText>
             ) : props.uri === null ? (
-              <AppActivityIndicator color="#ffffff" accessibilityLabel="Loading video" />
+              <AppActivityIndicator color="#ffffff" accessibilityLabel="正在加载视频" />
             ) : (
               <View className="size-12 items-center justify-center rounded-full bg-black/60">
                 <SymbolView name="play" size={28} tintColor="#ffffff" type="monochrome" />

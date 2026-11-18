@@ -182,7 +182,7 @@ export function NewTaskEnvironmentPickerRouteScreen() {
   const insets = useSafeAreaInsets();
   return (
     <View className="flex-1 bg-sheet" collapsable={false}>
-      <AppBar title="Environment" hideBottomBorder onBack={() => navigation.goBack()} />
+      <AppBar title="环境" hideBottomBorder onBack={() => navigation.goBack()} />
       <ScreenContent>
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
@@ -356,7 +356,7 @@ export function BranchPickerScreen(props: {
   const search: AppBarSearch = {
     value: props.query,
     onChangeText: props.onQueryChange,
-    placeholder: "Find a branch",
+    placeholder: "查找分支",
     clearAccessibilityLabel: "Clear branch search",
     mode: "inline",
     compactToolbar: true,
@@ -399,7 +399,7 @@ export function BranchPickerScreen(props: {
     >
       <ToggleRow
         onValueChange={props.worktree.onChangeStartFromOrigin}
-        title="Start from remote"
+        title="从远程开始"
         value={props.worktree.startFromOrigin}
       />
     </View>
@@ -433,7 +433,7 @@ export function BranchPickerScreen(props: {
           </Text>
           {!props.loading && props.error ? (
             <View className="self-center">
-              <Button label="Try again" tone="secondary" onPress={props.onRefresh} />
+              <Button label="重试" tone="secondary" onPress={props.onRefresh} />
             </View>
           ) : null}
         </View>

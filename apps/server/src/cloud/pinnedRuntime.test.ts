@@ -29,8 +29,9 @@ import {
 } from "./pinnedRuntime.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
-const version = "1.2.3";
-const archiveName = `t3-${version}-linux-x64.tar.gz`;
+const version = "1.2.3-1";
+const archiveName = `T3Code-LM-${version}-linux-x64-server.tar.gz`;
+const manifestFile = "T3Code-LM-release.json";
 const archiveBytes = new TextEncoder().encode("not really a tarball");
 const archiveHex = (bytes: Uint8Array) =>
   Effect.promise(() => crypto.subtle.digest("SHA-256", bytes)).pipe(
@@ -38,13 +39,35 @@ const archiveHex = (bytes: Uint8Array) =>
       Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
     ),
   );
-const validChecksums = archiveHex(archiveBytes).pipe(
-  Effect.map((hex) => `${hex}  ${archiveName}\n`),
-);
-const releaseHttpClient = (checksums: string, requests: string[] = []) =>
+const releaseManifest = (sha256: string, sizeBytes = archiveBytes.byteLength) =>
+  JSON.stringify({
+    schemaVersion: 1,
+    product: "T3Code-LM",
+    repository: "Luomo520/T3Code-LM",
+    channel: "release",
+    tag: `v${version}`,
+    sourceCommit: "a".repeat(40),
+    assets: [
+      {
+        platform: "linux",
+        arch: "x64",
+        kind: "server",
+        productVersion: "1.2.3",
+        build: 1,
+        fileName: archiveName,
+        sizeBytes,
+        sha256,
+        url: `https://github.com/Luomo520/T3Code-LM/releases/download/v${version}/${archiveName}`,
+      },
+    ],
+  });
+const validManifest = archiveHex(archiveBytes).pipe(Effect.map(releaseManifest));
+const releaseHttpClient = (manifest: string, requests: string[] = []) =>
   HttpClient.make((request) => {
     requests.push(request.url);
-    const body = new URL(request.url).pathname.endsWith("/SHA256SUMS") ? checksums : archiveBytes;
+    const body = new URL(request.url).pathname.endsWith(`/${manifestFile}`)
+      ? manifest
+      : archiveBytes;
     return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body)));
   });
 const extractingRunner = (fs: FileSystem.FileSystem, path: Path.Path, commands: string[] = []) =>
@@ -86,7 +109,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         path,
         platform: "linux",
         arch: "x64",
-        httpClient: releaseHttpClient(yield* validChecksums, requests),
+        httpClient: releaseHttpClient(yield* validManifest, requests),
         releaseBaseUrl: "https://releases.example/download",
         runner: extractingRunner(fs, path, commands),
         validate: (staging) =>
@@ -98,7 +121,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       assert.equal(paths.entryPath, path.join(paths.versionDir, "t3"));
       assert.deepEqual(pinnedRuntimeCommand(paths), { command: paths.entryPath, args: [] });
       assert.deepEqual(requests, [
-        `https://releases.example/download/v${version}/SHA256SUMS`,
+        `https://releases.example/download/v${version}/${manifestFile}`,
         `https://releases.example/download/v${version}/${archiveName}`,
       ]);
       assert.deepEqual(commands, ["tar"]);
@@ -112,15 +135,15 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-progress-failed-" });
-      const checksums = yield* validChecksums;
+      const manifest = yield* validManifest;
       const progress: PinnedRuntimeProgress[] = [];
       let cancelled = false;
       const client = HttpClient.make((request) =>
         Effect.succeed(
           HttpClientResponse.fromWeb(
             request,
-            request.url.endsWith("/SHA256SUMS")
-              ? new Response(checksums)
+            request.url.endsWith(`/${manifestFile}`)
+              ? new Response(manifest)
               : new Response(
                   new ReadableStream({
                     start(controller) {
@@ -165,7 +188,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-archive-missing-" });
-      const checksums = yield* validChecksums;
+      const manifest = yield* validManifest;
       const failsWith = (status: number) =>
         ensurePinnedRuntimeInstalled({
           baseDir,
@@ -178,8 +201,8 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
             Effect.succeed(
               HttpClientResponse.fromWeb(
                 request,
-                request.url.endsWith("/SHA256SUMS")
-                  ? new Response(checksums)
+                request.url.endsWith(`/${manifestFile}`)
+                  ? new Response(manifest)
                   : new Response("", { status }),
               ),
             ),
@@ -199,7 +222,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-retry-" });
-      const checksums = yield* validChecksums;
+      const manifest = yield* validManifest;
       const requests: string[] = [];
       const gatewayTimeoutServed = yield* Deferred.make<void>();
       const install = yield* ensurePinnedRuntimeInstalled({
@@ -211,7 +234,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         arch: "x64",
         httpClient: HttpClient.make((request) => {
           requests.push(request.url);
-          const isChecksums = request.url.endsWith("/SHA256SUMS");
+          const isManifest = request.url.endsWith(`/${manifestFile}`);
           if (requests.length === 1) {
             Deferred.doneUnsafe(gatewayTimeoutServed, Effect.void);
             return Effect.succeed(
@@ -219,10 +242,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
             );
           }
           return Effect.succeed(
-            HttpClientResponse.fromWeb(
-              request,
-              new Response(isChecksums ? checksums : archiveBytes),
-            ),
+            HttpClientResponse.fromWeb(request, new Response(isManifest ? manifest : archiveBytes)),
           );
         }),
         runner: extractingRunner(fs, path),
@@ -232,7 +252,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       yield* TestClock.adjust(Duration.seconds(2));
       const paths = yield* Fiber.join(install);
       assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
-      assert.equal(requests.filter((url) => url.endsWith("/SHA256SUMS")).length, 2);
+      assert.equal(requests.filter((url) => url.endsWith(`/${manifestFile}`)).length, 2);
     }),
   );
 
@@ -241,7 +261,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-retry-body-" });
-      const checksums = yield* validChecksums;
+      const manifest = yield* validManifest;
       let archiveRequests = 0;
       const archiveRequested = yield* Deferred.make<void>();
       const install = yield* ensurePinnedRuntimeInstalled({
@@ -252,12 +272,12 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         platform: "linux",
         arch: "x64",
         httpClient: HttpClient.make((request) => {
-          const isChecksums = request.url.endsWith("/SHA256SUMS");
+          const isManifest = request.url.endsWith(`/${manifestFile}`);
           const response = HttpClientResponse.fromWeb(
             request,
-            new Response(isChecksums ? checksums : archiveBytes),
+            new Response(isManifest ? manifest : archiveBytes),
           );
-          if (isChecksums || ++archiveRequests > 1) return Effect.succeed(response);
+          if (isManifest || ++archiveRequests > 1) return Effect.succeed(response);
           const failingBody = Stream.concat(
             Stream.make(archiveBytes.slice(0, 4)),
             Stream.fail(
@@ -327,7 +347,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         path,
         platform: "linux",
         arch: "x64",
-        httpClient: releaseHttpClient(`${"0".repeat(64)}  ${archiveName}\n`),
+        httpClient: releaseHttpClient(releaseManifest("0".repeat(64))),
         runner: extractingRunner(fs, path, commands),
         validate: () => Effect.die("must not validate an unverified archive"),
       }).pipe(Effect.flip);
@@ -335,6 +355,80 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       assert.equal(error.step, "verifying the t3 release archive checksum");
       assert.deepEqual(commands, []);
       assert.deepEqual(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions")), []);
+    }),
+  );
+
+  it.effect("refuses a mismatched release identity before downloading an archive", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-manifest-" });
+      const requests: string[] = [];
+      const commands: string[] = [];
+      const wrongIdentity = (yield* validManifest).replace('"build":1', '"build":2');
+      const error = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(wrongIdentity, requests),
+        runner: extractingRunner(fs, path, commands),
+        validate: () => Effect.die("must not validate another build"),
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, PinnedRuntimeInstallError);
+      assert.equal(error.step, "validating the t3 release manifest");
+      assert.isFalse(isUnpublishedRelease(error));
+      assert.equal(requests.length, 1);
+      assert.deepEqual(commands, []);
+    }),
+  );
+
+  it.effect("refuses a package whose bytes disagree with the manifest size before extracting", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-size-" });
+      const commands: string[] = [];
+      const error = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(
+          releaseManifest(yield* archiveHex(archiveBytes), archiveBytes.byteLength + 1),
+        ),
+        runner: extractingRunner(fs, path, commands),
+        validate: () => Effect.die("must not validate wrong-sized archive"),
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, PinnedRuntimeInstallError);
+      assert.equal(error.step, "verifying the t3 release archive size");
+      assert.deepEqual(commands, []);
+    }),
+  );
+
+  it.effect("rejects invalid runtime versions before touching a directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-boundary-" });
+      const error = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version: "../../outside",
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(""),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.die("must not validate invalid version"),
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, PinnedRuntimeInstallError);
+      assert.equal(error.step, "selecting an exact runtime version");
+      assert.deepEqual(yield* fs.readDirectory(baseDir), []);
     }),
   );
 
@@ -353,7 +447,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         path,
         platform: "linux",
         arch: "x64",
-        httpClient: releaseHttpClient(yield* validChecksums),
+        httpClient: releaseHttpClient(yield* validManifest),
         runner: extractingRunner(fs, path),
         validate: (staging) =>
           Effect.gen(function* () {
@@ -384,7 +478,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         path,
         platform: "linux",
         arch: "x64",
-        httpClient: releaseHttpClient(yield* validChecksums),
+        httpClient: releaseHttpClient(yield* validManifest),
         runner: extractingRunner(fs, path),
         validate: () =>
           Effect.fail(new PinnedRuntimeInstallError({ step: "validating the staged runtime" })),
@@ -416,7 +510,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         path,
         platform: "linux",
         arch: "x64",
-        httpClient: releaseHttpClient(yield* validChecksums),
+        httpClient: releaseHttpClient(yield* validManifest),
         runner: extractingRunner(fs, path),
         validate: () => Effect.void,
       });
@@ -435,7 +529,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       yield* fs.makeDirectory(path.dirname(cached.entryPath), { recursive: true });
       yield* fs.writeFileString(cached.entryPath, "#!/bin/sh\n");
       yield* fs.writeFileString(cached.sentinelPath, `${version}\n`);
-      const install = (checksums: string, requests: string[]) =>
+      const install = (manifest: string, requests: string[]) =>
         ensurePinnedRuntimeInstalled({
           baseDir,
           version,
@@ -443,7 +537,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
           path,
           platform: "linux",
           arch: "x64",
-          httpClient: releaseHttpClient(checksums, requests),
+          httpClient: releaseHttpClient(manifest, requests),
           // A signed mirror URL keeps its query on every file it serves.
           releaseBaseUrl: "https://updates.example.com/t3code/?token=abc",
           requirePublishedRelease: true,
@@ -451,13 +545,16 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
           validate: () => Effect.void,
         });
 
-      const withdrawn = yield* install("", []).pipe(Effect.flip);
-      assert.include(withdrawn.message, `finding ${archiveName} in the t3 release checksums`);
+      const missing = (yield* validManifest)
+        .replaceAll("linux-x64", "linux-arm64")
+        .replace('"arch":"x64"', '"arch":"arm64"');
+      const withdrawn = yield* install(missing, []).pipe(Effect.flip);
+      assert.include(withdrawn.message, `finding ${archiveName} in the t3 release manifest`);
       const requests: string[] = [];
-      assert.equal((yield* install(yield* validChecksums, requests)).entryPath, cached.entryPath);
+      assert.equal((yield* install(yield* validManifest, requests)).entryPath, cached.entryPath);
       // Listed, so the cached runtime is used without downloading it again.
       assert.deepEqual(requests, [
-        `https://updates.example.com/t3code/v${version}/SHA256SUMS?token=abc`,
+        `https://updates.example.com/t3code/v${version}/${manifestFile}?token=abc`,
       ]);
     }),
   );
@@ -481,7 +578,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         path,
         platform: "linux",
         arch: "x64",
-        httpClient: releaseHttpClient(yield* validChecksums, requests),
+        httpClient: releaseHttpClient(yield* validManifest, requests),
         runner: extractingRunner(fs, path),
         validate: (paths) =>
           Effect.gen(function* () {

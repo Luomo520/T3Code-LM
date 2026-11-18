@@ -119,10 +119,13 @@ export interface ServiceState {
 export interface ServiceLauncherContext {
   readonly protocol: SupportedLauncherProtocol;
   readonly childVersion: string;
+  /** Explicit feature bit: older protocol-3/4 launchers cannot restart their child. */
+  readonly restart?: boolean;
   readonly update?: ServiceUpdateRecord;
 }
 
 export type ServiceLauncherChildMessage =
+  | { readonly type: "request-restart"; readonly requestId: string }
   | {
       readonly type: "request-update";
       readonly targetVersion: string;
@@ -134,6 +137,8 @@ export type ServiceLauncherChildMessage =
     };
 
 export type ServiceLauncherParentMessage =
+  | { readonly type: "restart-accepted"; readonly requestId: string }
+  | { readonly type: "restart-rejected"; readonly requestId: string; readonly reason: string }
   | {
       readonly type: "update-accepted";
       readonly updateId: string;
@@ -321,6 +326,7 @@ export function decodeServiceLauncherContext(value: string): ServiceLauncherCont
   ) {
     return undefined;
   }
+  if (parsed.restart !== undefined && typeof parsed.restart !== "boolean") return undefined;
   const update = parsed.update === undefined ? undefined : decodeServiceUpdate(parsed.update);
   if (parsed.update !== undefined && update === undefined) return undefined;
   const selectedVersion =
@@ -335,6 +341,7 @@ export function decodeServiceLauncherContext(value: string): ServiceLauncherCont
   return {
     protocol: parsed.protocol,
     childVersion: parsed.childVersion,
+    ...(parsed.restart === undefined ? {} : { restart: parsed.restart }),
     ...(update === undefined ? {} : { update }),
   };
 }
@@ -343,6 +350,13 @@ export function decodeServiceLauncherChildMessage(
   value: unknown,
 ): ServiceLauncherChildMessage | undefined {
   if (!isRecord(value)) return undefined;
+  if (
+    value.type === "request-restart" &&
+    typeof value.requestId === "string" &&
+    value.requestId.trim() !== ""
+  ) {
+    return { type: value.type, requestId: value.requestId };
+  }
   if (
     value.type === "request-update" &&
     typeof value.targetVersion === "string" &&
@@ -359,6 +373,12 @@ export function decodeServiceLauncherParentMessage(
   value: unknown,
 ): ServiceLauncherParentMessage | undefined {
   if (!isRecord(value)) return undefined;
+  if (typeof value.requestId === "string" && value.requestId.trim() !== "") {
+    if (value.type === "restart-accepted") return { type: value.type, requestId: value.requestId };
+    if (value.type === "restart-rejected" && typeof value.reason === "string") {
+      return { type: value.type, requestId: value.requestId, reason: value.reason };
+    }
+  }
   if (value.type === "update-rejected" && typeof value.reason === "string") {
     return { type: value.type, reason: value.reason };
   }

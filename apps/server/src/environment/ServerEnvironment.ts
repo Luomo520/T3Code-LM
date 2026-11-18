@@ -1,3 +1,4 @@
+import { ServerSettingsService } from "../serverSettings.ts";
 import {
   EnvironmentId,
   ORCHESTRATION_PROTOCOL_VERSION,
@@ -184,6 +185,7 @@ const makeIdentity = Effect.gen(function* () {
 
 /** @public */
 export const make = Effect.gen(function* () {
+  const settingsService = yield* ServerSettingsService;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
@@ -220,11 +222,13 @@ export const make = Effect.gen(function* () {
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     ...(databaseMigration === undefined ? {} : { databaseMigration }),
     capabilities: {
+      serverRestart: launcher.restart || (serverConfig.mode === "desktop" && serverConfig.desktopBootstrapToken !== undefined),
       repositoryIdentity: true,
       connectionProbe: true,
       attachmentUploads: true,
       questionAttachments: true,
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
+      configurableAttachmentLimit: true,
       pullRequests: true,
       pullRequestChecks: true,
       linkedThreadRefreshes: true,
@@ -247,6 +251,7 @@ export const make = Effect.gen(function* () {
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,
+      headerUsage: true,
       threadSnooze: true,
       threadForceStop: true,
       environmentThemes: true,
@@ -302,11 +307,20 @@ export const make = Effect.gen(function* () {
 
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    // Publishing opt-in and relay links change at runtime; read the capability per request.
-    getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
-      Effect.map((agentActivityPublishing) => ({
+    // The publish opt-in and relay link change at runtime (`t3 connect
+    // publish`, the client settings toggle), so the capability is read per
+    // descriptor request rather than baked in at startup.
+    getDescriptor: Effect.all([
+      readAgentActivityPublishingActive(secrets),
+      settingsService.getSettings.pipe(Effect.orDie),
+    ]).pipe(
+      Effect.map(([agentActivityPublishing, settings]) => ({
         ...descriptor,
-        capabilities: { ...descriptor.capabilities, agentActivityPublishing },
+        capabilities: {
+          ...descriptor.capabilities,
+          agentActivityPublishing,
+          fileAttachments: { maxUploadBytes: settings.attachmentMaxFileSizeMiB * 1024 * 1024 },
+        },
       })),
     ),
   });

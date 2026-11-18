@@ -358,7 +358,7 @@ export interface ThreadFeedProps {
 }
 
 const USER_MESSAGE_COPY_MENU_ACTIONS = [
-  { id: "copy-prompt-link", title: "Copy prompt link", image: "link" },
+  { id: "copy-prompt-link", title: "复制提示词链接", image: "link" },
 ];
 
 function UserMessageCopyButton(props: {
@@ -368,7 +368,7 @@ function UserMessageCopyButton(props: {
 }) {
   const button = (
     <CopyTextButton
-      accessibilityLabel="Copy message"
+      accessibilityLabel="复制消息"
       text={props.text}
       onCopy={props.onCopy}
       tintColor={props.tintColor}
@@ -418,7 +418,7 @@ function AssistantForkButton(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Fork from this response"
+      accessibilityLabel="从此回复分叉"
       disabled={busy}
       onPress={() => {
         const targetThreadId = ThreadId.make(uuidv4());
@@ -430,7 +430,7 @@ function AssistantForkButton(props: {
             sourceThreadId: props.projectedItem.sourceThreadId,
             targetThreadId,
             runId,
-            title: `${props.sourceTitle} fork`,
+            title: `${props.sourceTitle} 的分支会话`,
             creationSource: "mobile",
           },
         })
@@ -642,7 +642,7 @@ function MessageAttachmentFile(props: {
   const isPdf = isPdfFile(attachment);
   const fileTypeLabel = isPdf
     ? "PDF"
-    : (attachment.name.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toUpperCase() ?? "File");
+    : (attachment.name.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toUpperCase() ?? "文件");
   const sizeLabel = formatAttachmentSize(attachment.sizeBytes);
   const httpBaseUrl = Option.isSome(preparedConnection)
     ? preparedConnection.value.httpBaseUrl
@@ -1144,7 +1144,7 @@ function ArtifactTemplateCard(props: {
       </View>
       {props.onUse ? (
         <Button
-          label="Use template"
+          label="使用模板"
           tone="secondary"
           accessibilityLabel={`Use ${props.template.displayName} template`}
           onPress={() => props.onUse?.(props.template)}
@@ -1500,9 +1500,7 @@ function ThreadAutomationMessageRow(props: {
             tintColorClassName="accent-user-bubble-foreground-muted"
             type="monochrome"
           />
-          <Text className="font-t3-medium text-sm text-user-bubble-foreground-muted">
-            Automation
-          </Text>
+          <Text className="font-t3-medium text-sm text-user-bubble-foreground-muted">{"自动化"}</Text>
           <Text numberOfLines={1} className="min-w-0 shrink text-sm text-user-bubble-foreground">
             {summary}
           </Text>
@@ -1538,9 +1536,7 @@ function ThreadAutomationMessageRow(props: {
               hitSlop={6}
               onPress={() => openSettings(navigation, "SettingsScheduledTasks")}
             >
-              <Text className="font-t3-medium text-xs text-foreground-secondary">
-                Open automation
-              </Text>
+              <Text className="font-t3-medium text-xs text-foreground-secondary">{"打开自动化"}</Text>
             </Pressable>
           ) : null}
           <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
@@ -2033,9 +2029,7 @@ function renderFeedEntry(
           {...(enterAnimated ? { entering: FadeInDown.duration(220) } : {})}
         >
           {presentation.attribution === "t3code" ? (
-            <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
-              Sent by T3 Code
-            </Text>
+            <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">{"由 T3 Code 发送"}</Text>
           ) : null}
           {presentation.guestName !== undefined ? (
             <GuestMessageName name={presentation.guestName} />
@@ -2250,7 +2244,7 @@ function renderFeedEntry(
               entry.pendingMessage.messageId !== props.dispatchingMessageId ? (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Edit pending message"
+                  accessibilityLabel="编辑待处理消息"
                   hitSlop={8}
                   className="size-7 items-center justify-center"
                   onPress={() => {
@@ -2328,7 +2322,7 @@ function renderFeedEntry(
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
             <CopyTextButton
-              accessibilityLabel="Copy message"
+              accessibilityLabel="复制消息"
               text={renderedText}
               tintColor={iconSubtleColor}
               buttonSize={props.replyActionSize.button}
@@ -2383,7 +2377,7 @@ function TurnDiffStat(props: {
   const { files } = props.checkpoint;
   const additions = files.reduce((total, file) => total + file.additions, 0);
   const deletions = files.reduce((total, file) => total + file.deletions, 0);
-  const fileCountLabel = `${files.length} file${files.length === 1 ? "" : "s"} changed`;
+  const fileCountLabel = `${files.length} 个文件${files.length === 1 ? "" : ""}已更改`;
   return (
     <Pressable
       accessibilityRole="button"
@@ -2453,7 +2447,7 @@ function UserMessageContent(props: UserMessageContentProps) {
       });
       return;
     }
-    setSelected({ contextId: reference.contextId, label: record?.label ?? "Context unavailable" });
+    setSelected({ contextId: reference.contextId, label: record?.label ?? "上下文不可用" });
   };
   return (
     <>
@@ -2470,10 +2464,10 @@ function UserMessageContent(props: UserMessageContentProps) {
               (item) => item.contextId === reference.contextId,
             );
             return {
-              title: record?.label ?? "Context unavailable",
+              title: record?.label ?? "上下文不可用",
               actions: [
-                { id: "open-context", title: "Open context" },
-                { id: "copy-context", title: "Copy context", disabled: !record },
+                { id: "open-context", title: "打开上下文" },
+                { id: "copy-context", title: "复制上下文", disabled: !record },
               ],
             };
           },
@@ -3118,10 +3112,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           actions: [
             {
               id: "open-skill",
-              title: "View instructions",
+              title: "查看指令",
               disabled: !enrichedSkillInstructionsPath(skill),
             },
-            { id: "copy-skill", title: "Copy skill" },
+            { id: "copy-skill", title: "复制技能" },
           ],
         };
       }
@@ -3129,10 +3123,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       if (thread) {
         return {
           title:
-            appAtomRegistry.get(environmentThreadShells.threadShellAtom(thread))?.title ?? "Thread",
+            appAtomRegistry.get(environmentThreadShells.threadShellAtom(thread))?.title ?? "任务",
           actions: [
-            { id: "open-thread", title: "Open thread" },
-            { id: "copy-thread-link", title: "Copy link" },
+            { id: "open-thread", title: "打开任务" },
+            { id: "copy-thread-link", title: "复制链接" },
           ],
         };
       }
@@ -3900,7 +3894,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                   endpoints={props.pendingHandoff}
                   iconColor={iconSubtleColor}
                   surfaceColor={screenColor}
-                  label="Context handoff pending"
+                  label="等待交接上下文"
                 />
               ) : null
             }
@@ -3921,7 +3915,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             style={[StyleSheet.absoluteFill, { left: contentLeftInset, right: contentRightInset }]}
           >
             <ThreadFeedPlaceholder
-              title="No conversation yet"
+              title="尚无对话"
               detail="Ask the agent to inspect the repo, run a command, or continue the active thread."
               topInset={topContentInset}
               bottomInset={bottomContentInset}
@@ -3947,9 +3941,9 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
       {props.hasMoreHistory ? (
         <View className="self-center">
           <Button
-            label={props.loading ? "Loading earlier activity…" : "Load earlier activity"}
+            label={props.loading ? "Loading earlier activity…" : "加载更早的活动"}
             tone="secondary"
-            accessibilityLabel="Load earlier activity"
+            accessibilityLabel="加载更早的活动"
             disabled={props.loading}
             onPress={props.onLoadEarlier}
             icon="chevron.up"

@@ -14,6 +14,8 @@ import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } fr
 
 import {
   CLI_RELEASE_CHECKSUMS_FILE,
+  FORK_RELEASE_MANIFEST_FILE,
+  decodeForkReleaseManifest,
   cliArchiveFileName,
   cliArchivePlatformKey,
   cliArchiveTarCommand,
@@ -27,6 +29,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ProcessRunner from "../processRunner.ts";
 import { isExactServiceVersion, parseServiceState, SERVICE_STATE_FILE } from "./serviceProtocol.ts";
 
+const decodeReleaseManifestJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const PINNED_RUNTIME_DIR = "runtime";
 const PINNED_RUNTIME_INSTALL_TIMEOUT = Duration.minutes(10);
 const PINNED_RUNTIME_DOWNLOAD_STALL_TIMEOUT = Duration.minutes(1);
@@ -207,7 +210,7 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
   }
   const httpClient = input.httpClient;
   input.onProgress?.({ stage: "download", received: 0, total: undefined });
-  const { fileName, expected } = yield* publishedArchive(input, platformKey);
+  const { fileName, expected, sizeBytes } = yield* publishedArchive(input, platformKey);
   const archive = yield* fetchReleaseAsset(
     httpClient,
     cliReleaseAssetUrl(input.version, fileName, input.releaseBaseUrl),
@@ -215,6 +218,9 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
     input.onProgress,
   );
   input.onProgress?.({ stage: "verify" });
+  if (sizeBytes !== undefined && archive.byteLength !== sizeBytes) {
+    return yield* new PinnedRuntimeInstallError({ step: "verifying the t3 release archive size" });
+  }
   const digest = yield* Effect.tryPromise({
     try: () => crypto.subtle.digest("SHA-256", archive),
     catch: (cause) =>
@@ -265,6 +271,35 @@ const publishedArchive = Effect.fn("cloud.pinned_runtime.published_archive")(fun
   platformKey: CliArchivePlatformKey,
 ) {
   const fileName = cliArchiveFileName(input.version, platformKey);
+  if (input.platform === "linux") {
+    const bytes = yield* fetchReleaseAsset(
+      input.httpClient,
+      cliReleaseAssetUrl(input.version, FORK_RELEASE_MANIFEST_FILE, input.releaseBaseUrl),
+      "downloading the t3 release manifest",
+    );
+    const json = yield* decodeReleaseManifestJson(new TextDecoder().decode(bytes)).pipe(
+      Effect.mapError(
+        (cause) =>
+          new PinnedRuntimeInstallError({ step: "reading the t3 release manifest", cause }),
+      ),
+    );
+    const manifest = decodeForkReleaseManifest(json, `v${input.version}`);
+    if (manifest === undefined) {
+      return yield* new PinnedRuntimeInstallError({ step: "validating the t3 release manifest" });
+    }
+    const asset = manifest.assets.find(
+      (item) =>
+        item.fileName === fileName &&
+        item.platform === "linux" &&
+        item.kind === "server" &&
+        item.arch === input.arch,
+    );
+    if (asset === undefined)
+      return yield* new PinnedRuntimeInstallError({
+        step: `finding ${fileName} in the t3 release manifest`,
+      });
+    return { fileName, expected: asset.sha256, sizeBytes: asset.sizeBytes };
+  }
   const checksums = parseChecksums(
     new TextDecoder().decode(
       yield* fetchReleaseAsset(
@@ -280,7 +315,7 @@ const publishedArchive = Effect.fn("cloud.pinned_runtime.published_archive")(fun
       step: `finding ${fileName} in the t3 release checksums`,
     });
   }
-  return { fileName, expected };
+  return { fileName, expected, sizeBytes: undefined };
 });
 
 const isPinnedRuntimeInstallError = Schema.is(PinnedRuntimeInstallError);
@@ -415,7 +450,9 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
 });
 
 export const ensurePinnedRuntimeInstalled = (input: PinnedRuntimeInstallInput) =>
-  pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input));
+  isExactServiceVersion(input.version)
+    ? pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input))
+    : Effect.fail(new PinnedRuntimeInstallError({ step: "selecting an exact runtime version" }));
 
 const PINNED_RUNTIME_PRUNED_PREFIX = ".pruned-";
 /**

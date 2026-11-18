@@ -262,7 +262,7 @@ export function ThreadHtmlRender(props: {
               if (uri === null) void refresh().then((next) => next !== null && setUri(next));
             }}
           >
-            <Text className="text-sm text-foreground-muted">Page unavailable</Text>
+            <Text className="text-sm text-foreground-muted">{"页面不可用"}</Text>
           </Pressable>
         ) : (
           <View className="flex-1 items-center justify-center">

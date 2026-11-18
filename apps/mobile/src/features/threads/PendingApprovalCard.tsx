@@ -25,9 +25,9 @@ export interface PendingApprovalCardProps {
 }
 
 const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
-  { decision: "accept", label: "Allow once" },
-  { decision: "acceptForSession", label: "Allow session" },
-  { decision: "decline", label: "Decline" },
+  { decision: "accept", label: "允许一次" },
+  { decision: "acceptForSession", label: "在此会话中允许" },
+  { decision: "decline", label: "拒绝" },
 ];
 
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
@@ -39,9 +39,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const [explanationOpen, setExplanationOpen] = useState(false);
   return (
     <View className="gap-2.5 rounded-[20px] border border-border bg-card-alt p-4">
-      <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
-        Approval needed
-      </Text>
+      <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">{"需要批准"}</Text>
       <Text className="font-t3-bold text-lg text-foreground">
         {props.approval.appName ?? props.approval.requestKind}
       </Text>
@@ -72,10 +70,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
         </Pressable>
       ) : null}
       {!canRespond ? (
-        <Text className="font-sans text-sm leading-5 text-foreground-muted">
-          The provider process for this request is no longer available. Interrupt or restart the run
-          to continue.
-        </Text>
+        <Text className="font-sans text-sm leading-5 text-foreground-muted">{"此请求的服务提供方进程已不可用，请中断或重新启动运行。"}</Text>
       ) : null}
       {warning ? (
         <Text className="font-sans text-xs leading-normal text-warning-foreground">{warning}</Text>
@@ -99,9 +94,7 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
         ))}
       </View>
       {!props.canOperateThread ? (
-        <Text className="font-sans text-xs text-foreground-muted">
-          This connection cannot respond to approvals.
-        </Text>
+        <Text className="font-sans text-xs text-foreground-muted">{"此连接无法响应批准请求。"}</Text>
       ) : null}
     </View>
   );

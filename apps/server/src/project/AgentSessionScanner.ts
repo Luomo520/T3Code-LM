@@ -1,4 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - bounded read-only local rollout stream with inode checks.
 import * as NodeOS from "node:os";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeZlib from "node:zlib";
 
@@ -198,9 +201,11 @@ interface AgentSessionTranscriptMetadata {
   readonly providerInstanceId: ProviderInstanceId;
   readonly fallbackSessionId: string;
   readonly lastActiveAtMs: number;
+  readonly maxMessages?: number;
 }
 
 export interface AgentSessionThreadMessage {
+  readonly nativeId?: string;
   readonly role: "user" | "assistant";
   readonly text: string;
   readonly createdAt: string;
@@ -450,6 +455,71 @@ export function parseAgentSessionTranscript(
   return parseAgentSessionRecords(input, records, claudeFields, 0);
 }
 
+/** Stream field-selected JSON, including huge tool/image rows without retaining them. */
+export async function readAgentSessionTranscriptFile(
+  input: AgentSessionTranscriptMetadata & { readonly filePath: string; readonly expectedCwd: string },
+): Promise<AgentSessionThread | null> {
+  const before = await stat(input.filePath, { bigint: true });
+  if (before.size > BigInt(MAX_IMPORTED_TRANSCRIPT_BYTES)) return null;
+  const records: DecodedTranscriptRecord[] = [];
+  let retainedBytes = 0;
+  let recordBytes = 0;
+  let count = 0;
+  let cwd: string | null = null;
+  let activeTurn = false;
+  const reserve = (bytes: number) => {
+    recordBytes += bytes;
+    if (retainedBytes + recordBytes > MAX_IMPORT_HISTORY_BYTES)
+      throw new TranscriptJsonLimitError({ message: "Local rollout selected history exceeds memory budget" });
+  };
+  let reader = createTranscriptJsonReader(reserve, selectTranscriptPath);
+  let decoder = new TextDecoder();
+  let started = false;
+  const finish = () => {
+    reader.write(decoder.decode());
+    if (++count > MAX_IMPORT_RECORDS) throw new TranscriptJsonLimitError({ message: "Local rollout record budget" });
+    const decoded = decodeTranscriptValue(reader.finish());
+    if (Option.isSome(decoded)) {
+      const record = decoded.value;
+      cwd ??= extractDecodedCwd(record);
+      if (record.type === "event_msg") {
+        if (record.payload?.type === "task_started") activeTurn = true;
+        if (["task_complete", "turn_aborted"].includes(record.payload?.type ?? "")) activeTurn = false;
+      }
+      if (shouldRetainDecodedRecord(input.source, record)) {
+        records.push(record);
+        retainedBytes += recordBytes;
+      }
+    }
+    recordBytes = 0;
+    reader = createTranscriptJsonReader(reserve, selectTranscriptPath);
+    decoder = new TextDecoder();
+    started = false;
+  };
+  for await (const chunk of createReadStream(input.filePath, { highWaterMark: TRANSCRIPT_PREFIX_BYTES })) {
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(10, offset);
+      const end = newline < 0 ? chunk.length : newline;
+      started = true;
+      reader.write(decoder.decode(chunk.subarray(offset, end), { stream: true }));
+      if (newline < 0) break;
+      finish();
+      offset = newline + 1;
+    }
+  }
+  // A concurrently appended partial row is never imported as a completed reply.
+  if (started || activeTurn) return null;
+  const after = await stat(input.filePath, { bigint: true });
+  if (before.ino !== after.ino || before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) return null;
+  const normalize = (value: string) => normalizeProjectPathForComparison(value.replace(/^\\\\\?\\/, ""));
+  if (cwd === null || normalize(cwd) !== normalize(input.expectedCwd)) return null;
+  const parsed = parseAgentSessionRecords(input, records, emptyClaudeFields, 0);
+  if (parsed?.providerSessionId !== input.fallbackSessionId || parsed.messages.length > 10000) return null;
+  return parsed;
+}
+
 function parseAgentSessionRecords(
   input: AgentSessionTranscriptMetadata,
   records: ReadonlyArray<DecodedTranscriptRecord>,
@@ -457,6 +527,7 @@ function parseAgentSessionRecords(
   droppedMessageCount: number,
 ): AgentSessionThread | null {
   const fallbackTimestamp = DateTime.formatIso(DateTime.makeUnsafe(input.lastActiveAtMs));
+  const maxMessages = input.maxMessages ?? MAX_IMPORTED_MESSAGES;
   // Claude filenames are session IDs. Codex rollout filenames include extra
   // timestamp text, so only transcript metadata can provide a resumable ID.
   let providerSessionId =
@@ -542,7 +613,7 @@ function parseAgentSessionRecords(
     }
     conversationMessageCount += 1;
     messages.push(message);
-    if (messages.length > MAX_IMPORTED_MESSAGES) messages.shift();
+    if (messages.length > maxMessages) messages.shift();
   };
 
   const hasMatchingCodexEventInTurn = (text: string) => {
@@ -642,6 +713,7 @@ function parseAgentSessionRecords(
     }
     retainMessage({
       role: record.payload.role,
+      ...(record.payload.id ? { nativeId: record.payload.id } : {}),
       text: extractedText,
       createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
       codexResponseUser: record.payload.role === "user",
@@ -656,7 +728,7 @@ function parseAgentSessionRecords(
   const { codexResponseUser: _codexResponseUser, ...visibleFirstUserMessage } = firstUserMessage;
   const retainedMessages = firstUserMessageRetained
     ? visibleMessages
-    : [visibleFirstUserMessage, ...visibleMessages.slice(-(MAX_IMPORTED_MESSAGES - 1))];
+    : [visibleFirstUserMessage, ...visibleMessages.slice(-(maxMessages - 1))];
 
   return {
     source: input.source,

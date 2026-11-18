@@ -224,11 +224,11 @@ export function describeUnavailableModelSelection(
   }
   return isDisabledForProject(config, provider, selection.instanceId, projectId)
     ? {
-        title: "Model turned off for this project",
+        title: "此项目已关闭该模型",
         detail: "Turn it back on from web or desktop, or choose another model.",
       }
     : {
-        title: "Antigravity model unavailable",
+        title: "Antigravity 模型不可用",
         detail: "Set up Antigravity on web or desktop, or choose another model.",
       };
 }

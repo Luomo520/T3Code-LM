@@ -96,7 +96,7 @@ export const migrateLegacyConnectionCatalog = Effect.fn(
     Effect.mapError(
       (cause) =>
         new LegacyConnectionMigrationError({
-          message: `Could not parse the legacy mobile connection catalog: ${String(cause)}`,
+          message: `无法解析旧版手机连接目录：${String(cause)}`,
         }),
     ),
   );
@@ -104,7 +104,7 @@ export const migrateLegacyConnectionCatalog = Effect.fn(
     Effect.mapError(
       (cause) =>
         new LegacyConnectionMigrationError({
-          message: `Could not decode the legacy mobile connection catalog: ${String(cause)}`,
+          message: `无法解码旧版手机连接目录：${String(cause)}`,
         }),
     ),
   );

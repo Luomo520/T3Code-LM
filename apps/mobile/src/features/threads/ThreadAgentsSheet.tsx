@@ -94,9 +94,7 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}
     >
       {subagents.length === 0 ? (
-        <Text className="pt-6 text-center text-sm text-foreground-muted">
-          No agents in this turn.
-        </Text>
+        <Text className="pt-6 text-center text-sm text-foreground-muted">{"此轮次没有智能体。"}</Text>
       ) : (
         subagents.map((subagent) => {
           const group = workflowGroups.get(subagent.id);
@@ -127,7 +125,7 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <SheetHeader title="Agents" onClose={() => navigation.goBack()} />
+      <SheetHeader title="Agent" onClose={() => navigation.goBack()} />
       <ScreenContent>{content}</ScreenContent>
     </View>
   );
@@ -172,7 +170,7 @@ function AgentRow(props: {
     ) : (
       <Pressable
         accessibilityRole="link"
-        accessibilityHint="Opens this agent's thread"
+        accessibilityHint="打开此智能体的任务"
         onPress={() => props.onOpen(target)}
         className="min-w-0 flex-1 active:opacity-70"
       >

@@ -3,6 +3,7 @@ import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
+import * as Effect from "effect/Effect";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as OrchestrationCommandReceipts from "../persistence/OrchestrationCommandReceipts.ts";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
@@ -14,6 +15,7 @@ import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
+import { makeCodexLocalSync } from "../project/CodexLocalSync.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
@@ -261,6 +263,26 @@ const layerAgentSessionImporterProvided = AgentSessionImporter.layer.pipe(
   ),
 );
 
+const layerCodexLocalSyncProvided = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sync = yield* makeCodexLocalSync;
+    yield* Effect.gen(function* () {
+      while (true) {
+        yield* sync.pipe(Effect.catch(() => Effect.logWarning("Codex local sync will retry")));
+        yield* Effect.sleep("30 seconds");
+      }
+    }).pipe(Effect.forkScoped);
+  }),
+).pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerAgentSessionImporterProvided,
+      layerOrchestratorProvided,
+      layerEventSink,
+    ).pipe(Layer.provideMerge(ProjectStore.layer)),
+  ),
+);
+
 const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImporter.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -410,6 +432,7 @@ export const layerProduction = Layer.mergeAll(
   layerProviderContinuationWorkerProvided,
   layerAgentSessionScannerProvided,
   layerAgentSessionImporterProvided,
+  layerCodexLocalSyncProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
 ).pipe(
   Layer.provide(ResourceCleanupService.layer.pipe(Layer.provide(layerScheduledTaskProvided))),

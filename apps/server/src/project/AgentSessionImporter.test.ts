@@ -1,3 +1,10 @@
+// @effect-diagnostics processEnvInEffect:off - opt-in read-only local evidence test uses an explicit environment gate.
+// @effect-diagnostics nodeBuiltinImport:off - opt-in read-only real history verification and evidence output.
+import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -49,6 +56,11 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import { makeCodexLocalSync } from "./CodexLocalSync.ts";
+import * as LocalHistory from "./CodexLocalHistory.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as NodePath from "@effect/platform-node/NodePath";
+import { vi } from "@effect/vitest";
 import * as ProjectService from "./ProjectService.ts";
 
 const projectId = ProjectId.make("agent-session-import-project");
@@ -278,12 +290,694 @@ const makeImporter = Effect.fn(function* (
     ),
   );
   const importer = Context.get(context, AgentSessionImporter.AgentSessionImporter);
+  return { run: importer.importRecentAgentThreads({ projectId }), importNativeHistory: importer.importNativeHistory, published, context, importer };
+});
+
+const titleSyncFixture = Effect.fn(function* () {
+  const source = candidate(CODEX_MODEL_SELECTION, "title-repair");
+  source.thread.title = "[Image: shot.jpg; ref=image_1]";
+  const id = importId(source);
+  const helper = yield* makeImporter([source]);
+  yield* helper.run;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const row = {
+    id: "title-repair",
+    cwd: "/workspace/project",
+    name: null,
+    title: "[Image: shot.jpg; ref=image_1]\n修复安卓构建和启动报错",
+    first_user_message: "修复安卓构建和启动报错",
+    model: source.thread.model,
+    created_at: 1,
+    updated_at: 2,
+    history_mode: "paginated",
+  };
+  let busy = false;
+  let beforeWrite = Effect.void;
+  const makeSync = makeCodexLocalSync.pipe(
+    Effect.provide(helper.context),
+    Effect.provideService(EventSink.EventSinkV2, {
+      ...sink,
+      write: (input) =>
+        Effect.gen(function* () {
+          const race = beforeWrite;
+          beforeWrite = Effect.void;
+          yield* race;
+          return yield* sink.write(input);
+        }),
+    }),
+    Effect.provideService(Orchestrator.OrchestratorV2, {
+      getThreadRecords: (threadId: ThreadId) =>
+        projections
+          .getThreadRecords(threadId, ["messages", "runs", "turnItems", "providerThreads"])
+          .pipe(
+            Effect.map((p) =>
+              busy ? { ...p, messages: p.messages.map((m) => ({ ...m, streaming: true })) } : p,
+            ),
+          ),
+    } as unknown as Orchestrator.OrchestratorV2["Service"]),
+    Effect.provideService(ProjectStore.ProjectStoreV2, {
+      list: () => Effect.succeed([{ projectId, workspaceRoot: "/workspace/project" }]),
+    } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+    Effect.provideService(ServerSettings.ServerSettingsService, {
+      getSettings: Effect.succeed({
+        providerInstances: { codex: { driver: "codex", config: { homePath: "/fake-codex" } } },
+      }),
+    } as unknown as ServerSettings.ServerSettingsService["Service"]),
+    Effect.provideService(HostProcess.Environment, {}),
+    Effect.provideService(HostProcess.HomeDirectory, "/home/test"),
+    Effect.provide(NodePath.layer),
+  );
+  const setThread = Effect.fn(function* (patch: Partial<OrchestrationV2AppThread>) {
+    const thread = yield* projections.getThread(id);
+    const sequence = yield* sink.latestSequence({ threadId: id });
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make(`fixture-metadata:${sequence}`),
+          type: "thread.metadata-updated",
+          threadId: id,
+          occurredAt: now,
+          payload: { ...thread, ...patch },
+        },
+      ],
+    });
+  });
   return {
-    run: importer.importRecentAgentThreads({ projectId }),
-    importNativeHistory: importer.importNativeHistory,
-    published,
+    id,
+    source,
+    row,
+    projections,
+    makeSync,
+    setThread,
+    setBusy: (value: boolean) => {
+      busy = value;
+    },
+    race: (effect: Effect.Effect<void>) => {
+      beforeWrite = effect;
+    },
   };
 });
+
+it.effect("syncs known import archives and restores only its own archives across restarts", () =>
+  Effect.gen(function* () {
+    const f = yield* titleSyncFixture();
+    using catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([]);
+    using _version = vi.spyOn(LocalHistory, "readLocalCodexVersion").mockResolvedValue("same");
+    using states = vi
+      .spyOn(LocalHistory, "readLocalCodexArchiveStates")
+      .mockResolvedValue([{ id: f.row.id, archived: 1, archived_at: 1 }]);
+    const sink = yield* EventSink.EventSinkV2;
+    const tick = yield* f.makeSync;
+    yield* tick;
+    const archived = yield* f.projections.getThread(f.id);
+    expect(archived.archivedAt).not.toBeNull();
+    const sequence = yield* sink.latestSequence({ threadId: f.id });
+    catalog.mockResolvedValue([f.row]);
+    yield* tick;
+    expect(yield* sink.latestSequence({ threadId: f.id })).toBe(sequence);
+    states.mockResolvedValue([{ id: f.row.id, archived: 0, archived_at: null }]);
+    const restarted = yield* f.makeSync;
+    yield* restarted;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toBeNull();
+    yield* f.setThread({ archivedAt: now });
+    yield* restarted;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toEqual(now);
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("does not infer archives from empty, missing, failed, or unrelated source results", () =>
+  Effect.gen(function* () {
+    const f = yield* titleSyncFixture();
+    using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([]);
+    using states = vi.spyOn(LocalHistory, "readLocalCodexArchiveStates").mockResolvedValue([]);
+    const tick = yield* f.makeSync;
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toBeNull();
+    states.mockRejectedValue(new Error("source unavailable"));
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toBeNull();
+    states.mockResolvedValue([{ id: "different-native-id", archived: 1, archived_at: 1 }]);
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toBeNull();
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect(
+  "preserves ordinary T3 threads and imported threads with another active native owner",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* titleSyncFixture();
+      using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([]);
+      using states = vi
+        .spyOn(LocalHistory, "readLocalCodexArchiveStates")
+        .mockResolvedValue([{ id: f.row.id, archived: 1, archived_at: 1 }]);
+      const tick = yield* f.makeSync;
+      yield* f.setThread({ historyOrigin: undefined });
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).archivedAt).toBeNull();
+      expect(states).toHaveBeenLastCalledWith(expect.any(String), []);
+      yield* f.setThread({ historyOrigin: "v1_import", activeProviderThreadId: null });
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).archivedAt).toBeNull();
+      expect(states).toHaveBeenLastCalledWith(expect.any(String), []);
+    }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("defers busy imports and rejects racing archive or restore writes", () =>
+  Effect.gen(function* () {
+    const f = yield* titleSyncFixture();
+    using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([]);
+    using states = vi
+      .spyOn(LocalHistory, "readLocalCodexArchiveStates")
+      .mockResolvedValue([{ id: f.row.id, archived: 1, archived_at: 1 }]);
+    const tick = yield* f.makeSync;
+    f.setBusy(true);
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toBeNull();
+    f.setBusy(false);
+    f.race(f.setThread({ title: "Concurrent user metadata" }).pipe(Effect.orDie));
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toBeNull();
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).not.toBeNull();
+    states.mockResolvedValue([{ id: f.row.id, archived: 0, archived_at: null }]);
+    const manualArchiveAt = DateTime.add(now, { seconds: 1 });
+    f.race(f.setThread({ archivedAt: manualArchiveAt }).pipe(Effect.orDie));
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toEqual(manualArchiveAt);
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).archivedAt).toEqual(manualArchiveAt);
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect(
+  "repairs only a bad imported title despite an unfinished Codex turn and retries empty history",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* titleSyncFixture();
+      using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([f.row]);
+      using _version = vi
+        .spyOn(LocalHistory, "readLocalCodexVersion")
+        .mockResolvedValue("unchanged");
+      using messages = vi.spyOn(LocalHistory, "readLocalCodexMessages").mockImplementation(() => {
+        throw new Error("Codex turn is still active");
+      });
+      const tick = yield* f.makeSync;
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).title).toBe("修复安卓构建和启动报错");
+      expect(
+        (yield* f.projections.getThreadRecords(f.id, ["messages"])).messages.map((m) => m.text),
+      ).toEqual(["Fix it", "Fixed"]);
+      messages.mockReturnValue([]);
+      yield* tick;
+      yield* tick;
+      expect(messages).toHaveBeenCalledTimes(3);
+      messages.mockReturnValue([
+        ...f.source.thread.messages.map((m, i) => ({ ...m, nativeId: String(i) })),
+        { role: "user", text: "Persisted later", createdAt: timestamp, nativeId: "u3" },
+      ]);
+      yield* tick;
+      expect((yield* f.projections.getThreadRecords(f.id, ["messages"])).messages).toHaveLength(3);
+    }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("repairs bad titles with divergent history while preserving meaningful titles", () =>
+  Effect.gen(function* () {
+    const f = yield* titleSyncFixture();
+    using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([f.row]);
+    using _version = vi.spyOn(LocalHistory, "readLocalCodexVersion").mockResolvedValue("same");
+    using _messages = vi
+      .spyOn(LocalHistory, "readLocalCodexMessages")
+      .mockReturnValue([{ role: "user", text: "Diverged", createdAt: timestamp, nativeId: "u1" }]);
+    const tick = yield* f.makeSync;
+    yield* tick;
+    expect((yield* f.projections.getThread(f.id)).title).toBe("修复安卓构建和启动报错");
+    expect((yield* f.projections.getThreadRecords(f.id, ["messages"])).messages).toHaveLength(2);
+    yield* f.setThread({ title: "A meaningful existing title" });
+    yield* yield* f.makeSync;
+    expect((yield* f.projections.getThread(f.id)).title).toBe("A meaningful existing title");
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect(
+  "defers title repair while T3 is busy, archived, deleted, manually edited, or not imported",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* titleSyncFixture();
+      using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([f.row]);
+      using _version = vi.spyOn(LocalHistory, "readLocalCodexVersion").mockResolvedValue("same");
+      using _messages = vi.spyOn(LocalHistory, "readLocalCodexMessages").mockReturnValue([]);
+      const tick = yield* f.makeSync;
+      f.setBusy(true);
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).title).toBe(f.source.thread.title);
+      f.setBusy(false);
+      yield* f.setThread({ archivedAt: now });
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).title).toBe(f.source.thread.title);
+      yield* f.setThread({ archivedAt: null, deletedAt: now });
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).title).toBe(f.source.thread.title);
+      yield* f.setThread({ deletedAt: null, historyOrigin: undefined });
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).title).toBe(f.source.thread.title);
+      yield* f.setThread({ historyOrigin: "v1_import" });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_command_receipts (command_id,aggregate_kind,aggregate_id,command_type,accepted_at,result_sequence,status,error)
+      VALUES ('manual-title-repair','thread',${f.id},'thread.metadata.update',${timestamp},1,'accepted',NULL)`;
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).title).toBe(f.source.thread.title);
+    }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect(
+  "rejects a title repair racing a metadata event and retries without caching history",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* titleSyncFixture();
+      using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([f.row]);
+      using _version = vi.spyOn(LocalHistory, "readLocalCodexVersion").mockResolvedValue("same");
+      using _messages = vi.spyOn(LocalHistory, "readLocalCodexMessages").mockReturnValue([]);
+      const tick = yield* f.makeSync;
+      f.race(f.setThread({ title: "Manually chosen concurrent title" }).pipe(Effect.orDie));
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).title).toBe("Manually chosen concurrent title");
+      yield* f.setThread({ title: "Codex conversation" });
+      yield* tick;
+      expect((yield* f.projections.getThread(f.id)).title).toBe("修复安卓构建和启动报错");
+    }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("falls back to a matching rollout when paginated history is a different branch", () =>
+  Effect.gen(function* () {
+    const f = yield* titleSyncFixture();
+    const row = { ...f.row, rollout_path: "/fake-codex/session.jsonl" };
+    using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([row]);
+    using _version = vi.spyOn(LocalHistory, "readLocalCodexVersion").mockResolvedValue("unchanged");
+    using _messages = vi.spyOn(LocalHistory, "readLocalCodexMessages").mockReturnValue([
+      {
+        role: "user",
+        text: "Different paginated branch",
+        nativeId: "wrong",
+        createdAt: timestamp,
+      },
+    ]);
+    using rollout = vi.spyOn(LocalHistory, "readLocalCodexRollout").mockResolvedValue([
+      ...f.source.thread.messages.map((m, i) => ({ ...m, nativeId: String(i) })),
+      {
+        role: "assistant",
+        text: "Screenshot final reply",
+        nativeId: "final",
+        createdAt: timestamp,
+      },
+    ]);
+    const tick = yield* f.makeSync;
+    yield* tick;
+    yield* tick;
+    expect(
+      (yield* f.projections.getThreadRecords(f.id, ["messages"])).messages.map((m) => m.text),
+    ).toEqual(["Fix it", "Fixed", "Screenshot final reply"]);
+    expect(rollout).toHaveBeenCalledTimes(1);
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect(
+  "caches divergent rollout fingerprints but retries changes and rejected idle commits",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* titleSyncFixture();
+      yield* f.setThread({ title: "Meaningful title" });
+      using _catalog = vi
+        .spyOn(LocalHistory, "readLocalCodexCatalog")
+        .mockResolvedValue([{ ...f.row, rollout_path: "/fake-codex/session.jsonl" }]);
+      using version = vi.spyOn(LocalHistory, "readLocalCodexVersion").mockResolvedValue("v1");
+      using _messages = vi
+        .spyOn(LocalHistory, "readLocalCodexMessages")
+        .mockReturnValue([
+          { role: "user", text: "Other branch", nativeId: "other", createdAt: timestamp },
+        ]);
+      using rollout = vi
+        .spyOn(LocalHistory, "readLocalCodexRollout")
+        .mockResolvedValue([
+          { role: "user", text: "Unrelated rollout", nativeId: "bad", createdAt: timestamp },
+        ]);
+      const tick = yield* f.makeSync;
+      yield* tick;
+      yield* tick;
+      expect(rollout).toHaveBeenCalledTimes(1);
+      version.mockResolvedValue("v2");
+      rollout.mockResolvedValue([
+        ...f.source.thread.messages.map((m, i) => ({ ...m, nativeId: String(i) })),
+        { role: "assistant", text: "Safe final", nativeId: "final", createdAt: timestamp },
+      ]);
+      f.race(f.setThread({ title: "Concurrent user rename" }).pipe(Effect.orDie));
+      yield* tick;
+      expect((yield* f.projections.getThreadRecords(f.id, ["messages"])).messages).toHaveLength(2);
+      yield* tick;
+      expect((yield* f.projections.getThreadRecords(f.id, ["messages"])).messages).toHaveLength(3);
+      expect((yield* f.projections.getThread(f.id)).title).toBe("Concurrent user rename");
+      yield* tick;
+      expect(rollout).toHaveBeenCalledTimes(3);
+      version.mockImplementation(async (_home, _path, onlyRollout) =>
+        onlyRollout ? "v2" : "unrelated-history-update",
+      );
+      yield* tick;
+      expect(rollout).toHaveBeenCalledTimes(3);
+    }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+if (process.env.T3_JK_VERIFY_REPORT)
+  it.effect(
+    "verifies real JK rollout through isolated application events",
+    () =>
+      Effect.gen(function* () {
+        const nativeId = "01a152fe-5bc2-7523-8b19-51d7a8b8c4df";
+        const catalogDb = new DatabaseSync(join(homedir(), ".codex/state_5.sqlite"), {
+          readOnly: true,
+        });
+        const liveDb = new DatabaseSync(join(homedir(), ".t3/userdata/statev2.sqlite"), {
+          readOnly: true,
+        });
+        let row: LocalHistory.LocalCodexThread;
+        let prefix: Array<{ role: "user" | "assistant"; text: string; createdAt: string }>;
+        try {
+          row = catalogDb
+            .prepare("SELECT * FROM threads WHERE id=?")
+            .get(nativeId) as unknown as LocalHistory.LocalCodexThread;
+          prefix = liveDb
+            .prepare(`SELECT m.role,m.created_at,m.payload_json FROM orchestration_v2_projection_messages m
+        JOIN orchestration_v2_projection_turn_items ti ON json_extract(ti.payload_json,'$.messageId')=m.message_id AND ti.thread_id=m.thread_id
+        WHERE m.thread_id=? ORDER BY ti.ordinal,m.created_at,m.message_id`)
+            .all("import:codex:" + nativeId)
+            .map((r) => ({
+              role: r.role as "user" | "assistant",
+              text: JSON.parse(String(r.payload_json)).text,
+              createdAt: String(r.created_at),
+            }));
+        } finally {
+          catalogDb.close();
+          liveDb.close();
+        }
+        const expected = yield* Effect.promise(() => LocalHistory.readLocalCodexRollout(row));
+        const source = candidate(CODEX_MODEL_SELECTION, nativeId);
+        source.thread.messages = prefix;
+        const helper = yield* makeImporter([source]);
+        yield* helper.run;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        using _catalog = vi.spyOn(LocalHistory, "readLocalCodexCatalog").mockResolvedValue([row]);
+        const tick = yield* makeCodexLocalSync.pipe(
+          Effect.provide(helper.context),
+          Effect.provideService(Orchestrator.OrchestratorV2, {
+            getThreadRecords: (id: ThreadId) =>
+              projections.getThreadRecords(id, [
+                "messages",
+                "turnItems",
+                "runs",
+                "providerThreads",
+              ]),
+          } as unknown as Orchestrator.OrchestratorV2["Service"]),
+          Effect.provideService(ProjectStore.ProjectStoreV2, {
+            list: () => Effect.succeed([{ projectId, workspaceRoot: row.cwd }]),
+          } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+          Effect.provideService(ServerSettings.ServerSettingsService, {
+            getSettings: Effect.succeed({
+              providerInstances: {
+                codex: { driver: "codex", config: { homePath: join(homedir(), ".codex") } },
+              },
+            }),
+          } as unknown as ServerSettings.ServerSettingsService["Service"]),
+          Effect.provideService(HostProcess.Environment, {}),
+          Effect.provideService(HostProcess.HomeDirectory, homedir()),
+          Effect.provide(NodePath.layer),
+        );
+        yield* tick;
+        yield* tick;
+        const actual = (yield* projections.getThreadRecords(importId(source), [
+          "messages",
+          "turnItems",
+        ])).messages;
+        const hash = (messages: ReadonlyArray<{ role: string; text: string }>) =>
+          createHash("sha256")
+            .update(JSON.stringify(messages.map((m) => [m.role, m.text])))
+            .digest("hex");
+        const expectedHash = hash(expected),
+          actualHash = hash(actual);
+        const last = expected.at(-1)!;
+        const result = {
+          verifiedAt: DateTime.formatIso(yield* DateTime.now),
+          mode: "isolated-application-events",
+          readOnlyNative: true,
+          realT3DatabaseWritten: false,
+          nativeId,
+          initialMessages: prefix.length,
+          expectedMessages: expected.length,
+          actualMessages: actual.length,
+          appended: actual.length - prefix.length,
+          orderedContentHashMatches: actualHash === expectedHash,
+          expectedSha256: expectedHash,
+          actualSha256: actualHash,
+          screenshotNativeItemId: last.nativeId,
+          screenshotLastReplyMatches:
+            last.nativeId === "msg_07c723b2c5fc8a4b016ae3817528a487d287af15cf8185bc3c" &&
+            actual.at(-1)?.text === last.text,
+          noBodiesOrSecretsPersisted: true,
+        };
+        yield* Effect.promise(() =>
+          writeFile(
+            process.env.T3_JK_VERIFY_REPORT!,
+            JSON.stringify(result, null, 2) + "\n",
+            "utf8",
+          ),
+        );
+        expect(expected.length).toBe(815);
+        expect(actual.length).toBe(815);
+        expect(actualHash).toBe(expectedHash);
+        expect(result.screenshotLastReplyMatches).toBe(true);
+      }).pipe(Effect.scoped, Effect.provide(persistence)),
+    30_000,
+  );
+
+it.effect(
+  "syncs a missing paginated conversation, then appends once and preserves a manual title after restart",
+  () =>
+    Effect.gen(function* () {
+      const source = candidate(CODEX_MODEL_SELECTION, "local-sync");
+      const id = importId(source);
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const helper = yield* makeImporter([]);
+      let busy = false;
+      const providerInstances = {
+        codex: { driver: "codex", config: { homePath: "/fake-codex" } },
+      } as Record<string, { driver: string; config: { homePath: string } }>;
+      const row = {
+        id: "local-sync",
+        cwd: "/workspace/project",
+        name: "JK BMS display",
+        title: "继续",
+        first_user_message: "Fix it",
+        model: source.thread.model,
+        created_at: 1,
+        updated_at: 2,
+        history_mode: "paginated",
+      };
+      using catalog = vi
+        .spyOn(LocalHistory, "readLocalCodexCatalog")
+        .mockImplementation(async () => [row]);
+      using version = vi.spyOn(LocalHistory, "readLocalCodexVersion").mockResolvedValue("initial");
+      using messages = vi
+        .spyOn(LocalHistory, "readLocalCodexMessages")
+        .mockReturnValue(source.thread.messages.map((m, i) => ({ ...m, nativeId: String(i) })));
+      const makeSync = makeCodexLocalSync.pipe(
+        Effect.provide(helper.context),
+        Effect.provideService(Orchestrator.OrchestratorV2, {
+          getThreadRecords: (id: ThreadId) =>
+            projections
+              .getThreadRecords(id, ["messages", "runs", "turnItems", "providerThreads"])
+              .pipe(
+                Effect.map((p) =>
+                  busy ? { ...p, messages: p.messages.map((m) => ({ ...m, streaming: true })) } : p,
+                ),
+              ),
+        } as unknown as Orchestrator.OrchestratorV2["Service"]),
+        Effect.provideService(ProjectStore.ProjectStoreV2, {
+          list: () => Effect.succeed([{ projectId, workspaceRoot: "/workspace/project" }]),
+        } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+        Effect.provideService(ServerSettings.ServerSettingsService, {
+          getSettings: Effect.succeed({ providerInstances }),
+        } as unknown as ServerSettings.ServerSettingsService["Service"]),
+        Effect.provideService(HostProcess.Environment, {}),
+        Effect.provideService(HostProcess.HomeDirectory, "/home/test"),
+        Effect.provide(NodePath.layer),
+      );
+      const tick = yield* makeSync;
+      yield* sql`CREATE TEMP TRIGGER fail_local_runtime BEFORE INSERT ON provider_session_runtime BEGIN SELECT RAISE(ABORT,'test interrupted local runtime'); END`;
+      yield* tick;
+      const initial = yield* projections.getThreadRecords(id, ["messages"]);
+      expect(initial.thread.title).toBe("JK BMS display");
+      expect(initial.thread.settledOverride).toBe("active");
+      expect(initial.messages).toHaveLength(2);
+      expect(
+        yield* sql`SELECT thread_id FROM provider_session_runtime WHERE thread_id=${id}`,
+      ).toHaveLength(0);
+      yield* sql`DROP TRIGGER fail_local_runtime`;
+      yield* tick;
+      expect(
+        yield* sql`SELECT thread_id FROM provider_session_runtime WHERE thread_id=${id}`,
+      ).toHaveLength(1);
+      // History can commit after the state row, without advancing its second-resolution timestamp.
+      version.mockResolvedValue("history-commit-2");
+      const next = [
+        ...source.thread.messages.map((m, i) => ({ ...m, nativeId: String(i) })),
+        {
+          role: "user" as const,
+          text: "Next",
+          createdAt: "2026-09-01T09:59:00.000Z",
+          nativeId: "u3",
+        },
+      ];
+      messages.mockReturnValue(next);
+      busy = true;
+      yield* tick;
+      expect((yield* projections.getThreadRecords(id, ["messages"])).messages).toHaveLength(2);
+      busy = false;
+      yield* tick;
+      yield* tick;
+      expect((yield* projections.getThreadRecords(id, ["messages"])).messages).toHaveLength(3);
+      version.mockResolvedValue("history-commit-3");
+      messages.mockReturnValue([
+        ...next,
+        { role: "assistant", text: "Next completed", createdAt: timestamp, nativeId: "a4" },
+      ]);
+      yield* tick;
+      yield* tick;
+      expect(
+        (yield* projections.getThreadRecords(id, ["messages"])).messages.map((m) => m.text),
+      ).toEqual(["Fix it", "Fixed", "Next", "Next completed"]);
+      for (const title of ["Codex renamed", "JK BMS display", "Codex renamed", "JK BMS display"]) {
+        row.name = title;
+        yield* tick;
+        expect((yield* projections.getThread(id)).title).toBe("JK BMS display");
+      }
+      yield* sql`INSERT INTO orchestration_command_receipts (command_id,aggregate_kind,aggregate_id,command_type,accepted_at,result_sequence,status,error)
+      VALUES ('rename-manual','thread',${id},'thread.metadata.update',${timestamp},1,'accepted',NULL)`;
+      row.name = "New Codex name";
+      const restarted = yield* makeSync;
+      yield* restarted;
+      expect((yield* projections.getThreadRecords(id, ["messages"])).thread.title).toBe(
+        "JK BMS display",
+      );
+      expect((yield* projections.getThreadRecords(id, ["messages"])).messages).toHaveLength(4);
+      const sink = yield* EventSink.EventSinkV2;
+      const active = yield* projections.getThread(id);
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("archive-local-sync"),
+            type: "thread.metadata-updated",
+            threadId: id,
+            occurredAt: now,
+            payload: { ...active, archivedAt: now },
+          },
+        ],
+      });
+      version.mockResolvedValue("history-commit-4");
+      messages.mockReturnValue([
+        ...next,
+        { role: "assistant", text: "Next completed", createdAt: timestamp, nativeId: "a4" },
+        { role: "user", text: "After reopen", createdAt: timestamp, nativeId: "u5" },
+      ]);
+      yield* tick;
+      expect((yield* projections.getThreadRecords(id, ["messages"])).messages).toHaveLength(4);
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("unarchive-local-sync"),
+            type: "thread.metadata-updated",
+            threadId: id,
+            occurredAt: now,
+            payload: { ...active, archivedAt: null },
+          },
+        ],
+      });
+      yield* tick;
+      expect((yield* projections.getThreadRecords(id, ["messages"])).messages).toHaveLength(5);
+      // Ownership includes tombstones: a deleted or archived native session must
+      // never be re-imported as a second visible thread.
+      for (const lifecycle of ["archived", "deleted"] as const) {
+        const owner = yield* seedOwner(candidate(CODEX_MODEL_SELECTION, lifecycle), lifecycle);
+        catalog.mockResolvedValue([{ ...row, id: lifecycle }]);
+        const again = yield* makeSync;
+        yield* again;
+        expect((yield* projections.getThread(owner)).id).toBe(owner);
+        expect(
+          yield* Effect.option(projections.getThread(ThreadId.make(`import:codex:${lifecycle}`))),
+        ).toEqual(Option.none());
+      }
+      providerInstances["codex-other"] = { driver: "codex", config: { homePath: "/fake-codex" } };
+      const other = candidate(
+        { ...CODEX_MODEL_SELECTION, instanceId: ProviderInstanceId.make("codex-other") },
+        "shared-home",
+      );
+      const owner = yield* seedOwner(other);
+      catalog.mockResolvedValue([{ ...row, id: "shared-home" }]);
+      yield* yield* makeSync;
+      expect((yield* projections.getThread(owner)).id).toBe(owner);
+      expect(
+        yield* Effect.option(projections.getThread(ThreadId.make("import:codex:shared-home"))),
+      ).toEqual(Option.none());
+    }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("rejects a stale history merge atomically", () =>
+  Effect.gen(function* () {
+    const source = candidate(CODEX_MODEL_SELECTION, "guard");
+    const helper = yield* makeImporter([source]);
+    yield* helper.run;
+    const sink = yield* EventSink.EventSinkV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const id = importId(source);
+    const before = yield* projections.getThreadRecords(id, ["messages"]);
+    const result = yield* sink.write({
+      guardIdleThread: { threadId: id, updatedAt: DateTime.makeUnsafe(0), messageCount: 2 },
+      events: AgentSessionImporter.messageEvents({
+        threadId: id,
+        index: 2,
+        message: { role: "user", text: "Stale", createdAt: timestamp },
+      }),
+    });
+    expect(result).toHaveLength(0);
+    expect((yield* projections.getThreadRecords(id, ["messages"])).messages).toEqual(
+      before.messages,
+    );
+    const sequence = yield* sink.latestSequence({ threadId: id });
+    yield* sink.write({
+      events: AgentSessionImporter.messageEvents({
+        threadId: id,
+        index: 1,
+        message: { role: "assistant", text: "Changed concurrently", createdAt: timestamp },
+      }).map((event) => ({ ...event, id: EventId.make(`edit:${event.id}`) })),
+    });
+    const guarded = yield* sink.write({
+      guardIdleThread: {
+        threadId: id,
+        updatedAt: before.thread.updatedAt,
+        messageCount: 2,
+        sequence,
+      },
+      events: AgentSessionImporter.messageEvents({
+        threadId: id,
+        index: 2,
+        message: { role: "user", text: "Stale", createdAt: timestamp },
+      }),
+    });
+    expect(guarded).toHaveLength(0);
+    expect(
+      (yield* projections.getThreadRecords(id, ["messages"])).messages.map((m) => m.text),
+    ).toEqual(["Fix it", "Changed concurrently"]);
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
 
 it.effect(
   "ignores owned sessions, including archived and deleted threads, but imports other instances and unowned sessions",

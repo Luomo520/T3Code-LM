@@ -31,8 +31,8 @@ export async function applyLinkedPromptToThreadDraft(
     return;
   }
   Dialog.alert("Linked prompt ready. Replace draft?", notice, [
-    { text: "Keep mine", style: "cancel" },
-    { text: "Replace", onPress: () => setComposerDraftText(draftKey, prompt.text) },
+    { text: "保留我的草稿", style: "cancel" },
+    { text: "替换", onPress: () => setComposerDraftText(draftKey, prompt.text) },
   ]);
 }
 

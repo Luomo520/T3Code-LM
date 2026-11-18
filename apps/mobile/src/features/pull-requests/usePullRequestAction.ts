@@ -46,7 +46,7 @@ export function usePullRequestAction(params: PullRequestParams, pr: PullRequestD
   };
   const confirm = (action: PullRequestAction, title: string, message: string) =>
     Dialog.alert(title, message, [
-      { text: "Cancel", style: "cancel" },
+      { text: "取消", style: "cancel" },
       {
         text: title,
         style: action === "close" || action === "delete-branch" ? "destructive" : "default",

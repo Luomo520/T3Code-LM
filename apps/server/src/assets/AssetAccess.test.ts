@@ -2,6 +2,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeFSP from "node:fs/promises";
 import {
   AssetAccessError,
@@ -15,14 +16,21 @@ import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon"
 import { MCP_APP_MAX_HTML_BYTES } from "@t3tools/shared/mcpApp";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
+import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
-import * as TestClock from "effect/testing/TestClock";
-import { HttpClientRequest, HttpClientResponse, HttpServerResponse } from "effect/http";
+import {
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+  HttpRouter,
+  HttpServerResponse,
+} from "effect/http";
 import { vi } from "vite-plus/test";
 
 import * as AssetSigner from "./AssetSigner.ts";
@@ -33,7 +41,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
-import { assetFileResponse } from "../http.ts";
+import { assetFileResponse, layerAssetRoute } from "../http.ts";
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, readMcpAppHtml, resolveAsset } from "./AssetAccess.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
@@ -128,6 +136,224 @@ const layerTest = Layer.mergeAll(
 ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 describe("AssetAccess", () => {
+  it.live(
+    "checks the whole download before serving HEAD or partial bytes through the real route",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-network-" });
+        const file = `${root}/large.apk`;
+        yield* fs.writeFileString(file, "");
+        const sizeBytes = 51 * 1024 * 1024;
+        yield* fs.truncate(file, sizeBytes);
+        const issued = yield* issueAssetUrl({
+          resource: {
+            _tag: "draft-workspace-file",
+            cwd: root,
+            path: "large.apk",
+            disposition: "attachment",
+          },
+        });
+        const context = yield* Effect.context<Layer.Success<typeof layerTest>>();
+        const services = yield* Layer.build(
+          HttpRouter.serve(layerAssetRoute, { disableListenLog: true, disableLogger: true }).pipe(
+            Layer.provide(Layer.succeedContext(context)),
+            Layer.provideMerge(NodeHttpServer.layerTest),
+            Layer.provide(NodeHttpPlatform.layer),
+            Layer.provide(
+              Layer.merge(
+                Layer.succeed(BuiltInDrivers.SourceControlDrivers, []),
+                Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+              ),
+            ),
+          ),
+        );
+        const client = Context.get(services, HttpClient.HttpClient);
+        for (const method of ["GET", "HEAD"] as const) {
+          const request = HttpClientRequest.make(method)(issued.relativeUrl).pipe(
+            HttpClientRequest.setHeader("range", "bytes=0-1"),
+          );
+          const local = yield* client.execute(request);
+          expect(local.status).toBe(method === "GET" ? 206 : 200);
+          expect(local.headers["content-length"]).toBe(String(method === "GET" ? 2 : sizeBytes));
+          expect((yield* local.arrayBuffer).byteLength).toBe(method === "GET" ? 2 : 0);
+          for (const headers of [
+            { "x-forwarded-for": "192.168.5.2" },
+            { forwarded: "for=192.168.5.2" },
+            { "x-real-ip": "192.168.5.2" },
+          ]) {
+            const forwarded = yield* client.execute(
+              request.pipe(HttpClientRequest.setHeaders(headers)),
+            );
+            expect(forwarded.status).toBe(403);
+            expect(forwarded.headers["content-range"]).toBeUndefined();
+            yield* forwarded.arrayBuffer;
+          }
+        }
+      }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("downloads arbitrary workspace files with exact versioned authorization", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-" });
+      const filePath = path.join(root, "安装包.exe");
+      yield* fs.writeFileString(filePath, "0123456789");
+      const resource = {
+        _tag: "workspace-file" as const,
+        threadId: ThreadId.make("thread-1"),
+        path: "安装包.exe",
+        disposition: "attachment" as const,
+      };
+      const result = yield* issueAssetUrl({ resource, workspaceRoot: root });
+      expect(result).toMatchObject({ download: true, fileName: "安装包.exe" });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const split = suffix.indexOf("/");
+      const token = suffix.slice(0, split);
+      const name = suffix.slice(split + 1);
+      expect(yield* resolveAsset(token, "other.exe")).toBeNull();
+      const resolved = yield* resolveAsset(token, name);
+      expect(resolved).toMatchObject({ kind: "file", download: true });
+      if (resolved?.kind !== "file") throw new Error("Missing file");
+      const response = HttpServerResponse.toWeb(yield* assetFileResponse(resolved, "bytes=3-6"));
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-range")).toBe("bytes 3-6/10");
+      expect(response.headers.get("content-disposition")).toContain("attachment;");
+      expect(yield* Effect.promise(() => response.text())).toBe("3456");
+      yield* fs.writeFileString(filePath, "CHANGED");
+      expect(yield* resolveAsset(token, name)).toBeNull();
+      const preview = yield* issueAssetUrl({
+        resource: { _tag: "workspace-file", threadId: resource.threadId, path: resource.path },
+        workspaceRoot: root,
+      }).pipe(Effect.flip);
+      expect(preview._tag).toBe("AssetPreviewTypeValidationError");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("download ranges, validators, HEAD and empty files preserve bytes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-ranges-" });
+      const file = path.join(root, "test.apk");
+      yield* fs.writeFileString(file, "0123456789");
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "draft-workspace-file",
+          cwd: root,
+          path: file,
+          disposition: "attachment",
+        },
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const [token, name] = suffix.split("/");
+      const resolved = yield* resolveAsset(token!, name!);
+      if (resolved?.kind !== "file") throw new Error("Missing file");
+      const responseFor = (range?: string, validator?: string, method: "GET" | "HEAD" = "GET") =>
+        Effect.gen(function* () {
+          const fresh = yield* resolveAsset(token!, name!);
+          if (fresh?.kind !== "file") throw new Error("Missing file");
+          return yield* assetFileResponse(fresh, range, validator, method);
+        });
+      const full = HttpServerResponse.toWeb(yield* responseFor());
+      const etag = full.headers.get("etag")!;
+      expect(yield* Effect.promise(() => full.text())).toBe("0123456789");
+      for (const [header, status, expected] of [
+        ["bytes=0-2", 206, "012"],
+        ["bytes=7-", 206, "789"],
+        ["bytes=-3", 206, "789"],
+        ["bytes=10-", 416, ""],
+        ["bytes=0-1,3-4", 200, "0123456789"],
+      ] as const) {
+        const response = HttpServerResponse.toWeb(yield* responseFor(header));
+        expect(response.status).toBe(status);
+        expect(yield* Effect.promise(() => response.text())).toBe(expected);
+      }
+      const range = HttpServerResponse.toWeb(yield* responseFor("bytes=3-4", etag));
+      expect(range.status).toBe(206);
+      expect(yield* Effect.promise(() => range.text())).toBe("34");
+      const stale = HttpServerResponse.toWeb(yield* responseFor("bytes=3-4", '"stale"'));
+      expect(stale.status).toBe(200);
+      expect(yield* Effect.promise(() => stale.text())).toBe("0123456789");
+      const head = HttpServerResponse.toWeb(yield* responseFor("bytes=2-3", undefined, "HEAD"));
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-length")).toBe("10");
+      expect(yield* Effect.promise(() => head.text())).toBe("");
+      yield* fs.writeFileString(file, "");
+      expect((yield* assetFileResponse(resolved)).status).toBe(409);
+      const emptyUrl = yield* issueAssetUrl({
+        resource: {
+          _tag: "draft-workspace-file",
+          cwd: root,
+          path: "test.apk",
+          disposition: "attachment",
+        },
+      });
+      const [emptyToken, emptyName] = emptyUrl.relativeUrl
+        .slice(`${ASSET_ROUTE_PREFIX}/`.length)
+        .split("/");
+      const empty = yield* resolveAsset(emptyToken!, emptyName!);
+      if (empty?.kind !== "file") throw new Error("Missing empty file");
+      const response = HttpServerResponse.toWeb(yield* assetFileResponse(empty));
+      expect(response.headers.get("content-length")).toBe("0");
+      expect(yield* Effect.promise(() => response.text())).toBe("");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("download authorization expires without limiting a later click", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-expiry-" });
+      yield* fs.writeFileString(`${root}/test.zip`, "bytes");
+      const resource = {
+        _tag: "draft-workspace-file" as const,
+        cwd: root,
+        path: "test.zip",
+        disposition: "attachment" as const,
+      };
+      const first = yield* issueAssetUrl({ resource });
+      const [token, name] = first.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length).split("/");
+      yield* TestClock.adjust("24 hours");
+      expect(yield* resolveAsset(token!, name!)).toBeNull();
+      const second = yield* issueAssetUrl({ resource });
+      expect(second.expiresAt).toBeGreaterThan(first.expiresAt);
+      const [nextToken, nextName] = second.relativeUrl
+        .slice(`${ASSET_ROUTE_PREFIX}/`.length)
+        .split("/");
+      expect(yield* resolveAsset(nextToken!, nextName!)).toMatchObject({
+        kind: "file",
+        download: true,
+      });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("download authorization refuses traversal, directories and replaced files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-boundary-" });
+      for (const path of ["../outside.exe", "."]) {
+        const error = yield* issueAssetUrl({
+          resource: { _tag: "draft-workspace-file", cwd: root, path, disposition: "attachment" },
+        }).pipe(Effect.flip);
+        expect(error._tag).toMatch(/AssetWorkspace/);
+      }
+      yield* fs.writeFileString(`${root}/test.exe`, "old");
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "draft-workspace-file",
+          cwd: root,
+          path: "test.exe",
+          disposition: "attachment",
+        },
+      });
+      const [token, name] = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length).split("/");
+      yield* fs.rename(`${root}/test.exe`, `${root}/old.exe`);
+      yield* fs.writeFileString(`${root}/test.exe`, "new");
+      expect(yield* resolveAsset(token!, name!)).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   describe("readMcpAppHtml", () => {
     it.effect("accepts snapshots at the stored HTML byte limit", () =>
       Effect.gen(function* () {

@@ -1,5 +1,5 @@
 // Keep the native drawing inset out of the visible size and edge margins.
-export const FLOATING_TABS = { edge: 16, bottom: 6, gap: 12, shadow: 8 };
+export const FLOATING_TABS = { edge: 16, bottom: 12, gap: 12, shadow: 8 };
 
 export function floatingTabsMetrics(
   count: number,
@@ -23,4 +23,17 @@ export function floatingTabsMetrics(
     height,
     row: beside + count * 60 * unit,
   };
+}
+
+/** One centered group; pages without a compose action do not reserve an empty slot. */
+export function floatingDockMetrics(
+  count: number,
+  fabSize: number,
+  availableWidth: number,
+  action: boolean,
+) {
+  const height = Math.max(48, Math.min(64, fabSize));
+  const actionWidth = action ? height + FLOATING_TABS.gap : 0;
+  const pill = Math.max(0, Math.min(count * 56 + 8, availableWidth - actionWidth));
+  return { pill, height, row: pill + actionWidth };
 }

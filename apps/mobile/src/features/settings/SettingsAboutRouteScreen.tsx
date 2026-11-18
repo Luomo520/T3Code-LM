@@ -88,15 +88,15 @@ function AppSettingsSection() {
 
   const statusLabel =
     updateState === "checking"
-      ? "Checking…"
+      ? "正在检查…"
       : updateState === "downloading"
-        ? "Downloading…"
+        ? "正在下载…"
         : updateState === "ready"
-          ? "Update ready"
+          ? "更新已就绪"
           : updateState === "restarting"
-            ? "Restarting…"
+            ? "正在重启…"
             : updateState === "current"
-              ? "Up to date"
+              ? "已是最新版本"
               : null;
 
   const versionRow = (
@@ -108,7 +108,7 @@ function AppSettingsSection() {
         type="monochrome"
         weight="regular"
       />
-      <Text className="flex-1 text-lg text-foreground">Version</Text>
+      <Text className="flex-1 text-lg text-foreground">{"版本"}</Text>
       <View className="items-end">
         <Text className="text-lg text-foreground-muted">{versionLabel}</Text>
         {statusLabel ? (
@@ -119,15 +119,15 @@ function AppSettingsSection() {
   );
 
   return (
-    <SettingsSection title="App">
-      <SettingsRow icon="internaldrive" label="Client Storage" target="SettingsClientStorage" />
-      <SettingsRow icon="stethoscope" label="Diagnostics" target="SettingsDiagnostics" />
+    <SettingsSection title="应用">
+      <SettingsRow icon="internaldrive" label="客户端存储" target="SettingsClientStorage" />
+      <SettingsRow icon="stethoscope" label="诊断" target="SettingsDiagnostics" />
       <SettingsRow
         icon="doc.on.doc"
-        label="Open source licenses"
+        label="开源许可证"
         target="SettingsOpenSourceLicenses"
       />
-      <SettingsRow icon="doc.text" label="Legal" fullScreenTarget="SettingsLegal" />
+      <SettingsRow icon="doc.text" label="法律信息" fullScreenTarget="SettingsLegal" />
       {updateCheckAvailable ? (
         <Pressable
           accessibilityLabel={`Version ${versionLabel}`}

@@ -21,7 +21,7 @@ export function ConnectionTraceId({
         }
         accessibilityLabel={`Copy trace ID ${traceId}`}
         accessibilityRole="button"
-        accessibilityActions={[{ name: "activate", label: "Copy trace ID" }]}
+        accessibilityActions={[{ name: "activate", label: "复制跟踪 ID" }]}
         onAccessibilityAction={(event) => {
           event.stopPropagation();
           if (event.nativeEvent.actionName === "activate") copy();
