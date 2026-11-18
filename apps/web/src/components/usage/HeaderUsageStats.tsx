@@ -26,8 +26,14 @@ function HeaderUsageSamples({ counters }: { readonly counters: HeaderUsageCounte
   if (!samples.length) return <p className="text-sm text-muted-foreground">暂无请求记录。</p>;
   return (
     <>
-      <div className="overflow-x-auto overscroll-x-contain">
-        <table aria-label="最近5次请求" className="w-full min-w-72 text-sm tabular-nums">
+      <div className="min-w-0">
+        <table aria-label="最近5次请求" className="w-full table-fixed text-xs tabular-nums">
+          <colgroup>
+            <col className="w-[26%]" />
+            <col className="w-[30%]" />
+            <col className="w-[22%]" />
+            <col className="w-[22%]" />
+          </colgroup>
           <caption className="pb-2 text-left font-medium">最近5次请求</caption>
           <thead className="text-xs text-muted-foreground">
             <tr>
@@ -36,8 +42,8 @@ function HeaderUsageSamples({ counters }: { readonly counters: HeaderUsageCounte
                   key={heading}
                   scope="col"
                   className={cn(
-                    "pb-2 font-normal whitespace-nowrap",
-                    index === 0 ? "pr-3 text-left" : "pl-3 text-right",
+                    "pb-2 align-bottom font-normal break-words",
+                    index === 0 ? "text-left" : "pl-1 text-right",
                   )}
                 >
                   {heading}
@@ -51,23 +57,23 @@ function HeaderUsageSamples({ counters }: { readonly counters: HeaderUsageCounte
               <tr key={`${sample.timestamp}-${index}`} className="border-t border-border/60">
                 <th
                   scope="row"
-                  className="py-2 pr-3 text-left align-middle font-normal whitespace-nowrap"
+                  className="py-1.5 text-left align-middle font-normal whitespace-nowrap"
                 >
                   <time
                     dateTime={sample.timestamp}
                     aria-label={new Date(sample.timestamp).toLocaleString()}
-                    className="text-xs text-muted-foreground"
+                    className="text-2xs text-muted-foreground"
                   >
                     {new Date(sample.timestamp).toLocaleTimeString([], { hour12: false })}
                   </time>
                 </th>
-                <td className="py-2 pl-3 text-right align-middle whitespace-nowrap">
+                <td className="py-1.5 pl-1 text-right align-middle break-all">
                   {sample.totalTokens.toLocaleString()}
                 </td>
-                <td className="py-2 pl-3 text-right align-middle whitespace-nowrap">
+                <td className="py-1.5 pl-1 text-right align-middle break-all">
                   {formatUsageRate(sample.cacheRate)}
                 </td>
-                <td className="py-2 pl-3 text-right align-middle whitespace-nowrap">
+                <td className="py-1.5 pl-1 text-right align-middle break-all">
                   {formatUsageRequestSpeed(sample.tokensPerSecond, sample.estimatedTokensPerSecond)}
                 </td>
               </tr>
@@ -310,7 +316,7 @@ export function HeaderUsageStats(props: {
               className="@container max-h-[min(60dvh,28rem)] overflow-y-auto overscroll-contain pr-1"
               data-header-usage-details
             >
-              <dl className="mb-4 grid grid-cols-2 gap-x-4 gap-y-3 border-b border-border/60 pb-3 text-sm @min-[22rem]:grid-cols-3">
+              <dl className="mb-3 grid grid-cols-2 gap-x-4 gap-y-2 border-b border-border/60 pb-3 text-sm @min-[22rem]:grid-cols-3">
                 {metrics.map((item) => (
                   <div key={item.label} className="min-w-0">
                     <dt className="text-xs text-muted-foreground">
