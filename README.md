@@ -17,6 +17,21 @@ T3Code-LM 是基于 [T3 Code](https://github.com/pingdotgg/t3code) 的中文增�
 - 点击顶部统计展开详情，查看最近 5 次请求的 **Token、缓存率和速度**，方便比较不同模型的使用表现。
 - 余额等信息取决于供应商是否支持查询，以及你的配置；没有对应数据时不会凭空生成数值。
 
+手机首页可以查看整体用量，进入会话后可以查看该会话的统计和最近请求。PC 顶部也能展开用量概览。
+
+<p>
+  <img src="./.github/readme/lm/android-usage-home.png" width="260" alt="Android 实机：首页余额与用量，包含今日 Token 和最近五次请求，已替换为示例数据" />
+  <img src="./.github/readme/lm/android-usage-session.png" width="260" alt="Android 实机：会话余额与用量，展示缓存率和请求速度，已替换为示例数据" />
+</p>
+
+_Android 首页汇总（左）与会话明细（右）。图片来自实机，供应商、金额、时间与统计数字已替换为示例。_
+
+<p>
+  <img src="./.github/readme/lm/windows-usage-summary.png" width="286" alt="Windows 实机：顶部用量概览，包含余额、今日用量、缓存率和速度，已脱敏" />
+</p>
+
+_Windows 顶部统计展开后的概览区域，已脱敏。_
+
 ### 三端连接，按自己的设备习惯使用
 
 - **Windows**：安装后即可使用桌面界面和本地服务，也能连接 NAS 或其他电脑上的服务。
@@ -36,6 +51,15 @@ T3Code-LM 是基于 [T3 Code](https://github.com/pingdotgg/t3code) 的中文增�
 - 用滑条调整支持该选项的模型的思考强度，保留 Low、Medium、High 等英文档位，便于辨认。
 - 优化余额详情、模型弹窗和窄屏布局；手机底部导航与部分操作区域使用半透明效果，并适配深浅主题。
 - Windows 顶部增加可拖动区域，小窗口下也更容易移动窗口。
+
+收藏常用模型后，可以在同一个弹窗里选择模型、调整思考强度和响应模式。
+
+<p>
+  <img src="./.github/readme/lm/android-model-picker.png" width="310" alt="Android 实机：模型收藏、思考强度滑条和标准或快速响应模式" />
+  <img src="./.github/readme/lm/windows-model-picker.png" width="378" alt="Windows 实机：模型选择与参数弹窗，包含收藏、快捷键和思考强度滑条" />
+</p>
+
+_Android 浅色界面（左）与 Windows 深色界面（右）。保留实机控件与配色，仅裁去私人会话背景；外观以各端实际版本及主题为准。_
 
 ### 项目、会话与任务状态更好查找
 
