@@ -20,6 +20,7 @@ const popoverPopupWidthClassName = {
   auto: "",
   sm: "w-64",
   compact: "w-72",
+  content: "w-max min-w-[min(18rem,calc(100vw-2rem))]",
   md: "w-80",
   lg: "w-96",
 } as const;

@@ -296,7 +296,7 @@ export function HeaderUsageStats(props: {
         ) : null}
       </PopoverTrigger>
       <PopoverPopup
-        width="compact"
+        width="content"
         align="end"
         padding="compact"
         collisionAvoidance={{ side: "shift", align: "shift" }}
@@ -305,7 +305,10 @@ export function HeaderUsageStats(props: {
         <div className="min-w-0 space-y-3 break-words text-sm leading-relaxed [-webkit-app-region:no-drag]">
           <PopoverTitle>余额与用量</PopoverTitle>
           {props.targetPicker}
-          <p className="truncate text-xs text-muted-foreground" title={sourceDescription}>
+          <p
+            className="max-w-full overflow-x-auto overscroll-x-contain text-xs whitespace-nowrap text-muted-foreground"
+            title={sourceDescription}
+          >
             {sourceDescription}
           </p>
           {settingsOpen && provider && props.environmentId ? (
