@@ -33,10 +33,10 @@ _Windows 深色主题实机界面。项目名、会话内容、设备信息与�
 _Android 首页汇总（左）与会话明细（右）。图片来自实机，供应商、金额、时间与统计数字已替换为示例。_
 
 <p>
-  <img src="./.github/readme/lm/windows-usage-summary.png" width="286" alt="Windows 实机：顶部用量概览，包含余额、今日用量、缓存率和速度，已脱敏" />
+  <img src="./.github/readme/lm/windows-usage-summary.png" width="360" alt="Windows 新版实机用量详情：单行供应商信息、三行统计及最近五次请求，已替换为示例数据" />
 </p>
 
-_Windows 顶部统计展开后的概览区域，已脱敏。_
+_Windows 新版用量详情：供应商信息单行显示，统计分三行，最近 5 次请求展示 Token、缓存率与速度。供应商、金额、时间与数值均已替换为示例。_
 
 ### 三端连接，按自己的设备习惯使用
 
