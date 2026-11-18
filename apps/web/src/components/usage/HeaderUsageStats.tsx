@@ -101,6 +101,11 @@ const detailMetricLabels: Record<string, string> = {
   "t/s": "本次速度",
 };
 
+const compactDetailMetricLabels: Record<string, string> = {
+  缓存5: "近5次缓存",
+  "t/s5": "近5次速度",
+};
+
 export function HomeHeaderUsageStats() {
   const { environments } = useEnvironments();
   const environmentIds = environments.map((environment) => environment.environmentId);
@@ -234,6 +239,9 @@ export function HeaderUsageStats(props: {
     )
     .join("，");
   const settingsIdentity = JSON.stringify([props.environmentId, provider?.instanceId]);
+  const sourceDescription = `${query.data?.providerLabel ?? provider?.displayName ?? "当前环境"}${
+    query.data?.account.sourceLabel ? ` · 账单来源：${query.data.account.sourceLabel}` : ""
+  }`;
   return (
     <Popover
       open={open}
@@ -297,11 +305,8 @@ export function HeaderUsageStats(props: {
         <div className="min-w-0 space-y-3 break-words text-sm leading-relaxed [-webkit-app-region:no-drag]">
           <PopoverTitle>余额与用量</PopoverTitle>
           {props.targetPicker}
-          <p className="break-words text-sm text-muted-foreground">
-            {query.data?.providerLabel ?? provider?.displayName ?? "当前环境"}
-            {query.data?.account.sourceLabel
-              ? ` · 账单来源：${query.data.account.sourceLabel}`
-              : ""}
+          <p className="truncate text-xs text-muted-foreground" title={sourceDescription}>
+            {sourceDescription}
           </p>
           {settingsOpen && provider && props.environmentId ? (
             <HeaderUsageSettings
@@ -316,11 +321,16 @@ export function HeaderUsageStats(props: {
               className="@container max-h-[min(60dvh,28rem)] overflow-y-auto overscroll-contain pr-1"
               data-header-usage-details
             >
-              <dl className="mb-3 grid grid-cols-2 gap-x-4 gap-y-2 border-b border-border/60 pb-3 text-sm @min-[22rem]:grid-cols-3">
+              <dl className="mb-3 grid grid-cols-3 gap-x-2 gap-y-3 border-b border-border/60 pb-3 text-sm">
                 {metrics.map((item) => (
                   <div key={item.label} className="min-w-0">
-                    <dt className="text-xs text-muted-foreground">
-                      {detailMetricLabels[item.label] ?? item.label}
+                    <dt
+                      className="truncate text-xs text-muted-foreground"
+                      title={detailMetricLabels[item.label] ?? item.label}
+                    >
+                      {compactDetailMetricLabels[item.label] ??
+                        detailMetricLabels[item.label] ??
+                        item.label}
                       {item.expired ? " *" : ""}
                     </dt>
                     <dd
