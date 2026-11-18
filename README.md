@@ -45,6 +45,23 @@ _Windows 顶部统计展开后的概览区域，已脱敏。_
 - Android 文件默认保存到 **`Download/T3Code/`**，交给系统下载后，切到后台仍可继续。
 - 大文件暂时仅支持局域网下载；点击下载后才开始准备任务。
 
+<p>
+  <img src="./.github/readme/lm/windows-file-download.png" width="492" alt="Windows 实机：EXE 文件无法在线预览时，可下载到当前设备或复制完整路径" />
+</p>
+
+_Windows 文件预览区域：无法在线预览的文件也能直接下载，或复制路径继续处理。图中仅保留功能卡片，私人项目、会话与目录已裁去。_
+
+<details>
+<summary>查看 Android 文件操作界面</summary>
+
+<p>
+  <img src="./.github/readme/lm/android-file-download.png" width="310" alt="Android 实机文件操作界面，显示下载、复制路径和保存位置；原图的文件读取失败提示保留，私人地址已隐藏" />
+</p>
+
+_Android 下载与复制路径入口。该截图保留了原始文件读取失败提示，仅隐藏私人地址；用于展示操作入口。_
+
+</details>
+
 ### 模型选择和日常操作更顺手
 
 - 中文界面，常用模型可以收藏；搜索需要时再展开，减少手机屏幕占用。
