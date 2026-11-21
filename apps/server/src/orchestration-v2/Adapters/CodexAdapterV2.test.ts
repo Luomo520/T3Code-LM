@@ -9098,6 +9098,160 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it.effect("keeps native subagent token totals separate from siblings and the parent", () =>
+    Effect.gen(function* () {
+      const missing = "child-without-usage";
+      const first = RESUME_CHILD_THREAD;
+      const second = "child-with-early-usage";
+      const spawn = (
+        threadId: string,
+        model: string,
+        reasoningEffort: "high" | "low",
+      ): CodexReplay.CodexAppServerReplayEntry => ({
+        type: "emit_inbound",
+        frame: {
+          method: "item/completed",
+          params: {
+            threadId: RESUME_NATIVE_THREAD,
+            turnId: RESUME_NATIVE_TURN,
+            item: {
+              type: "collabAgentToolCall",
+              id: `spawn-${threadId}`,
+              tool: "spawnAgent",
+              status: "completed",
+              senderThreadId: RESUME_NATIVE_THREAD,
+              receiverThreadIds: [threadId],
+              model,
+              reasoningEffort,
+              agentsStates: { [threadId]: { status: "completed", message: null } },
+            },
+          },
+        },
+      });
+      const usage = (
+        threadId: string,
+        turnId: string,
+        totalTokens: number,
+        lastTokens = totalTokens,
+      ): CodexReplay.CodexAppServerReplayEntry => {
+        const breakdown = (count: number) => ({
+          totalTokens: count,
+          inputTokens: count - 1,
+          cachedInputTokens: 0,
+          outputTokens: 1,
+          reasoningOutputTokens: 0,
+        });
+        return {
+          type: "emit_inbound",
+          frame: {
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId,
+              turnId,
+              tokenUsage: {
+                total: breakdown(totalTokens),
+                last: breakdown(lastTokens),
+                modelContextWindow: 200_000,
+              },
+            },
+          },
+        };
+      };
+      const harness = yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({
+          scenario: RESUME_SCENARIO,
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId: RESUME_NATIVE_THREAD,
+              nativeTurnId: RESUME_NATIVE_TURN,
+              prompt: RESUME_PROMPT,
+            }),
+            spawn(first, "gpt-6.2-astra", "low"),
+            spawn(missing, "gpt-6.1-sol", "low"),
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "thread/settings/updated",
+                params: {
+                  threadId: first,
+                  threadSettings: {
+                    model: "gpt-6.1-sol",
+                    effort: "high",
+                    modelProvider: "openai",
+                    cwd: "/workspace",
+                    approvalPolicy: "never",
+                    approvalsReviewer: "auto_review",
+                    collaborationMode: { mode: "default", settings: { model: "gpt-6.1-sol" } },
+                    sandboxPolicy: { type: "dangerFullAccess" },
+                  },
+                },
+              },
+            },
+            usage(first, RESUME_CHILD_TURN_1, 5_800),
+            usage(RESUME_NATIVE_THREAD, RESUME_NATIVE_TURN, 90_000),
+            usage(second, "child-b-turn", 32_100),
+            spawn(second, "gpt-6.1-sol", "high"),
+            usage(first, RESUME_CHILD_TURN_2, 12_400, 6_600),
+          ],
+        }),
+        undefined,
+        undefined,
+        (threadId, method) =>
+          Effect.succeed({
+            thread: { id: threadId },
+            model: threadId === second && method === "thread/resume" ? "gpt-6.2-astra" : null,
+            ...(threadId === second && method === "thread/resume"
+              ? { reasoningEffort: "low" }
+              : {}),
+          }),
+      );
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-independent-subagent-usage"),
+          text: RESUME_PROMPT,
+        }),
+      );
+      yield* harness.until(
+        () =>
+          harness.subagentUpdates().some(({ subagent }) => subagent.totalTokens === 12_400) &&
+          harness
+            .subagentUpdates()
+            .some(({ subagent }) => subagent.runtimeSettings?.model === "gpt-6.2-astra"),
+      );
+      const latest = new Map(
+        harness
+          .subagentUpdates()
+          .map(({ subagent }) => [subagent.nativeTaskRef?.nativeId, subagent]),
+      );
+      const firstTask = latest.get(`spawn-${first}:${first}`);
+      const secondTask = latest.get(`spawn-${second}:${second}`);
+      assert.equal(firstTask?.totalTokens, 12_400);
+      assert.equal(firstTask?.model, "gpt-6.1-sol");
+      assert.deepEqual(firstTask?.modelSelection?.options, [
+        { id: "reasoningEffort", value: "high" },
+      ]);
+      assert.equal(secondTask?.totalTokens, 32_100);
+      assert.equal(secondTask?.model, "gpt-6.2-astra");
+      assert.deepEqual(secondTask?.modelSelection?.options, [
+        { id: "reasoningEffort", value: "low" },
+      ]);
+      assert.equal(latest.get(`spawn-${missing}:${missing}`)?.totalTokens, undefined);
+      assert.equal(firstTask?.status, "completed");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   it.effect("preserves a subagent result across a trailing empty final and resume", () =>
     Effect.gen(function* () {
       const harness = yield* makeCodexReplayHarness(resumeSubagentTranscript);

@@ -16,6 +16,7 @@ import {
   TurnItemId,
   ScheduledTaskId,
   ThreadId,
+  type ConversationUsageTurn,
   type OrchestrationV2Subagent,
 } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -457,6 +458,49 @@ describe("MessagesTimeline work rows", () => {
 });
 
 describe("MessagesTimeline messages", () => {
+  it("keeps each historical reply's usage attached to its run as data arrives", async () => {
+    const props = baseProps();
+    const firstRunId = RunId.make("first-run");
+    const secondRunId = RunId.make("second-run");
+    const entries = [
+      message("First reply", { role: "assistant", runId: firstRunId }, "first-reply"),
+      message("Second reply", { role: "assistant", runId: secondRunId }, "second-reply"),
+    ];
+    const timeline = (turns: readonly ConversationUsageTurn[] | null) => (
+      <MessagesTimeline {...props} timelineEntries={entries} replyUsageTurns={turns} />
+    );
+    const recorded = {
+      costUsd: null,
+      costPartial: false,
+      cacheRate: null,
+      estimatedTokensPerSecond: null,
+    };
+    await using screen = await renderElement(timeline(null));
+    screen.container.style.width = "320px";
+    const readReplyUsage = (reply: string) => {
+      const row = [...screen.container.querySelectorAll(".messages-timeline-row-frame")].find(
+        (element) => element.textContent?.includes(reply),
+      );
+      return [
+        row?.querySelector('[data-reply-usage="tokens"]')?.textContent,
+        row?.querySelector('[data-reply-usage="speed"]')?.textContent,
+      ];
+    };
+    await vi.waitFor(() => expect(readReplyUsage("First reply")).toEqual(["—", "—"]));
+    await screen.rerender(
+      timeline([
+        { ...recorded, runId: secondRunId, cumulativeTokens: 26_000, tokensPerSecond: 64 },
+        { ...recorded, runId: firstRunId, cumulativeTokens: 12_400, tokensPerSecond: 48 },
+      ]),
+    );
+    await vi.waitFor(() => {
+      expect(readReplyUsage("First reply")).toEqual(["12.4k token", "48t/s"]);
+      expect(readReplyUsage("Second reply")).toEqual(["26k token", "64t/s"]);
+    });
+    await screen.rerender(timeline(null));
+    await vi.waitFor(() => expect(readReplyUsage("Second reply")).toEqual(["—", "—"]));
+  });
+
   it("settles when equally long messages have very different rendered heights", async () => {
     const props = baseProps();
     const tall = message("a\n\n".repeat(6000), { role: "assistant" }, "tall");

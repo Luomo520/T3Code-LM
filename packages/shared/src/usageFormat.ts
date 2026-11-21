@@ -1,6 +1,7 @@
 // @effect-diagnostics globalDate:off -- Usage windows are calendar days in the viewer's zone, derived from wall-clock "now" via Intl.
 import {
   UsageDay,
+  type ConversationUsageTurn,
   type UsageResolution,
   type UsageSource,
   type UsageSummaryInput,
@@ -64,17 +65,48 @@ export function formatCount(value: number): string {
 }
 
 const TOKEN_SUFFIXES = ["K", "M", "B", "T"] as const;
+const CONVERSATION_TOKEN_SUFFIXES = TOKEN_SUFFIXES.slice(0, 3);
+// oxlint-disable-next-line t3code/no-em-dash-copy -- the reply footer uses this symbol for missing measurements
+export const UNKNOWN_CONVERSATION_USAGE = "—";
 
 export function formatTokens(value: number): string {
+  return formatScaledTokens(value, TOKEN_SUFFIXES);
+}
+
+function formatScaledTokens(value: number, suffixes: readonly string[]): string {
   if (Math.abs(Math.round(value)) < 1e3) return INTEGER.format(Math.round(value));
   let scaled = value / 1e3;
   let unit = 0;
   // Choose the unit after rounding, so 999,999 reads 1M rather than 1000K.
-  while (Math.abs(Number(trim(scaled))) >= 1e3 && unit < TOKEN_SUFFIXES.length - 1) {
+  while (Math.abs(Number(trim(scaled))) >= 1e3 && unit < suffixes.length - 1) {
     scaled /= 1e3;
     unit += 1;
   }
-  return `${trim(scaled)}${TOKEN_SUFFIXES[unit]}`;
+  return `${trim(scaled)}${suffixes[unit]}`;
+}
+
+export function formatConversationTokens(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) || value < 0
+    ? UNKNOWN_CONVERSATION_USAGE
+    : `${formatScaledTokens(value, CONVERSATION_TOKEN_SUFFIXES).toLowerCase()} token`;
+}
+
+export function formatReplyUsage(
+  usage:
+    | Pick<
+        ConversationUsageTurn,
+        "cumulativeTokens" | "tokensPerSecond" | "estimatedTokensPerSecond"
+      >
+    | undefined,
+): { readonly tokens: string; readonly speed: string } {
+  const measured = usage?.tokensPerSecond;
+  const estimated = usage?.estimatedTokensPerSecond;
+  const knownSpeed = (value: number | null | undefined): value is number =>
+    value != null && Number.isFinite(value) && value > 0;
+  let speed = UNKNOWN_CONVERSATION_USAGE;
+  if (knownSpeed(measured)) speed = `${measured.toFixed(1).replace(/\.0$/, "")}t/s`;
+  else if (knownSpeed(estimated)) speed = `≈${estimated.toFixed(1).replace(/\.0$/, "")}t/s`;
+  return { tokens: formatConversationTokens(usage?.cumulativeTokens), speed };
 }
 
 function trim(value: number): string {

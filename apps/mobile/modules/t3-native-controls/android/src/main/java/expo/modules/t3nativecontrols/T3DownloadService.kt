@@ -18,8 +18,10 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.util.Log
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.ProxySelector
 import java.net.URL
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -31,12 +33,14 @@ internal data class DownloadState(
   val total: Long? = null,
   val uri: Uri? = null,
   val error: String? = null,
+  val retryable: Boolean = false,
 ) {
   fun toMap(): Map<String, Any> = buildMap {
     put("status", status)
     put("bytesDownloaded", bytes.toDouble())
     total?.let { put("totalBytes", it.toDouble()) }
     error?.let { put("error", it) }
+    if (retryable) put("retryable", true)
   }
 }
 
@@ -44,13 +48,15 @@ internal class DownloadTask(
   val url: URL,
   val fileName: String,
   val allowCellular: Boolean,
-  val updateBytes: Long? = null,
+  updateBytes: Long? = null,
+  fileBytes: Long? = null,
   private val saveUpdate: ((String, Uri) -> Unit)? = null,
 ) {
   val id = UUID.randomUUID().toString()
   val isUpdate = updateBytes != null
+  val expectedBytes = updateBytes ?: fileBytes
   val cancelled = AtomicBoolean(false)
-  @Volatile var state = DownloadState("pending", total = updateBytes)
+  @Volatile var state = DownloadState("pending", total = expectedBytes)
     private set
 
   fun cancel() {
@@ -125,7 +131,7 @@ internal object T3Downloads {
   @Synchronized
   fun failPending(message: String) {
     waiting().forEach {
-      it.transition(DownloadState("failed", total = it.updateBytes, error = message))
+      it.transition(DownloadState("failed", total = it.expectedBytes, error = message, retryable = true))
     }
   }
 
@@ -185,7 +191,7 @@ class T3DownloadService : Service() {
     var paused: DownloadTask? = null
     for (task in T3Downloads.waiting()) {
       if (task.cancelled.get()) {
-        task.transition(DownloadState("cancelled", total = task.updateBytes))
+        task.transition(DownloadState("cancelled", total = task.expectedBytes))
         continue
       }
       val gate = DownloadNetwork(connectivity, task.allowCellular)
@@ -194,7 +200,7 @@ class T3DownloadService : Service() {
         startTransfer(task, gate, network)
         return
       }
-      task.transition(DownloadState("paused", total = task.updateBytes))
+      task.transition(DownloadState("paused", total = task.expectedBytes))
       if (paused == null) paused = task
     }
     if (paused != null) notifications.notify(FOREGROUND_ID, ongoing(paused))
@@ -203,7 +209,7 @@ class T3DownloadService : Service() {
 
   private fun startTransfer(task: DownloadTask, gate: DownloadNetwork, network: Network) {
     active = task
-    task.transition(DownloadState("downloading", total = task.updateBytes))
+    task.transition(DownloadState("downloading", total = task.expectedBytes))
     refresh.run()
     worker.execute {
       download(task, gate, network)
@@ -228,26 +234,38 @@ class T3DownloadService : Service() {
       wake.acquire()
       T3DownloadDestination.create(this, task.fileName, task.isUpdate).use { destination ->
         T3HttpDownload(
-          connect = { network.openConnection(it) as HttpURLConnection },
+          connect = { url ->
+            // Network.openConnection(URL) supplies the proxy directly, without the per-host
+            // exclusions or PAC choice used by the app's default HTTP client.
+            val proxy = if (task.isUpdate) null
+            else ProxySelector.getDefault()?.select(url.toURI())?.firstOrNull()
+            (if (proxy == null) network.openConnection(url)
+            else network.openConnection(url, proxy)) as HttpURLConnection
+          },
           checkActive = {
             task.checkRunning()
             if (gate.allowed() != network) throw IOException("Download network changed")
           },
           redirectAllowed = task::acceptsRedirect,
           progress = task::progress,
-        ).transfer(task.url, destination.channel, task.updateBytes)
+          observeResponse = { phase, status ->
+            if (!task.isUpdate) Log.i(LOG_TAG, "${task.id} $phase HTTP $status")
+          },
+        ).transfer(task.url, destination.channel, task.expectedBytes)
         task.checkRunning()
         task.complete(this, destination.publish())
       }
     } catch (_: InterruptedException) {
-      task.transition(DownloadState("cancelled", total = task.updateBytes))
+      task.transition(DownloadState("cancelled", total = task.expectedBytes))
     } catch (error: Exception) {
+      val failure = error as? DownloadFailure
       val next = when {
-        task.cancelled.get() -> DownloadState("cancelled", total = task.updateBytes)
-        error is IOException && error !is DownloadFailure && gate.allowed(refresh = true) != network ->
-          DownloadState("paused", total = task.updateBytes)
-        else -> DownloadState("failed", total = task.updateBytes,
-          error = (error as? DownloadFailure)?.message ?: "下载中断，请检查网络和可用空间后重试。")
+        task.cancelled.get() -> DownloadState("cancelled", total = task.expectedBytes)
+        error is IOException && gate.allowed(refresh = true) != network ->
+          DownloadState("paused", total = task.expectedBytes)
+        else -> DownloadState("failed", total = task.expectedBytes,
+          error = failure?.message ?: "下载中断，请检查可用空间和存储权限。",
+          retryable = failure?.retryable ?: false)
       }
       task.transition(next)
     } finally {
@@ -326,6 +344,7 @@ class T3DownloadService : Service() {
   }
 
   private companion object {
+    const val LOG_TAG = "T3FileDownload"
     const val CHANNEL = "t3-downloads"
     const val FOREGROUND_ID = 0x7433444C
     const val CANCEL = "expo.modules.t3nativecontrols.CANCEL_DOWNLOAD"

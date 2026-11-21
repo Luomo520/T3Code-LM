@@ -35,7 +35,7 @@ describe("home time and project views", () => {
       ),
     ).toEqual(["home-project:0:two", "b", "home-project:0:one"]);
   });
-  it("keeps the supplied pin order ahead of newer conversations, including history", () => {
+  it("orders pins by conversation time at the top of both views", () => {
     const items = [
       ...rows,
       { key: "second-pin", project: "one", time: 9 },
@@ -48,7 +48,23 @@ describe("home time and project views", () => {
         mode: "time",
         collapsed: new Set(),
       }).map((r) => r.key),
-    ).toEqual(["a", "second-pin", "settled", "b", "c"]);
+    ).toEqual(["second-pin", "a", "settled", "b", "c"]);
+    for (const mode of ["time", "projects"] as const) {
+      expect(
+        arrangeHomeList({
+          rows: items,
+          describe: (r) => ({
+            ...describe(r),
+            timestamp: r.key === "a" ? 10 : r.time,
+            pinned: r.key === "a" || r.key === "second-pin",
+          }),
+          mode,
+          collapsed: new Set(["one"]),
+        })
+          .map((r) => r.key)
+          .slice(0, 2),
+      ).toEqual(["a", "second-pin"]);
+    }
     expect(
       arrangeHomeList({
         rows: items,

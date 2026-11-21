@@ -7,6 +7,9 @@ import {
   createProjectFaviconUrlAtomFamily,
   EMPTY_ASSET_URL_ATOM,
   makeRevisionedAssetUrlFamily,
+  resolveAssetUrl,
+  WorkspaceDownloadError,
+  workspaceDownloadAuthorizationError,
 } from "@t3tools/client-runtime/state/assets";
 import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
@@ -226,22 +229,33 @@ export function useWorkspaceDownloadUrl(
   environmentId: EnvironmentId | null,
   resource: AssetResource | null,
 ) {
-  const connection = usePreparedConnection(environmentId);
   const create = useAtomQueryRunner(assetEnvironment.createDownloadUrl, {
     refresh: true,
     reportFailure: false,
   });
   return async () => {
-    if (!environmentId || !resource || connection._tag !== "Some")
-      throw new Error("环境未连接，请连接后重试。");
+    if (environmentId === null || resource === null)
+      throw new WorkspaceDownloadError({ message: "当前文件缺少下载所需的工作区信息。" });
+    const connectionAtom = environmentSession.preparedConnectionValueAtom(environmentId);
+    if (appAtomRegistry.get(connectionAtom)._tag === "None")
+      throw new WorkspaceDownloadError({ message: "环境未连接，请连接后重试。", retryable: true });
     const result = await create({ environmentId, input: { resource } });
-    if (result._tag !== "Success")
-      throw new Error("无法申请下载授权，请检查文件是否仍存在、连接及文件读取权限。");
+    if (result._tag === "Failure")
+      throw workspaceDownloadAuthorizationError(squashAtomCommandFailure(result));
     if (!result.value.download || !result.value.fileName)
-      throw new Error("当前服务端未提供此文件的下载能力。");
-    return {
-      url: new URL(result.value.relativeUrl, connection.value.httpBaseUrl).href,
-      fileName: result.value.fileName,
-    };
+      throw new WorkspaceDownloadError({ message: "当前服务端未提供此文件的下载能力。" });
+    const connection = appAtomRegistry.get(connectionAtom);
+    if (connection._tag === "None")
+      throw new WorkspaceDownloadError({
+        message: "与服务端的连接已断开，请重新连接后重试。",
+        retryable: true,
+      });
+    const url = resolveAssetUrl(connection.value.httpBaseUrl, result.value.relativeUrl);
+    if (!url)
+      throw new WorkspaceDownloadError({
+        message: "下载地址不可用，请重新连接环境。",
+        retryable: true,
+      });
+    return { url, fileName: result.value.fileName, sizeBytes: result.value.sizeBytes };
   };
 }

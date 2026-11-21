@@ -65,6 +65,38 @@ export function resolveAssetUrl(httpBaseUrl: string, relativeUrl: string): strin
   }
 }
 
+export class WorkspaceDownloadError extends Schema.TaggedError<WorkspaceDownloadError>()(
+  "WorkspaceDownloadError",
+  { message: Schema.String, retryable: Schema.optionalKey(Schema.Boolean) },
+) {}
+
+export const isWorkspaceDownloadError = Schema.is(WorkspaceDownloadError);
+
+export function workspaceDownloadAuthorizationError(error: unknown): WorkspaceDownloadError {
+  const tag = typeof error === "object" && error !== null && "_tag" in error ? error._tag : null;
+  switch (tag) {
+    case "AssetWorkspacePathValidationError":
+      return new WorkspaceDownloadError({
+        message: "该文件位于当前工作区之外，无法通过此入口下载。",
+      });
+    case "EnvironmentAuthorizationError":
+      return new WorkspaceDownloadError({ message: "当前连接没有文件读取权限。" });
+    case "AssetWorkspaceContextNotFoundError":
+    case "AssetWorkspaceRootNormalizationError":
+      return new WorkspaceDownloadError({ message: "当前工作区已不可用，请重新打开项目后下载。" });
+    case "AssetWorkspaceAssetNotFoundError":
+    case "AssetAttachmentNotFoundError":
+      return new WorkspaceDownloadError({ message: "文件不存在或不在可下载范围内。" });
+    case "AssetPreviewTypeValidationError":
+      return new WorkspaceDownloadError({ message: "当前服务端未提供此文件的下载能力。" });
+    default:
+      return new WorkspaceDownloadError({
+        message: "无法申请下载链接，请检查与服务端的连接后重试。",
+        retryable: true,
+      });
+  }
+}
+
 export const EMPTY_ASSET_URL_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("asset-url:empty"),
 );

@@ -54,9 +54,9 @@ describe("reasoning rail highlight", () => {
   it("scales the sweep width and its endpoint to the local fill length", () => {
     const fillWidths = [0, 2, 5].map((index) => reasoningSliderFillWidth(index, 342, 6));
     expect(fillWidths.map(reasoningRailSweep)).toEqual([
-      { width: 12, start: -12, end: 21 },
-      { width: 78, start: -78, end: 141 },
-      { width: 177, start: -177, end: 321 },
+      { width: 21, start: -21, end: 21 },
+      { width: 90, start: -90, end: 141 },
+      { width: 205, start: -205, end: 321 },
     ]);
   });
 

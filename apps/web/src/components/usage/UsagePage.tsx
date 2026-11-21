@@ -194,7 +194,7 @@ export function UsagePage() {
       preferences.windowDays === 1 ? "hour" : "day",
     ),
   }));
-  const metric = preferences.metric;
+  const [metric, setMetric] = useState<UsageMetric>("tokens");
   const showingLimits = metric === "limits";
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
@@ -245,7 +245,7 @@ export function UsagePage() {
   };
   const selectMetric = (nextMetric: UsageMetric) => {
     if (nextMetric === "limits") setLimitsNow(Date.now());
-    updatePreferences({ metric: nextMetric });
+    setMetric(nextMetric);
   };
   const refreshLimits = (automatic = false) =>
     // Settled so the timestamp still advances when a refresh throws.

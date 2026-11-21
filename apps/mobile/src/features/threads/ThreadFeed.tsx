@@ -14,6 +14,8 @@ import {
   enrichedSkillReference,
 } from "../../lib/enrichedLinkPresentation";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
+import { formatReplyUsage } from "@t3tools/shared/usageFormat";
+import type { ConversationUsageTurn } from "@t3tools/contracts";
 import { ThreadContextDivider } from "./thread-context-divider";
 import {
   ThreadHandoffDivider,
@@ -330,6 +332,7 @@ export interface ThreadFeedProps {
   readonly threadTitle: string;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  readonly replyUsageTurns?: readonly ConversationUsageTurn[] | null | undefined;
   readonly pendingHandoff?: HandoffEndpoints | null;
   readonly contentPresentation: ThreadContentPresentation;
   readonly latestRun: ThreadFeedLatestRun | null;
@@ -1500,7 +1503,9 @@ function ThreadAutomationMessageRow(props: {
             tintColorClassName="accent-user-bubble-foreground-muted"
             type="monochrome"
           />
-          <Text className="font-t3-medium text-sm text-user-bubble-foreground-muted">{"自动化"}</Text>
+          <Text className="font-t3-medium text-sm text-user-bubble-foreground-muted">
+            {"自动化"}
+          </Text>
           <Text numberOfLines={1} className="min-w-0 shrink text-sm text-user-bubble-foreground">
             {summary}
           </Text>
@@ -1536,7 +1541,9 @@ function ThreadAutomationMessageRow(props: {
               hitSlop={6}
               onPress={() => openSettings(navigation, "SettingsScheduledTasks")}
             >
-              <Text className="font-t3-medium text-xs text-foreground-secondary">{"打开自动化"}</Text>
+              <Text className="font-t3-medium text-xs text-foreground-secondary">
+                {"打开自动化"}
+              </Text>
             </Pressable>
           ) : null}
           <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
@@ -1663,6 +1670,7 @@ function renderFeedEntry(
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
+    readonly replyUsageByRun: ReadonlyMap<RunId, ConversationUsageTurn> | undefined;
     readonly unsettledTurnId: RunId | null;
     readonly compactionLabelsByEntryId: ReadonlyMap<string, { title: string; compacting: string }>;
     readonly failedRunIds: ReadonlySet<RunId>;
@@ -2029,7 +2037,9 @@ function renderFeedEntry(
           {...(enterAnimated ? { entering: FadeInDown.duration(220) } : {})}
         >
           {presentation.attribution === "t3code" ? (
-            <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">{"由 T3 Code 发送"}</Text>
+            <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
+              {"由 T3 Code 发送"}
+            </Text>
           ) : null}
           {presentation.guestName !== undefined ? (
             <GuestMessageName name={presentation.guestName} />
@@ -2283,6 +2293,12 @@ function renderFeedEntry(
     }
 
     const enterAnimated = isFreshTimestamp(message.createdAt);
+    const replyUsage =
+      showAssistantMeta && props.replyUsageByRun
+        ? formatReplyUsage(
+            message.runId === null ? undefined : props.replyUsageByRun.get(message.runId),
+          )
+        : null;
     return (
       <Animated.View
         className={cn(
@@ -2320,7 +2336,7 @@ function renderFeedEntry(
           />
         ) : null}
         {showAssistantMeta ? (
-          <View className="mt-1 flex-row items-center gap-1">
+          <View className="mt-1 flex-row flex-wrap items-center gap-1">
             <CopyTextButton
               accessibilityLabel="复制消息"
               text={renderedText}
@@ -2341,6 +2357,22 @@ function renderFeedEntry(
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {timestampLabel}
             </Text>
+            {replyUsage ? (
+              <View className="flex-row flex-wrap items-center gap-x-2">
+                <Text
+                  accessibilityLabel={`会话累计 Token ${replyUsage.tokens}`}
+                  className="font-t3-medium text-xs tabular-nums text-foreground-secondary"
+                >
+                  {replyUsage.tokens}
+                </Text>
+                <Text
+                  accessibilityLabel={`本轮输出速度 ${replyUsage.speed}`}
+                  className="font-t3-medium text-xs tabular-nums text-foreground-secondary"
+                >
+                  {replyUsage.speed}
+                </Text>
+              </View>
+            ) : null}
           </View>
         ) : null}
       </Animated.View>
@@ -3320,6 +3352,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const reviewCommentColors = useReviewCommentColors();
   const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
+  const replyUsageByRun = useMemo(
+    () =>
+      props.replyUsageTurns === undefined
+        ? undefined
+        : new Map(props.replyUsageTurns?.map((turn) => [turn.runId, turn])),
+    [props.replyUsageTurns],
+  );
   const compactionLabelsByEntryId = useMemo(
     () => threadFeedCompactionLabels(props.feed),
     [props.feed],
@@ -3334,6 +3373,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setupWorkingStartedAt: props.setupWorkingStartedAt,
     dispatchingMessageId: props.dispatchingMessageId,
     unsettledTurnId,
+    replyUsageByRun,
     copiedRowId,
     expandedWorkGroups,
     expandedWorkRows,
@@ -3750,6 +3790,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             workRowSizing,
             workGroupScrollPositions,
             terminalAssistantMessageIds,
+            replyUsageByRun,
             unsettledTurnId,
             compactionLabelsByEntryId,
             failedRunIds,

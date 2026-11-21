@@ -301,6 +301,62 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect(
+    "downloads an absolute path within the workspace but rejects the same path outside it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-workspace-download-" });
+        const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-host-download-" });
+        for (const name of ["README.md", "voice.mp3"]) {
+          const payload = "workspace bytes";
+          const filePath = path.join(root, name);
+          yield* fs.writeFileString(filePath, payload);
+          const result = yield* issueAssetUrl({
+            resource: {
+              _tag: "draft-workspace-file",
+              cwd: root,
+              path: filePath,
+              disposition: "attachment",
+            },
+          });
+          expect(result).toMatchObject({
+            download: true,
+            fileName: name,
+            sizeBytes: payload.length,
+          });
+          const [token, encodedName] = result.relativeUrl
+            .slice(`${ASSET_ROUTE_PREFIX}/`.length)
+            .split("/");
+          const asset = yield* resolveAsset(token!, encodedName!);
+          expect(asset).toMatchObject({ kind: "file", download: true });
+          if (asset?.kind !== "file") throw new Error("Expected a downloadable file");
+          const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
+          expect(yield* Effect.promise(() => response.text())).toBe(payload);
+          expect(response.headers.get("content-disposition")).toContain("attachment;");
+        }
+        const globalFile = path.join(outside, "AGENTS.md");
+        yield* fs.writeFileString(globalFile, "host file");
+        const outsidePaths = [globalFile];
+        if (symlinksSupported) {
+          yield* fs.symlink(globalFile, path.join(root, "linked.md"));
+          outsidePaths.push("linked.md");
+        }
+        for (const outsidePath of outsidePaths) {
+          const failure = yield* issueAssetUrl({
+            resource: {
+              _tag: "draft-workspace-file",
+              cwd: root,
+              path: outsidePath,
+              disposition: "attachment",
+            },
+          }).pipe(Effect.flip);
+          expect(failure._tag).toBe("AssetWorkspacePathValidationError");
+        }
+      }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("download authorization expires without limiting a later click", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

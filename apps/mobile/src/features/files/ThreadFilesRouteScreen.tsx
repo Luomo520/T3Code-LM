@@ -1,9 +1,11 @@
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
+import { isWorkspaceDownloadError } from "@t3tools/client-runtime/state/assets";
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import { environmentSession } from "../../state/session";
 import {
   StackActions,
+  useIsFocused,
   useNavigation,
   usePreventRemove,
   type StaticScreenProps,
@@ -14,6 +16,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useRef,
   useState,
 } from "react";
 import { Alert, AppState, Platform, View } from "react-native";
@@ -669,6 +672,7 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
 
 export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const { fileInspector } = useWorkspacePaneState();
   const { appearance, setCodeWordBreak } = useAppearancePreferences();
   const params = props.route.params;
@@ -728,8 +732,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       ? modeOverride.mode
       : targetLine !== null &&
           relativePath !== null &&
-          (isMarkdownPreviewFile(relativePath) ||
-            filePreviewDelimiter({ name: relativePath }) !== null)
+          filePreviewDelimiter({ name: relativePath }) !== null
         ? "source"
         : defaultViewMode(relativePath);
   const resolvedActiveMode =
@@ -870,6 +873,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   );
 
   const [requestingDownload, setRequestingDownload] = useState(false);
+  const lastShownDownloadFailure = useRef<string | null>(null);
   const [fileDownload, setFileDownload] = useState<{
     key: string;
     id: string;
@@ -907,6 +911,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
                     status: "failed",
                     bytesDownloaded: 0,
                     error: "下载任务已不存在，请重新下载。",
+                    retryable: true,
                   },
                 }
               : current,
@@ -936,25 +941,66 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       ? { _tag: "draft-workspace-file", cwd, path: relativePath, disposition: "attachment" }
       : null,
   );
-  const handleDownload = useCallback(async () => {
-    if (activeDownloadId || pendingFileDownloads.has(fileDownloadKey)) return;
-    pendingFileDownloads.add(fileDownloadKey);
-    setRequestingDownload(true);
-    try {
-      const file = await downloadUrl();
-      const id = await enqueueFileDownload(file.url, file.fileName);
-      setFileDownload({
-        key: fileDownloadKey,
-        id,
-        task: { status: "pending", bytesDownloaded: 0 },
-      });
-    } catch (error) {
-      Alert.alert("下载未启动", error instanceof Error ? error.message : "请检查连接后重试。");
-    } finally {
-      pendingFileDownloads.delete(fileDownloadKey);
-      setRequestingDownload(false);
+  const handleDownload = useCallback(
+    async function beginFileDownload() {
+      if (activeDownloadId || pendingFileDownloads.has(fileDownloadKey)) return;
+      pendingFileDownloads.add(fileDownloadKey);
+      setRequestingDownload(true);
+      try {
+        const file = await downloadUrl();
+        const id = await enqueueFileDownload(file.url, file.fileName, file.sizeBytes);
+        setFileDownload({
+          key: fileDownloadKey,
+          id,
+          task: { status: "pending", bytesDownloaded: 0 },
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "请检查应用状态及存储权限后重试。";
+        Alert.alert(
+          "下载未启动",
+          detail,
+          isWorkspaceDownloadError(error) && error.retryable
+            ? [
+                { text: "取消", style: "cancel" },
+                { text: "重试", onPress: () => void beginFileDownload() },
+              ]
+            : undefined,
+        );
+      } finally {
+        pendingFileDownloads.delete(fileDownloadKey);
+        setRequestingDownload(false);
+      }
+    },
+    [activeDownloadId, downloadUrl, fileDownloadKey],
+  );
+
+  const showFileDownloadResult = useCallback(
+    (task: FileDownload) =>
+      Alert.alert(
+        task.status === "failed" ? "下载失败" : "文件下载",
+        fileDownloadProgress(task),
+        task.status === "failed" && task.retryable
+          ? [
+              { text: "取消", style: "cancel" },
+              { text: "重试", onPress: () => void handleDownload() },
+            ]
+          : undefined,
+      ),
+    [handleDownload],
+  );
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Show the native failure alert once when the file route is focused.
+  useEffect(() => {
+    if (
+      !isFocused ||
+      currentDownload?.task.status !== "failed" ||
+      lastShownDownloadFailure.current === currentDownload.id
+    ) {
+      return;
     }
-  }, [activeDownloadId, downloadUrl, fileDownloadKey]);
+    lastShownDownloadFailure.current = currentDownload.id;
+    showFileDownloadResult(currentDownload.task);
+  }, [currentDownload, isFocused, showFileDownloadResult]);
 
   const fileMenuActions = (() => {
     if (relativePath === null) return [];
@@ -990,7 +1036,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             title: "查看本次下载结果",
             icon: "arrow.down.circle",
             inline: false,
-            onPress: () => Alert.alert("文件下载", fileDownloadProgress(currentDownload.task)),
+            onPress: () => showFileDownloadResult(currentDownload.task),
           } as const)
         : null,
       Platform.OS === "android"

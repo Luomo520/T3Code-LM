@@ -1,3 +1,8 @@
+import {
+  resolveThreadConversationTimestamp,
+  toSortableTimestamp,
+} from "@t3tools/client-runtime/state/thread-sort";
+
 export type HomeListView = "time" | "projects";
 export interface ProjectHeading {
   readonly type: "home-project";
@@ -13,15 +18,10 @@ export function homeConversationTimestamp(thread: {
   readonly latestUserMessageAt: string | null;
   readonly createdAt: string;
 }): number {
-  for (const at of [
-    thread.latestConversationMessageAt,
-    thread.latestUserMessageAt,
-    thread.createdAt,
-  ]) {
-    const timestamp = Date.parse(at ?? "");
-    if (!Number.isNaN(timestamp)) return timestamp;
-  }
-  return Number.NEGATIVE_INFINITY;
+  return (
+    toSortableTimestamp(resolveThreadConversationTimestamp(thread) ?? undefined) ??
+    Number.NEGATIVE_INFINITY
+  );
 }
 
 export function arrangeHomeList<T extends { readonly key: string }>(input: {
@@ -32,24 +32,25 @@ export function arrangeHomeList<T extends { readonly key: string }>(input: {
     row: T,
   ) => { projectKey: string; title: string; timestamp: number; pinned: boolean } | null;
 }): Array<T | ProjectHeading> {
-  const result: Array<T | ProjectHeading> = [];
-  const pinnedRows: T[] = [];
+  const otherRows: T[] = [];
   const conversations: Array<{ row: T; info: NonNullable<ReturnType<typeof input.describe>> }> = [];
   for (const row of input.rows) {
     const info = input.describe(row);
-    if (!info) result.push(row);
-    else if (input.mode === "time" && info.pinned) {
-      // The thread list already applies persisted and pending pin order.
-      pinnedRows.push(row);
-    } else conversations.push({ row, info });
+    if (info) conversations.push({ row, info });
+    else otherRows.push(row);
   }
   const sorted = conversations.sort(
     (a, b) => b.info.timestamp - a.info.timestamp || a.row.key.localeCompare(b.row.key),
   );
-  if (input.mode === "time") result.push(...pinnedRows, ...sorted.map((item) => item.row));
+  const unpinned = sorted.filter(({ info }) => !info.pinned);
+  const result: Array<T | ProjectHeading> = [
+    ...sorted.filter(({ info }) => info.pinned).map(({ row }) => row),
+    ...otherRows,
+  ];
+  if (input.mode === "time") result.push(...unpinned.map(({ row }) => row));
   else {
-    const groups = new Map<string, typeof sorted>();
-    for (const item of sorted) {
+    const groups = new Map<string, typeof unpinned>();
+    for (const item of unpinned) {
       const group = groups.get(item.info.projectKey) ?? [];
       group.push(item);
       groups.set(item.info.projectKey, group);

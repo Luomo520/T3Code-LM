@@ -359,8 +359,12 @@ describe("sidebar settled pagination", () => {
   });
 });
 
-it("keeps project pins at the top of Recent across paging, scope, and unpinning", async () => {
+it("shows current pin activity and keeps paged project icons colored", async () => {
   using stack = new DisposableStack();
+  const style = document.createElement("style");
+  style.textContent = appCss;
+  document.head.append(style);
+  stack.defer(() => style.remove());
   const previousSettings = getClientSettings();
   stack.defer(() => __setClientSettingsForTests(previousSettings));
   __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
@@ -378,7 +382,10 @@ it("keeps project pins at the top of Recent across paging, scope, and unpinning"
     projectExpandedById: {},
   });
 
-  const scoped = project("scoped");
+  const scoped: Project = {
+    ...project("scoped"),
+    projectIcon: { kind: "monogram", text: "通用", color: "orange" },
+  };
   const other = project("other");
   const active = {
     ...threadShell(scoped.id, 1000),
@@ -386,6 +393,7 @@ it("keeps project pins at the top of Recent across paging, scope, and unpinning"
   };
   const firstPin = {
     ...threadShell(scoped.id, 1001),
+    branch: "release/one",
     latestConversationMessageAt: "2026-01-01T00:00:00Z",
     pinnedAt: "2026-04-02T00:00:00Z",
     pinOrderKey: "a",
@@ -466,30 +474,82 @@ it("keeps project pins at the top of Recent across paging, scope, and unpinning"
       (element) => element.dataset.threadItem,
     );
   const threadKey = (thread: EnvironmentThreadShell) => `${thread.environmentId}:${thread.id}`;
-  const pins = [threadKey(firstPin), threadKey(secondPin)];
-  expect(rowKeys().slice(0, 2)).toEqual(pins);
-  expect(rowKeys()).not.toContain(threadKey(legacySettledPin));
+  const row = (thread: EnvironmentThreadShell) =>
+    screen.container.querySelector<HTMLElement>(`[data-sidebar-row="${threadKey(thread)}"]`)!;
+  const pinOrder = [secondPin, legacySettledPin, firstPin].map(threadKey);
+  expect(rowKeys().slice(0, 3)).toEqual(pinOrder);
+  expect(row(firstPin).dataset.testid).toBe("sidebar-row-card");
 
-  await screen.getByRole("button", { name: "Recent", exact: true }).click();
-  const recentPins = [...pins, threadKey(legacySettledPin)];
-  expect(rowKeys().slice(0, 3)).toEqual(recentPins);
+  const recent = screen.getByRole("button", { name: "Recent", exact: true });
+  await act(() => (recent.element() as HTMLButtonElement).click());
+  expect(rowKeys().slice(0, 3)).toEqual(pinOrder);
+  expect(row(firstPin).dataset.testid).toBe("sidebar-row-card");
+  expect(row(firstPin).textContent).toContain(scoped.title);
+  expect(row(firstPin).textContent).toContain("release/one");
+  expect(row(firstPin).querySelector("time")?.dateTime).toBe(firstPin.latestConversationMessageAt);
+  expect(
+    row(firstPin).querySelector('[aria-label="Unpin thread"], [aria-label="Pinned"]'),
+  ).not.toBeNull();
+  expect(row(active).dataset.testid).toBe("sidebar-row-slim");
   expect(rowKeys()).toHaveLength(205);
   expect(rowKeys()).not.toContain(threadKey(outsideScope));
   expect(rowKeys().indexOf(threadKey(snoozedPin))).toBeGreaterThan(
     rowKeys().indexOf(threadKey(active)),
   );
-  await screen.getByRole("button", { name: "Show 1 more", exact: true }).click();
-  expect(rowKeys().slice(0, 3)).toEqual(recentPins);
+  const more = screen.getByRole("button", { name: "Show 1 more", exact: true });
+  await act(() => (more.element() as HTMLButtonElement).click());
+  expect(rowKeys().slice(0, 3)).toEqual(pinOrder);
   expect(rowKeys()).toHaveLength(206);
 
+  const firstPinWithNewMessage = {
+    ...firstPin,
+    latestConversationMessageAt: "2026-04-01T12:00:00Z",
+  };
+  const updatedPins = [firstPin, secondPin, legacySettledPin].map(threadKey);
+  const updatedThreads = allThreads.map((thread) =>
+    thread.id === firstPin.id
+      ? firstPinWithNewMessage
+      : { ...thread, updatedAt: "2026-04-04T00:00:00Z" },
+  );
+  vi.mocked(useQuietThreadShells).mockReturnValue(updatedThreads);
+  await screen.rerender(sidebar());
+  expect(rowKeys().slice(0, 3)).toEqual(updatedPins);
+  const projects = screen.getByRole("button", { name: "Projects", exact: true });
+  await act(() => (projects.element() as HTMLButtonElement).click());
+  expect(rowKeys().slice(0, 3)).toEqual(updatedPins);
+  await act(() => (recent.element() as HTMLButtonElement).click());
+
   vi.mocked(useQuietThreadShells).mockReturnValue(
-    allThreads.map((thread) =>
+    updatedThreads.map((thread) =>
       thread.id === legacySettledPin.id ? { ...thread, pinnedAt: null, pinOrderKey: null } : thread,
     ),
   );
+  vi.mocked(useThreadRouteTarget).mockReturnValue({
+    kind: "server",
+    threadRef: { ...routeThreadRef, threadId: firstPin.id },
+  });
   await screen.rerender(sidebar());
-  expect(rowKeys().slice(0, 2)).toEqual(pins);
+  expect(rowKeys().slice(0, 2)).toEqual(updatedPins.slice(0, 2));
   expect(rowKeys().at(-1)).toBe(threadKey(legacySettledPin));
+  expect(row(legacySettledPin).dataset.testid).toBe("sidebar-row-slim");
+  expect(row(firstPin).getAttribute("aria-current")).toBe("page");
+
+  const monogram = (thread: EnvironmentThreadShell) =>
+    row(thread).querySelector<SVGElement>('[data-slot="project-monogram"] svg')!;
+  const wasDark = document.documentElement.classList.contains("dark");
+  stack.defer(() => document.documentElement.classList.toggle("dark", wasDark));
+  const colors: string[] = [];
+  for (const dark of [false, true]) {
+    document.documentElement.classList.toggle("dark", dark);
+    const color = getComputedStyle(monogram(firstPin)).color;
+    expect(getComputedStyle(monogram(legacySettledPin)).color).toBe(color);
+    expect(getComputedStyle(monogram(history[0]!)).color).toBe(color);
+    expect(
+      row(firstPin).getBoundingClientRect().top - recent.element().getBoundingClientRect().bottom,
+    ).toBeGreaterThanOrEqual(4);
+    colors.push(color);
+  }
+  expect(colors[0]).not.toBe(colors[1]);
 });
 
 describe("sidebar project completeness", () => {

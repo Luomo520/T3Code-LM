@@ -4,7 +4,6 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
-import androidx.core.content.ContextCompat
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -42,22 +41,17 @@ class T3AgentNotificationsModule : Module() {
       appContext.reactContext?.let(AgentNotifications::supportsLocalTaskCompletion) ?: false
     }
 
-    Function("setTaskCompletionMonitoring") { enabled: Boolean ->
-      val context = appContext.reactContext ?: return@Function false
-      val intent = Intent(context, TaskCompletionMonitorService::class.java)
-      try {
-        if (enabled) {
-          if (!AgentNotifications.canPostAlerts(context)) return@Function false
-          ContextCompat.startForegroundService(context, intent)
-        } else {
-          context.stopService(intent)
-        }
-        true
-      } catch (_: IllegalStateException) {
-        // Android may reject a start that raced the app's transition to background.
-        false
-      } catch (_: SecurityException) {
-        false
+    OnCreate {
+      appContext.reactContext?.let(TaskCompletionBackgroundCheck::clearLegacyNotification)
+    }
+
+    Function("readTaskCompletionWatch") {
+      appContext.reactContext?.let(TaskCompletionBackgroundCheck::read)
+    }
+
+    Function("setTaskCompletionWatch") { watch: String?, expiresAt: Double, background: Boolean ->
+      appContext.reactContext?.let {
+        TaskCompletionBackgroundCheck.update(it, watch, expiresAt.toLong(), background)
       }
     }
 

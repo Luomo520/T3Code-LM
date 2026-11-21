@@ -9,7 +9,8 @@ interface AndroidAgentNotifications {
   openLiveUpdateSettings?(): boolean;
   showShowcaseActivity?(scheme: string, data: Record<string, string>): void;
   supportsLocalTaskCompletion?(): boolean;
-  setTaskCompletionMonitoring?(enabled: boolean): boolean;
+  readTaskCompletionWatch?(): string | null;
+  setTaskCompletionWatch?(watch: string | null, expiresAt: number, background: boolean): void;
   postTaskCompletion?(
     scheme: string,
     path: string,
@@ -59,8 +60,16 @@ export function supportsAndroidLocalTaskCompletion(): boolean {
   return native?.supportsLocalTaskCompletion?.() === true;
 }
 
-export function setAndroidTaskCompletionMonitoring(enabled: boolean): boolean {
-  return native?.setTaskCompletionMonitoring?.(enabled) === true;
+export function readAndroidTaskCompletionWatch(): string | null {
+  return native?.readTaskCompletionWatch?.() ?? null;
+}
+
+export function setAndroidTaskCompletionWatch(
+  watch: string | null,
+  expiresAt: number,
+  background: boolean,
+): void {
+  native?.setTaskCompletionWatch?.(watch, expiresAt, background);
 }
 
 export function postAndroidTaskCompletion(completion: {

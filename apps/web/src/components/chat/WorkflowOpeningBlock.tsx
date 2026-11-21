@@ -185,6 +185,8 @@ function WorkflowMemberRow(props: {
             providerInstanceId={props.providerInstanceId}
             origin="provider_native"
             modelSelection={workflowMemberModelSelection(member, props.providerInstanceId)}
+            reportedEffort={member.effort}
+            totalTokens={member.usage?.totalTokens}
             provider={props.providers.find(
               (provider) => provider.instanceId === props.providerInstanceId,
             )}

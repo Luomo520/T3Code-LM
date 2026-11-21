@@ -26,6 +26,7 @@ import {
   SidebarProjectSortOrder,
   ScreenReaderAnnouncements,
   ToolCallVisibility,
+  WindowsTaskbarTitleMode,
 } from "@t3tools/contracts/settings";
 import { createModelSelection, pickModelSelection } from "@t3tools/shared/model";
 import { resolvePastedPath } from "@t3tools/shared/path";
@@ -71,7 +72,7 @@ import {
 } from "../../modelSelection";
 import { useTextGenerationTargets } from "../../textGenerators";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
-import { isMacPlatform } from "../../lib/utils";
+import { isMacPlatform, isWindowsPlatform } from "../../lib/utils";
 import {
   useEnvironmentProviders,
   useEnvironments,
@@ -142,6 +143,14 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": msg("12-hour"),
   "24-hour": msg("24-hour"),
 };
+
+const WINDOWS_TASKBAR_TITLE_LABELS: Record<WindowsTaskbarTitleMode, string> = {
+  app: "T3 Code",
+  "project-thread": msg("Project name / Thread name"),
+  thread: msg("Thread name only"),
+  project: msg("Project name only"),
+};
+const isWindowsTaskbarTitleMode = Schema.is(WindowsTaskbarTitleMode);
 
 const DIFF_LAYOUT_LABELS: Record<DiffLayout, string> = {
   stacked: "Stacked",
@@ -306,6 +315,7 @@ function AboutVersionSection() {
 }
 
 export function useSettingsRestore(onRestored?: () => void) {
+  const m = useMessages();
   const {
     theme,
     setTheme,
@@ -317,6 +327,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   } = useTheme();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const windowsDesktop = isElectron && isWindowsPlatform(navigator.platform);
 
   const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
@@ -352,6 +363,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.language !== DEFAULT_UNIFIED_SETTINGS.language ? ["Language"] : []),
     ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
       ? ["Time format"]
+      : []),
+    ...(windowsDesktop &&
+    settings.windowsTaskbarTitleMode !== DEFAULT_UNIFIED_SETTINGS.windowsTaskbarTitleMode
+      ? [m(searchableSetting("windows-taskbar-title").title)]
       : []),
     ...(settings.notificationMode !== DEFAULT_UNIFIED_SETTINGS.notificationMode
       ? ["Thread notifications"]
@@ -528,6 +543,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
       language: DEFAULT_UNIFIED_SETTINGS.language,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
+      ...(windowsDesktop && {
+        windowsTaskbarTitleMode: DEFAULT_UNIFIED_SETTINGS.windowsTaskbarTitleMode,
+      }),
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
@@ -1018,6 +1036,48 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
+        {isElectron && isWindowsPlatform(navigator.platform) ? (
+          <SettingsRow
+            {...setting("windows-taskbar-title")}
+            description={gt("The screen reader window title takes priority when enabled.")}
+            resetAction={
+              settings.windowsTaskbarTitleMode !==
+              DEFAULT_UNIFIED_SETTINGS.windowsTaskbarTitleMode ? (
+                <SettingResetButton
+                  label={gt("Taskbar name")}
+                  onClick={() =>
+                    updateSettings({
+                      windowsTaskbarTitleMode: DEFAULT_UNIFIED_SETTINGS.windowsTaskbarTitleMode,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.windowsTaskbarTitleMode}
+                onValueChange={(value) => {
+                  if (isWindowsTaskbarTitleMode(value)) {
+                    updateSettings({ windowsTaskbarTitleMode: value });
+                  }
+                }}
+              >
+                <SelectTrigger size="sm" className="w-full sm:w-52" aria-label={gt("Taskbar name")}>
+                  <SelectValue>
+                    {m(WINDOWS_TASKBAR_TITLE_LABELS[settings.windowsTaskbarTitleMode])}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {WindowsTaskbarTitleMode.literals.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {m(WINDOWS_TASKBAR_TITLE_LABELS[value])}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            }
+          />
+        ) : null}
       </SettingsSection>
     </SettingsPageContainer>
   );

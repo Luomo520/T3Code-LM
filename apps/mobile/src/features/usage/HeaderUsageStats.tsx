@@ -180,59 +180,49 @@ export function HeaderUsageStats(props: {
         accessibilityHint="点击查看统计详情与查询设置，长按直接修改网址和 Key"
         hitSlop={8}
         style={{
-          flexShrink: 0,
+          width: props.home ? 126 : 244,
+          maxWidth: props.home ? "60%" : "84%",
+          flexShrink: 1,
+          minWidth: 0,
           flexDirection: "row",
           alignItems: "center",
-          gap: props.home ? 7 : width <= 360 ? 4 : 5,
-          maxWidth: "100%",
-          flexWrap: "wrap",
-          justifyContent: "flex-end",
-          paddingVertical: 2,
+          gap: props.home ? 5 : width <= 360 ? 3 : 4,
+          height: 28,
         }}
       >
         {metrics.map(({ label, value, lowCache, expired }) => (
           <View
             key={label}
             style={{
-              alignItems: "center",
+              flex: label === "余额" || label.startsWith("t/s") ? 1.2 : 1,
+              minWidth: 0,
+              alignItems: "stretch",
             }}
           >
-            <View style={{ position: "relative", alignItems: "center" }}>
-              <AppText
-                className="text-foreground-muted"
-                maxFontSizeMultiplier={1.3}
-                style={{
-                  fontSize: width <= 360 ? 7 : 7.5,
-                  lineHeight: 9,
-                  textAlign: "center",
-                }}
-              >
-                {label}
-              </AppText>
-              {expired ? (
-                <AppText
-                  className="text-foreground-muted"
-                  accessibilityLabel="历史或过期数据"
-                  maxFontSizeMultiplier={1.3}
-                  style={{
-                    position: "absolute",
-                    top: -2,
-                    right: -4,
-                    fontSize: 7,
-                    lineHeight: 8,
-                  }}
-                >
-                  *
-                </AppText>
-              ) : null}
-            </View>
+            <AppText
+              className="text-foreground-muted"
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              maxFontSizeMultiplier={1.3}
+              style={{
+                fontSize: width <= 360 ? 7 : 7.5,
+                lineHeight: 9,
+                textAlign: "center",
+                includeFontPadding: false,
+              }}
+            >
+              {expired ? `${label}*` : label}
+            </AppText>
             <AppText
               className={lowCache ? "text-danger-foreground" : "text-header-foreground"}
+              numberOfLines={1}
+              adjustsFontSizeToFit
               maxFontSizeMultiplier={1.3}
               style={{
                 fontSize: width <= 360 ? 8 : 8.5,
                 lineHeight: 11,
                 textAlign: "center",
+                includeFontPadding: false,
                 fontVariant: ["tabular-nums"],
               }}
             >

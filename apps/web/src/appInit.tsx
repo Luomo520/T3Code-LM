@@ -22,7 +22,11 @@ import { startKeybindingsUpdateToasts } from "./components/KeybindingsUpdateToas
 import { startLegacyThreadMigrationToast } from "./components/LegacyThreadMigrationToast";
 import { startPermissionUpdateNotices } from "./components/PermissionUpdateNotice";
 import { startAgentOpenedPreviews } from "./components/preview/agentOpenedPreviews";
-import { startMainAppLocationTracking } from "./components/sidebar/mainAppLocation";
+import {
+  getAppModalReturnThreadTarget,
+  isAppModalPage,
+  startMainAppLocationTracking,
+} from "./components/sidebar/mainAppLocation";
 import { startDesktopUpdateLaunchNotice } from "./components/sidebar/updateEverythingRun";
 import { startSlowRpcRequestToasts } from "./components/SlowRpcRequestToastCoordinator";
 import { startThreadNotifications } from "./components/ThreadNotificationCoordinator";
@@ -47,6 +51,7 @@ import {
 import { syncBrowserChromeTheme } from "./hooks/useTheme";
 import { startThreadVisitedMigration } from "./hooks/useThreadVisitedMigration";
 import { installDesktopPasteAsText } from "./lib/desktopPasteAsText";
+import { isWindowsPlatform } from "./lib/utils";
 import {
   syncDocumentElectronPlatformClasses,
   syncDocumentWindowControlsOverlayClass,
@@ -125,8 +130,15 @@ function startClientAppearance(): void {
   apply();
 }
 
-function readOpenThreadRef(router: AppRouter): ScopedThreadRef | null {
-  const target = resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
+function readOpenThreadRef(
+  router: AppRouter,
+  includeModalBackground: boolean,
+): ScopedThreadRef | null {
+  const matches = router.state.matches;
+  const target =
+    includeModalBackground && matches.some((match) => isAppModalPage(match.pathname))
+      ? getAppModalReturnThreadTarget()
+      : resolveThreadRouteTarget(matches.at(-1)?.params ?? {});
   const draft =
     target?.kind === "draft"
       ? useComposerDraftStore.getState().getDraftSession(target.draftId)
@@ -139,12 +151,14 @@ function readOpenThreadRef(router: AppRouter): ScopedThreadRef | null {
  * Screen readers read it on Alt+Tab, so it can lead with the thread and what it's doing.
  */
 function startDocumentTitle(router: AppRouter): void {
+  const windowsDesktop = isElectron && isWindowsPlatform(navigator.platform);
   const readOnGuestPage = () => router.state.matches.some((match) => match.routeId === "/guest");
-  let openThreadRef = readOpenThreadRef(router);
+  let openThreadRef = readOpenThreadRef(router, windowsDesktop);
   let onGuestPage = readOnGuestPage();
   const write = () => {
     // GuestPage titles the tab after the shared thread.
     if (onGuestPage) return;
+    const settings = getClientSettings();
     const thread =
       openThreadRef === null
         ? null
@@ -167,10 +181,13 @@ function startDocumentTitle(router: AppRouter): void {
       }),
       projectTitle: project?.title ?? null,
       threadTitle: thread?.title ?? null,
-      ...(getClientSettings().screenReaderWindowTitle && {
+      ...(settings.screenReaderWindowTitle && {
         screenReader: {
           threadStatus: thread === null ? null : resolveWindowTitleThreadStatus(thread),
         },
+      }),
+      ...(windowsDesktop && {
+        windowsTaskbar: { appBaseName: APP_BASE_NAME, mode: settings.windowsTaskbarTitleMode },
       }),
       desktop: isElectron,
     });
@@ -191,7 +208,7 @@ function startDocumentTitle(router: AppRouter): void {
   };
   // The draft store changes on every keystroke; only a new open thread matters here.
   const updateOpenThread = () => {
-    const next = readOpenThreadRef(router);
+    const next = readOpenThreadRef(router, windowsDesktop);
     const nextOnGuestPage = readOnGuestPage();
     if (
       nextOnGuestPage === onGuestPage &&
@@ -261,6 +278,7 @@ export function startAppServices(): AppRouter {
 
   startClientAppearance();
   startI18n();
+  startMainAppLocationTracking(router);
   startDocumentTitle(router);
   startHostEnvironmentLookup();
   startEnvironmentThemeRepaint();
@@ -288,7 +306,6 @@ export function startAppServices(): AppRouter {
     shellStateAtom: environmentShell.stateAtom,
     pendingThreadIdsAtom: threadEnvironment.pendingThreadIdsAtom,
   });
-  startMainAppLocationTracking(router);
   startWorkspaceFocus(router);
   startBackgroundThreadAnnouncements(appAtomRegistry, router);
   startThreadVisitedMigration(appAtomRegistry);

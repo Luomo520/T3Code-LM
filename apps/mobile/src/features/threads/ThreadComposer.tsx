@@ -19,6 +19,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ChatAttachment,
+  type ConversationUsage,
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
@@ -117,6 +118,7 @@ import {
 } from "../voice-input/ComposerDictationControl";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
+import { ComposerSessionUsage } from "../usage/ComposerSessionUsage";
 import type { ExistingThreadSettingsRouteParams } from "./ThreadSettingsSheet";
 import {
   useThreadSettingsSheetPresentation,
@@ -140,7 +142,7 @@ function collapsedEditorInset(text: ScaledTextRole): number {
   return Math.max(0, Math.round(COLLAPSED_EDITOR_DEFAULT_INSET - shift));
 }
 
-function useCompactComposerEditor(text: ScaledTextRole, value: string) {
+function useCompactComposerEditor(text: ScaledTextRole, value: string, separateToolbar: boolean) {
   const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
   const [compactWidth, setCompactWidth] = useState(0);
   const contentHeight = contentSize.height;
@@ -157,9 +159,10 @@ function useCompactComposerEditor(text: ScaledTextRole, value: string) {
   // A line that fits the expanded editor may still overflow its compact slot.
   // Compare its measured width too so widening cannot trigger a collapse loop.
   const isExpanded =
-    value.length > 0 &&
-    (contentHeight > text.lineHeight * 1.5 ||
-      (compactWidth > 0 && contentSize.width > compactWidth));
+    separateToolbar ||
+    (value.length > 0 &&
+      (contentHeight > text.lineHeight * 1.5 ||
+        (compactWidth > 0 && contentSize.width > compactWidth)));
   const compactRowHeight = Math.max(44, minimum);
   const isRTL = I18nManager.isRTL;
   const editorStyle = useAnimatedStyle(() => ({
@@ -216,6 +219,11 @@ export interface ThreadComposerProps {
   readonly environmentLabel: string | null;
   readonly selectedThread: EnvironmentThreadShell;
   readonly reportedModelSelection?: ModelSelection | null;
+  readonly sessionUsage?: ConversationUsage | null | undefined;
+  readonly contextWindow?:
+    | { readonly usedTokens: number; readonly maxTokens: number | null }
+    | null
+    | undefined;
   readonly hasCompactableConversation: boolean;
   /** Arms a fresh session for the next message; absent where `/clear` is unavailable. */
   readonly onFreshSession?: () => void;
@@ -601,7 +609,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const surfacePaddingVertical = usesLargeControls ? 9 : floatingSidebarComposer ? 6 : 2;
   const [compactRowWidth, setCompactRowWidth] = useState(0);
   const compactAttachmentLimit = compactRowWidth >= 500 ? 3 : 1;
-  const compactEditor = useCompactComposerEditor(bodyText, draftMessage);
+  const usesSessionUsageLayout = Platform.OS === "android" && !props.isDraft;
+  const showSessionUsage = usesSessionUsageLayout && !props.hidden && !isVoiceInputPresented;
+  const compactEditor = useCompactComposerEditor(bodyText, draftMessage, usesSessionUsageLayout);
+  const showsAttachmentStrip = isExpanded || usesSessionUsageLayout;
   const showsCompactDictation = isVoiceInputPresented;
   const isToolbarVisible = isVoiceInputPresented;
   const hasEditingAttachments =
@@ -802,7 +813,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   ) : null;
 
   const modelControl = (
-    <View className="min-w-0 shrink">
+    <View
+      className="min-w-0 shrink"
+      style={usesSessionUsageLayout ? { marginEnd: "auto" } : undefined}
+    >
       <ComposerModelControl
         size={usesLargeControls ? "large" : "regular"}
         modelOption={currentModelOption}
@@ -814,7 +828,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         reportedSelection={props.reportedModelSelection}
         prompt={draftMessage}
         surfaceColor={composerPanel}
-        iconOnly={!compactEditor.isExpanded}
+        iconOnly={!compactEditor.isExpanded || (usesSessionUsageLayout && compactRowWidth < 360)}
         onPress={openSettings}
       />
     </View>
@@ -896,7 +910,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
             error={voiceInput.state.phase === "error" ? voiceInput.state.error : null}
             onDismiss={voiceInput.cancel}
           />
-          {isExpanded ? editingAttachments : null}
+          {showsAttachmentStrip ? editingAttachments : null}
           <View
             onLayout={(event) => {
               compactEditor.onRowLayout(event);
@@ -1066,7 +1080,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   }}
                 />
               </Animated.View>
-              {!isExpanded && stripAttachments.length > 0 ? (
+              {!showsAttachmentStrip && stripAttachments.length > 0 ? (
                 <View className="h-[44px] shrink-0 flex-row items-center gap-1 pl-1">
                   {stripAttachments.slice(0, compactAttachmentLimit).map((attachment) => (
                     <ComposerAttachmentThumbnail
@@ -1104,6 +1118,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   onStart={voiceInput.start}
                   onCancel={voiceInput.cancel}
                 />
+                {showSessionUsage ? (
+                  <ComposerSessionUsage
+                    key={composerOwnerKey}
+                    usage={props.sessionUsage}
+                    contextWindow={props.contextWindow}
+                  />
+                ) : null}
                 {showStopAction ? (
                   <ComposerActionButton
                     size={usesLargeControls ? "large" : "regular"}

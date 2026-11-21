@@ -146,6 +146,7 @@ import { editPendingThreadMessage } from "../../state/edit-pending-thread-messag
 import { environmentCatalog } from "../../connection/catalog";
 import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
+import { useConversationUsage } from "../usage/useConversationUsage";
 import { threadDevicePreviews } from "../devices/threadDevicePreviews";
 import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabs } from "../../state/preview";
@@ -178,6 +179,7 @@ import type {
   ThreadFeedEntry,
   ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
+import { threadFeedRunIsUnsettled } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { ManagedRuntimeModeNotice } from "./ManagedRuntimeModeNotice";
@@ -252,6 +254,10 @@ export interface ThreadDetailScreenProps {
   readonly providerSubagentStatus?: ProviderSubagentStatus | null;
   readonly extensionStatuses?: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
   readonly isCompacting: boolean;
+  readonly contextWindow?: {
+    readonly usedTokens: number;
+    readonly maxTokens: number | null;
+  } | null;
   /** Set while the next send compacts the thread first. */
   readonly compactBeforeSend?: {
     readonly tokens: number;
@@ -505,6 +511,13 @@ function ThreadDetailBody(
   const nativeMetrics = usesNativeWorkspaceColumns ? columnMetrics : screenMetrics;
   const controlInsets = deriveBottomControlInsets(nativeMetrics);
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  const sessionUsage = useConversationUsage(
+    Platform.OS === "android" && props.serverConfig?.environment.capabilities.headerUsage === true
+      ? props.selectedThreadDetailRef
+      : null,
+    props.activityRun?.runId ?? null,
+    threadFeedRunIsUnsettled(props.activityRun) || Boolean(props.runlessWorkActive),
+  );
   const childThreadInputs = useChildThreadInputs({
     environmentId: props.environmentId,
     threadId: props.selectedThread.id,
@@ -1497,6 +1510,9 @@ function ThreadDetailBody(
                     detailRef={props.selectedThreadDetailRef}
                     workspaceRoot={props.threadCwd}
                     feed={props.selectedThreadFeed}
+                    replyUsageTurns={
+                      Platform.OS === "android" ? (sessionUsage?.turns ?? null) : undefined
+                    }
                     pendingHandoff={props.pendingHandoff}
                     worktreeSetup={props.worktreeSetup}
                     setupWorkingStartedAt={props.setupWorkingStartedAt}
@@ -1897,6 +1913,8 @@ function ThreadDetailBody(
                         connectionState={props.connectionStateLabel}
                         environmentLabel={props.environmentLabel}
                         selectedThread={props.selectedThread}
+                        sessionUsage={sessionUsage}
+                        contextWindow={props.contextWindow}
                         hasCompactableConversation={
                           hasCompactableConversation && !props.isCompacting
                         }

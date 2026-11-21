@@ -9,6 +9,7 @@ export function ListFilterMenu(props: {
   readonly accessibilityLabel: string;
   readonly active?: boolean;
   readonly icon?: boolean;
+  readonly largeTouchTarget?: boolean;
   readonly actions: MenuProps["actions"];
   readonly onSelect: (id: string) => void;
 }) {
@@ -18,6 +19,12 @@ export function ListFilterMenu(props: {
       title={props.accessibilityLabel}
       actions={props.actions}
       onPressAction={({ nativeEvent }) => props.onSelect(nativeEvent.event)}
+      accessibilityLabel={props.accessibilityLabel}
+      style={
+        props.largeTouchTarget
+          ? { minHeight: 48, minWidth: 48, justifyContent: "center" }
+          : undefined
+      }
     >
       <Pressable
         accessibilityRole="button"

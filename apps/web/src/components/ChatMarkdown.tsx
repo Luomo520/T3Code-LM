@@ -217,6 +217,7 @@ import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
 import { rehypeChipPunctuation } from "./chat/markdownChipPunctuation";
 import { handleMarkdownFragmentClick, rehypeHeadingIds } from "./chat/markdownFragments";
+import { rehypeMarkdownSemanticHighlights } from "./chat/markdownSemanticHighlights";
 import { rehypeTextDirection } from "./chat/markdownTextDirection";
 import { hastHasText, hastPlainTextDeep, plainHastText } from "./chat/markdownHast.logic";
 import {
@@ -248,6 +249,7 @@ interface ChatMarkdownProps {
   className?: string;
   lineBreaks?: boolean;
   parseRawHtml?: boolean;
+  semanticHighlights?: boolean;
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   onRunShellCommand?: ((command: string) => void) | undefined;
   imageBaseDir?: string | undefined;
@@ -415,6 +417,15 @@ const CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS = [
   rehypeTextDirection,
   rehypeChipPunctuation,
 ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
+
+const FILE_MARKDOWN_REHYPE_PLUGINS = [
+  ...CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS,
+  rehypeMarkdownSemanticHighlights,
+];
+const FILE_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS = [
+  ...CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS,
+  rehypeMarkdownSemanticHighlights,
+];
 
 function markdownUrlTransform(href: string) {
   if (parseAssistantCitationHref(href)) return href;
@@ -1833,6 +1844,7 @@ function ChatMarkdown({
   inline = false,
   lineBreaks = false,
   parseRawHtml = true,
+  semanticHighlights = false,
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
   renderInsights = false,
   ...props
@@ -1901,8 +1913,12 @@ function ChatMarkdown({
             remarkPlugins={remarkPlugins}
             rehypePlugins={
               parseRawHtml
-                ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
-                : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
+                ? semanticHighlights
+                  ? FILE_MARKDOWN_REHYPE_PLUGINS
+                  : CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
+                : semanticHighlights
+                  ? FILE_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
+                  : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
             }
             shared={!uncachedPlugins}
             // Every block before the last is finished, so its parse can be reused.

@@ -19,7 +19,7 @@ export function reasoningSliderFillWidth(index: number, width: number, count: nu
 
 /** Sweep length follows the filled portion. */
 export function reasoningRailSweep(filledWidth: number) {
-  const width = Math.round(filledWidth * 0.55);
+  const width = Math.min(filledWidth, Math.max(FIRST_STOP, Math.round(filledWidth * 0.64)));
   return { width, start: -width, end: filledWidth };
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Animated, Easing, Platform, Pressable, useAnimatedValue, View } from "react-native";
-import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import Svg, { Defs, LinearGradient, Path, Rect, Stop } from "react-native-svg";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 
@@ -15,6 +15,9 @@ import {
   reasoningSliderFillWidth,
   reasoningSliderIndex,
 } from "./reasoning-slider-state";
+
+const RAIL_HEIGHT = 48;
+const TOUCH_HEIGHT = 52;
 
 /** Theme-aware neutral material; purple belongs only to the slider progress. */
 export function useModelPopupColors() {
@@ -38,31 +41,35 @@ export function useModelPopupColors() {
 function ReasoningFillHighlight(props: {
   readonly filledWidth: number;
   readonly moving: boolean;
+  readonly intensity: number;
 }) {
   const gradientId = `reasoning-highlight-${useId().replaceAll(":", "")}`;
   const progress = useAnimatedValue(0, { useNativeDriver: true });
   const sweep = reasoningRailSweep(props.filledWidth);
-  const opacity = props.moving ? 0.86 : 0.56;
+  const amplitude = 3 + props.intensity * 5;
+  const duration = Math.round(1_350 - props.intensity * 450);
+  const wave = (y: number, displacement: number) =>
+    `M -5 ${y} Q 8 ${y - displacement} 21 ${y} T 47 ${y} T 73 ${y} T 99 ${y} T 125 ${y}`;
   const translateX = props.moving
     ? progress.interpolate({ inputRange: [0, 1], outputRange: [sweep.start, sweep.end] })
     : undefined;
-  // Keep a native animation and its phase when dragging changes the fill width.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts and cancels the native highlight loop with the popup's visibility
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- restarts the bounded native sweep when the selection changes
   useEffect(() => {
     if (!props.moving) return;
     progress.setValue(0);
     const loop = Animated.loop(
       Animated.timing(progress, {
         toValue: 1,
-        duration: 3_600,
+        duration,
         easing: Easing.linear,
         useNativeDriver: true,
         isInteraction: false,
       }),
+      { iterations: 2 },
     );
     loop.start();
     return () => loop.stop();
-  }, [progress, props.moving]);
+  }, [duration, progress, props.moving]);
 
   return (
     <Animated.View
@@ -77,17 +84,37 @@ function ReasoningFillHighlight(props: {
         transform: translateX ? [{ translateX }] : undefined,
       }}
     >
-      <Svg width="100%" height="100%" accessible={false}>
+      <Svg
+        width="100%"
+        height="100%"
+        viewBox={`0 0 100 ${RAIL_HEIGHT}`}
+        preserveAspectRatio="none"
+        accessible={false}
+      >
         <Defs>
           <LinearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="10%">
-            <Stop offset="0%" stopColor="#c8a8f1" stopOpacity={0} />
-            <Stop offset="26%" stopColor="#cdb7f8" stopOpacity={opacity * 0.5} />
-            <Stop offset="46%" stopColor="#bbccf6" stopOpacity={opacity} />
-            <Stop offset="62%" stopColor="#d7caf4" stopOpacity={opacity * 0.55} />
-            <Stop offset="100%" stopColor="#c8a8f1" stopOpacity={0} />
+            <Stop offset="0%" stopColor="#cba6f7" stopOpacity={0} />
+            <Stop offset="30%" stopColor="#a99cf7" stopOpacity={0.62} />
+            <Stop offset="50%" stopColor="#a9c9ff" stopOpacity={0.96} />
+            <Stop offset="70%" stopColor="#dfc9ff" stopOpacity={0.78} />
+            <Stop offset="100%" stopColor="#cba6f7" stopOpacity={0} />
           </LinearGradient>
         </Defs>
         <Rect width="100%" height="100%" fill={`url(#${gradientId})`} />
+        <Path
+          d={wave(RAIL_HEIGHT / 2, amplitude)}
+          fill="none"
+          stroke="#f5efff"
+          strokeWidth={4}
+          opacity={0.72}
+        />
+        <Path
+          d={`${wave(3, amplitude / 2)} ${wave(RAIL_HEIGHT - 3, -amplitude / 2)}`}
+          fill="none"
+          stroke="#edf5ff"
+          strokeWidth={2}
+          opacity={0.8}
+        />
       </Svg>
     </Animated.View>
   );
@@ -128,6 +155,7 @@ export function ReasoningSlider(props: {
   const defaultLabel = defaultChoice ? reasoningLevelLabel(defaultChoice) : "Auto";
   const disabled = props.disabled || props.choices.length < 2;
   const filledWidth = reasoningSliderFillWidth(index, width, props.choices.length);
+  const intensity = Math.max(0, index) / Math.max(1, props.choices.length - 1);
   const thumbRadius = REASONING_THUMB_DIAMETER / 2;
   const tickDiameter = 6;
   const tickInset = thumbRadius - tickDiameter / 2;
@@ -155,19 +183,38 @@ export function ReasoningSlider(props: {
   };
   return (
     <View style={{ paddingHorizontal: 6, paddingBottom: 12 }}>
-      <View style={{ paddingHorizontal: 42, paddingTop: 16, paddingBottom: 8, alignItems: "center" }}>
-        <Text accessibilityRole="header" style={{ fontSize: 18, lineHeight: 24, fontWeight: "600", color: colors.title }}>
-          {current ? reasoningLevelLabel(current) : props.value ?? "思考强度"}
+      <View
+        style={{ paddingHorizontal: 42, paddingTop: 16, paddingBottom: 8, alignItems: "center" }}
+      >
+        <Text
+          accessibilityRole="header"
+          style={{ fontSize: 18, lineHeight: 24, fontWeight: "600", color: colors.title }}
+        >
+          {current ? reasoningLevelLabel(current) : (props.value ?? "思考强度")}
         </Text>
-        <Text numberOfLines={1} style={{ fontSize: 12, lineHeight: 19, color: colors.muted }}>{props.modelLabel}</Text>
+        <Text numberOfLines={1} style={{ fontSize: 12, lineHeight: 19, color: colors.muted }}>
+          {props.modelLabel}
+        </Text>
         {defaultChoice ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`恢复默认思考强度 ${reasoningLevelLabel(defaultChoice)}`}
             accessibilityState={{ disabled: props.disabled === true }}
             disabled={props.disabled}
-            onPress={() => { finish(); props.onChange(defaultChoice.id); }}
-            style={{ position: "absolute", right: 0, top: 8, width: 44, height: 44, alignItems: "center", justifyContent: "center", opacity: props.disabled ? 0.5 : 1 }}
+            onPress={() => {
+              finish();
+              props.onChange(defaultChoice.id);
+            }}
+            style={{
+              position: "absolute",
+              right: 0,
+              top: 8,
+              width: 44,
+              height: 44,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: props.disabled ? 0.5 : 1,
+            }}
           >
             <SymbolView name="arrow.clockwise" size={20} tintColor={colors.muted} />
           </Pressable>
@@ -179,13 +226,33 @@ export function ReasoningSlider(props: {
         accessibilityLabel="思考强度"
         accessibilityHint={props.disabled ? "由提示词控制" : "左右拖动或上下滑动调整档位"}
         accessibilityState={{ disabled }}
-        accessibilityValue={{ min: 0, max: Math.max(0, props.choices.length - 1), ...(index >= 0 ? { now: index } : {}), text: current ? reasoningLevelLabel(current) : props.value ?? "未选择" }}
-        accessibilityActions={disabled ? [] : [{ name: "increment", label: "提高思考强度" }, { name: "decrement", label: "降低思考强度" }]}
+        accessibilityValue={{
+          min: 0,
+          max: Math.max(0, props.choices.length - 1),
+          ...(index >= 0 ? { now: index } : {}),
+          text: current ? reasoningLevelLabel(current) : (props.value ?? "未选择"),
+        }}
+        accessibilityActions={
+          disabled
+            ? []
+            : [
+                { name: "increment", label: "提高思考强度" },
+                { name: "decrement", label: "降低思考强度" },
+              ]
+        }
         onAccessibilityAction={(event) => {
           if (disabled) return;
-          const step = event.nativeEvent.actionName === "increment" ? 1 : event.nativeEvent.actionName === "decrement" ? -1 : 0;
+          const step =
+            event.nativeEvent.actionName === "increment"
+              ? 1
+              : event.nativeEvent.actionName === "decrement"
+                ? -1
+                : 0;
           if (step) {
-            const next = props.choices[Math.max(0, Math.min(props.choices.length - 1, Math.max(0, currentIndex) + step))];
+            const next =
+              props.choices[
+                Math.max(0, Math.min(props.choices.length - 1, Math.max(0, currentIndex) + step))
+              ];
             if (next && next.id !== props.value) props.onChange(next.id);
           }
         }}
@@ -197,25 +264,51 @@ export function ReasoningSlider(props: {
           originX.current = event.nativeEvent.pageX - event.nativeEvent.locationX;
           lastIndex.current = currentIndex;
           props.onDraggingChange(true);
-          selectIndex(reasoningSliderIndex(event.nativeEvent.locationX, width, props.choices.length));
+          selectIndex(
+            reasoningSliderIndex(event.nativeEvent.locationX, width, props.choices.length),
+          );
         }}
-        onResponderMove={(event) => selectIndex(reasoningSliderIndex(event.nativeEvent.pageX - originX.current, width, props.choices.length))}
+        onResponderMove={(event) =>
+          selectIndex(
+            reasoningSliderIndex(
+              event.nativeEvent.pageX - originX.current,
+              width,
+              props.choices.length,
+            ),
+          )
+        }
         onResponderRelease={finish}
         onResponderTerminate={finish}
         style={{
-          height: 52,
+          height: TOUCH_HEIGHT,
           justifyContent: "center",
           opacity: props.disabled ? 0.5 : 1,
         }}
       >
         <View
           pointerEvents="none"
-          style={{ height: 36, backgroundColor: colors.rail, borderRadius: 22, overflow: "hidden" }}
+          style={{
+            height: RAIL_HEIGHT,
+            backgroundColor: colors.rail,
+            borderRadius: RAIL_HEIGHT / 2,
+            overflow: "hidden",
+          }}
         >
           {filledWidth > 0 ? (
-            <View style={{ width: filledWidth, height: 36, backgroundColor: colors.fill, overflow: "hidden" }}>
+            <View
+              style={{
+                width: filledWidth,
+                height: RAIL_HEIGHT,
+                backgroundColor: colors.fill,
+                overflow: "hidden",
+              }}
+            >
               {highlight !== "off" ? (
-                <ReasoningFillHighlight filledWidth={filledWidth} moving={highlight === "sweep"} />
+                <ReasoningFillHighlight
+                  filledWidth={filledWidth}
+                  moving={highlight === "sweep"}
+                  intensity={intensity}
+                />
               ) : null}
             </View>
           ) : null}
@@ -224,7 +317,7 @@ export function ReasoningSlider(props: {
           pointerEvents="none"
           style={{
             position: "absolute",
-            top: 23,
+            top: (TOUCH_HEIGHT - tickDiameter) / 2,
             left: tickInset,
             right: tickInset,
             flexDirection: "row",
@@ -248,7 +341,7 @@ export function ReasoningSlider(props: {
             pointerEvents="none"
             style={{
               position: "absolute",
-              top: 5,
+              top: (TOUCH_HEIGHT - REASONING_THUMB_DIAMETER) / 2,
               left: filledWidth - thumbRadius,
               width: REASONING_THUMB_DIAMETER,
               height: REASONING_THUMB_DIAMETER,

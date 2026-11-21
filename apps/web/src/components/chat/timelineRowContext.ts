@@ -1,5 +1,6 @@
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type {
+  ConversationUsageTurn,
   ProviderApprovalDecision,
   ResponseContextRecord,
   RuntimeRequestId,
@@ -53,6 +54,7 @@ export interface TimelineRowSharedState {
   citationRequest: AssistantCitationTarget | null;
   /** Absent hides "Reply", as in the guest view. */
   onReplyToResponse: ((response: ResponseContextRecord) => boolean) | undefined;
+  replyUsageByRun: ReadonlyMap<RunId, ConversationUsageTurn> | undefined;
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;

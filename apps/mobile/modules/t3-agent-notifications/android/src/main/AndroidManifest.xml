@@ -1,9 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-  <uses-permission android:name="android.permission.WAKE_LOCK" />
   <application>
     <service android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService" tools:node="remove" />
     <service android:name=".AgentMessagingService" android:exported="false">
@@ -12,14 +10,14 @@
       </intent-filter>
     </service>
     <service
-      android:name=".TaskCompletionMonitorService"
-      android:exported="false"
-      android:foregroundServiceType="specialUse"
-      android:stopWithTask="true">
-      <property
-        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-        android:value="Watch active agent tasks on the user's connected server and notify when they finish" />
-    </service>
+      android:name=".TaskCompletionCheckJobService"
+      android:exported="true"
+      android:permission="android.permission.BIND_JOB_SERVICE" />
+    <receiver android:name=".LegacyTaskCompletionCleanupReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
     <receiver android:name=".AgentActivityDismissReceiver" android:exported="false" />
     <receiver android:name=".AgentActivityExpiryReceiver" android:exported="false" />
   </application>

@@ -19,6 +19,43 @@ export function toSortableTimestamp(iso: string | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+interface ThreadConversationTimestampInput {
+  readonly latestConversationMessageAt?: string | null | undefined;
+  readonly latestUserMessageAt: string | null;
+  readonly createdAt: string;
+}
+
+export function resolveThreadConversationTimestamp(
+  thread: ThreadConversationTimestampInput,
+): string | null {
+  for (const timestamp of [
+    thread.latestConversationMessageAt,
+    thread.latestUserMessageAt,
+    thread.createdAt,
+  ]) {
+    if (timestamp != null && toSortableTimestamp(timestamp) !== null) return timestamp;
+  }
+  return null;
+}
+
+export function sortThreadsByConversationTimestamp<
+  T extends ThreadConversationTimestampInput & {
+    readonly id: string;
+    readonly environmentId: string;
+  },
+>(threads: readonly T[]): T[] {
+  return threads
+    .map((thread) => ({
+      thread,
+      timestamp:
+        toSortableTimestamp(resolveThreadConversationTimestamp(thread) ?? undefined) ??
+        Number.NEGATIVE_INFINITY,
+      key: `${thread.environmentId}:${thread.id}`,
+    }))
+    .sort((left, right) => right.timestamp - left.timestamp || left.key.localeCompare(right.key))
+    .map(({ thread }) => thread);
+}
+
 export type SettledThreadTimestampInput = Pick<
   EnvironmentThreadShell,
   "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"

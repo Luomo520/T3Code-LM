@@ -292,6 +292,7 @@ import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { useCitedHistory } from "./chat/citationProcedure";
 import type { MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ThreadTimeline } from "./chat/ThreadTimeline";
+import { useConversationUsage } from "./usage/useConversationUsage";
 import { NativeChildWorkDialog } from "./chat/NativeChildWorkDialog";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
@@ -338,6 +339,7 @@ import { ComposerSurface } from "./chat/ComposerSurface";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { hasAvailableCompactionProvider } from "./chat/compaction.logic";
 import {
+  deriveComposerContextWindow,
   deriveLatestContextWindowSnapshot,
   hasDismissedResumeCompaction,
   latestProviderTurnTokenUsage,
@@ -1509,6 +1511,11 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadLiveTokenUsage,
     activeProviderThread,
   );
+  const sessionUsage = useConversationUsage(
+    serverConfig?.environment.capabilities.headerUsage === true ? routeThreadDetailRef : null,
+    activeLatestRun?.runId ?? null,
+    isWorking,
+  );
   const pendingBackgroundTasks = deriveThreadPendingBackgroundTasks(serverProjection);
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
@@ -2501,6 +2508,11 @@ export default function ChatView(props: ChatViewProps) {
   const pendingHandoffSelection =
     (composerModelSelectionApplies ? composerSelectedModelSelection : null) ??
     activeThread?.modelSelection;
+  const sessionContextWindow = deriveComposerContextWindow(
+    serverProjection,
+    serverVisibleTurnItems,
+    pendingHandoffSelection,
+  );
   const pendingHandoffSelectionUsable = providerInstanceEntries.some(
     (entry) =>
       entry.instanceId === pendingHandoffSelection?.instanceId &&
@@ -3452,6 +3464,7 @@ export default function ChatView(props: ChatViewProps) {
                   citationHistory={citationHistory}
                   onCiteAssistantText={citeAssistantTextStable}
                   onReplyToResponse={replyToResponseStable}
+                  replyUsageTurns={isServerThread ? (sessionUsage?.turns ?? null) : undefined}
                   {...(activeProject
                     ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }
                     : {})}
@@ -3652,6 +3665,8 @@ export default function ChatView(props: ChatViewProps) {
                                 activeThreadId={activeThreadId}
                                 activeThread={activeThread}
                                 activeThreadRuns={serverProjection?.runs ?? EMPTY_RUNS}
+                                sessionUsage={sessionUsage}
+                                sessionContextWindow={sessionContextWindow}
                                 promptHistoryEntries={timelineEntries}
                                 forceExpandedOnMobile={
                                   forceExpandedMobileComposer && isDraftHeroState

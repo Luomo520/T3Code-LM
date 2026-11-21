@@ -1,3 +1,5 @@
+import type { WindowsTaskbarTitleMode } from "@t3tools/contracts/settings";
+
 const NIGHTLY_SERVER_VERSION_PATTERN = /^[^-+]+-(?:nightly|preview)\.\d{8}\.\d+$/;
 
 export function formatAppDisplayName(input: {
@@ -62,15 +64,33 @@ export function resolveWindowTitle(input: {
   readonly threadTitle: string | null;
   /** The screen reader title: status, then thread, then project, since a screen reader reads from the start. */
   readonly screenReader?: { readonly threadStatus: string | null };
+  readonly windowsTaskbar?: {
+    readonly mode: WindowsTaskbarTitleMode;
+    readonly appBaseName: string;
+  };
   readonly desktop: boolean;
 }): string {
   const threadTitle = input.threadTitle?.trim() ?? "";
+  const projectTitle = input.projectTitle?.trim() ?? "";
+  if (input.windowsTaskbar && !input.screenReader) {
+    const { appBaseName, mode } = input.windowsTaskbar;
+    switch (mode) {
+      case "app":
+        return appBaseName;
+      case "project-thread":
+        return [projectTitle, threadTitle].filter(Boolean).join(" / ") || appBaseName;
+      case "thread":
+        return threadTitle || appBaseName;
+      case "project":
+        return projectTitle || appBaseName;
+    }
+  }
+
   const status = input.screenReader?.threadStatus;
   if (threadTitle === "") {
     return status ? `${status}: ${input.appDisplayName}` : input.appDisplayName;
   }
 
-  const projectTitle = input.projectTitle?.trim() ?? "";
   const context =
     projectTitle === ""
       ? threadTitle

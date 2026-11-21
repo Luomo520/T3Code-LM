@@ -2,7 +2,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { UsageSource } from "@t3tools/contracts";
 
-import { formatHourShort, formatTokens, makeWindow, usageSourceMessages } from "./usageFormat.ts";
+import {
+  formatHourShort,
+  formatReplyUsage,
+  formatTokens,
+  makeWindow,
+  usageSourceMessages,
+} from "./usageFormat.ts";
 
 function malformedSource(count: number, overrides: Partial<UsageSource> = {}): UsageSource {
   return {
@@ -182,5 +188,23 @@ describe("token formatting", () => {
     expect(formatTokens(999_999)).toBe("1M");
     expect(formatTokens(999_999_999)).toBe("1B");
     expect(formatTokens(-999_999)).toBe("-1M");
+  });
+
+  it("formats reply speed with measured data first and preserves missing values", () => {
+    expect(
+      formatReplyUsage({
+        cumulativeTokens: 12_400,
+        tokensPerSecond: 48,
+        estimatedTokensPerSecond: 22,
+      }),
+    ).toEqual({ tokens: "12.4k token", speed: "48t/s" });
+    expect(
+      formatReplyUsage({
+        cumulativeTokens: 1_000_000_000,
+        tokensPerSecond: null,
+        estimatedTokensPerSecond: 27.35,
+      }),
+    ).toEqual({ tokens: "1b token", speed: "≈27.4t/s" });
+    expect(formatReplyUsage(undefined)).toEqual({ tokens: "—", speed: "—" });
   });
 });

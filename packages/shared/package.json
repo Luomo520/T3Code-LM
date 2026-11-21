@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./sessionUsageDisplay": {
+      "types": "./src/sessionUsageDisplay.ts",
+      "import": "./src/sessionUsageDisplay.ts"
+    },
     "./png": {
       "types": "./src/png.ts",
       "import": "./src/png.ts"
@@ -518,6 +522,10 @@
     "./markdownPipeline": {
       "types": "./src/markdownPipeline.ts",
       "import": "./src/markdownPipeline.ts"
+    },
+    "./markdownSemanticHighlight": {
+      "types": "./src/markdownSemanticHighlight.ts",
+      "import": "./src/markdownSemanticHighlight.ts"
     },
     "./threadFindText": {
       "types": "./src/threadFindText.ts",

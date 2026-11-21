@@ -170,7 +170,6 @@ const MermaidFilePreview = lazy(() =>
 );
 
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
-const RENDER_MARKDOWN_STORAGE_KEY = "t3code.renderMarkdown";
 const RENDER_BROWSER_FILE_STORAGE_KEY = "t3code.renderBrowserFile";
 const RENDER_TABLE_STORAGE_KEY = "t3code.renderTable";
 type FilePostRender = <LAnnotation>(
@@ -1197,11 +1196,16 @@ export default function FilePreviewPanel({
     explorerOpen,
     attachmentOpen: attachment !== undefined,
   });
-  const [renderMarkdownPreferred, setRenderMarkdownPreferred] = useLocalStorage(
-    RENDER_MARKDOWN_STORAGE_KEY,
-    true,
-    Schema.Boolean,
-  );
+  const [sourceMarkdownRequest, setSourceMarkdownRequest] = useState<{
+    readonly path: string;
+    readonly id: number;
+  } | null>(null);
+  if (
+    sourceMarkdownRequest !== null &&
+    (sourceMarkdownRequest.path !== previewPath || sourceMarkdownRequest.id !== revealRequestId)
+  ) {
+    setSourceMarkdownRequest(null);
+  }
   const [renderBrowserFilePreferred, setRenderBrowserFilePreferred] = useLocalStorage(
     RENDER_BROWSER_FILE_STORAGE_KEY,
     true,
@@ -1229,7 +1233,7 @@ export default function FilePreviewPanel({
   const revealHandled =
     revealLine === null ||
     (handledReveal?.path === relativePath && handledReveal.requestId === revealRequestId);
-  const renderMarkdown = isMarkdown && renderMarkdownPreferred && revealHandled;
+  const renderMarkdown = isMarkdown && sourceMarkdownRequest === null;
   const renderMermaid = isMermaid && renderMermaidPreferred && revealHandled;
   const renderBrowserFile = isPdf || (isHtml && renderBrowserFilePreferred && revealHandled);
   const renderTable = tableDelimiter !== null && renderTablePreferred && revealHandled;
@@ -1310,11 +1314,9 @@ export default function FilePreviewPanel({
         : renderBrowserFile;
   const setRenderedPreferred = isMermaid
     ? setRenderMermaidPreferred
-    : isMarkdown
-      ? setRenderMarkdownPreferred
-      : tableDelimiter
-        ? setRenderTablePreferred
-        : setRenderBrowserFilePreferred;
+    : tableDelimiter
+      ? setRenderTablePreferred
+      : setRenderBrowserFilePreferred;
   const canOpenInBrowser =
     canOperatePreview &&
     previewPath !== null &&
@@ -1474,6 +1476,14 @@ export default function FilePreviewPanel({
               pressed={rendered}
               onPress={() => {
                 const pressed = !rendered;
+                if (isMarkdown) {
+                  setSourceMarkdownRequest(
+                    !pressed && previewPath !== null
+                      ? { path: previewPath, id: revealRequestId }
+                      : null,
+                  );
+                  return;
+                }
                 setRenderedPreferred(pressed);
                 setHandledReveal(
                   pressed && relativePath !== null

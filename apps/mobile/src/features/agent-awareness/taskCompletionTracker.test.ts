@@ -22,7 +22,6 @@ it("reports the tracked run once when it completes in the background", () => {
   const onCompletion = vi.fn();
   const tracker = createTaskCompletionTracker({ background: false, onCompletion });
   tracker.observe(environmentId, [running]);
-  expect(tracker.hasActiveRuns()).toBe(true);
   tracker.setBackground(true);
   tracker.observe(environmentId, [complete]);
   tracker.setBackground(false);
@@ -34,7 +33,7 @@ it("reports the tracked run once when it completes in the background", () => {
     title: "Thread",
     failed: false,
   });
-  expect(tracker.hasActiveRuns()).toBe(false);
+  expect(tracker.watchedRuns()).toEqual([]);
 });
 
 it("recovers a missed completion from the first replay after returning to the app", () => {
@@ -68,5 +67,43 @@ it("keeps historical results, foreground completions and interrupted runs quiet"
   tracker.observe(environmentId, [{ ...complete, latestRunStopRequested: true }]);
 
   expect(onCompletion).not.toHaveBeenCalled();
-  expect(tracker.hasActiveRuns()).toBe(false);
+  expect(tracker.watchedRuns()).toEqual([]);
+});
+
+it("restores watched identities after the app process restarts without alerting for history", () => {
+  const onCompletion = vi.fn();
+  const original = createTaskCompletionTracker({ background: false, onCompletion });
+  original.observe(environmentId, [running]);
+  expect(original.watchedRuns()).toEqual([]);
+  original.setBackground(true);
+
+  const restored = createTaskCompletionTracker({
+    background: true,
+    watchedRuns: original.watchedRuns(),
+    onCompletion,
+  });
+  restored.observe(environmentId, [complete]);
+  restored.observe(environmentId, [complete]);
+
+  expect(onCompletion).toHaveBeenCalledExactlyOnceWith({
+    path: "/threads/environment/thread-v2",
+    runId,
+    title: "Thread",
+    failed: false,
+  });
+  expect(restored.watchedRuns()).toEqual([]);
+});
+
+it("drops restored watches when their environment is disabled", () => {
+  const onCompletion = vi.fn();
+  const tracker = createTaskCompletionTracker({
+    background: true,
+    watchedRuns: [{ environmentId, threadId: running.id, runId }],
+    onCompletion,
+  });
+  tracker.retainEnvironments(new Set());
+  tracker.observe(environmentId, [complete]);
+
+  expect(onCompletion).not.toHaveBeenCalled();
+  expect(tracker.watchedRuns()).toEqual([]);
 });

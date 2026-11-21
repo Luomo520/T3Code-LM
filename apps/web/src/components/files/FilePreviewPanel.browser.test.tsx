@@ -135,17 +135,25 @@ function setup() {
   };
 }
 
-function markdownPreview(truncated: boolean, contents = "- [ ] Keep the rest of this file\n") {
+function markdownPreview(
+  truncated: boolean,
+  contents = "- [ ] Keep the rest of this file\n",
+  revealLine: number | null = null,
+) {
   state.file = {
     relativePath: "tasks.md",
     contents,
     byteLength: truncated ? 1_200_000 : contents.length,
     truncated,
   };
-  return filePreview("tasks.md");
+  return filePreview("tasks.md", null, revealLine);
 }
 
-function filePreview(relativePath: string, workspaceMutationId: string | null = null) {
+function filePreview(
+  relativePath: string,
+  workspaceMutationId: string | null = null,
+  revealLine: number | null = null,
+) {
   return (
     <FilePreviewPanel
       environmentId={environmentId}
@@ -157,8 +165,8 @@ function filePreview(relativePath: string, workspaceMutationId: string | null = 
       keybindings={[]}
       availableEditors={[]}
       openInShortcutEnabled={false}
-      revealLine={null}
-      revealRequestId={0}
+      revealLine={revealLine}
+      revealRequestId={revealLine === null ? 0 : 1}
       onOpenFile={vi.fn()}
       onNavigateFolder={vi.fn()}
       folderTrail={undefined}
@@ -363,7 +371,43 @@ describe("workspace document previews", () => {
   });
 });
 
-describe("rendered Markdown select all", () => {
+describe("rendered Markdown preview", () => {
+  it("opens a line link in rendered mode, wraps long prose, and keeps link styling", async () => {
+    using _settings = setup();
+    localStorage.setItem("t3code.renderMarkdown", "false");
+    const style = document.createElement("style");
+    style.textContent = appCss;
+    document.head.append(style);
+    using _style = { [Symbol.dispose]: () => style.remove() };
+    const word = "abcdefghijklmnop".repeat(12);
+    const contents = `# Preview\n\n${word}\n\n[0.1.0-4](https://example.org/) · \`0.1.0-4\`\n`;
+    await using screen = await render(
+      <div style={{ width: 290 }}>{markdownPreview(true, contents, 2)}</div>,
+    );
+
+    await expect.element(screen.getByRole("heading", { name: "Preview" })).toBeVisible();
+    const preview = screen.container.querySelector(".file-markdown-preview")!;
+    const paragraph = Array.from(preview.querySelectorAll("p")).find(
+      (node) => node.textContent === word,
+    )!;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    expect(range.getClientRects().length).toBeGreaterThan(1);
+    const link = preview.querySelector("a[href='https://example.org/']")!;
+    expect(link.querySelector("[data-markdown-highlight]")).toBeNull();
+    expect(getComputedStyle(link).textDecorationLine).toContain("underline");
+    const version = preview.querySelector('[data-markdown-highlight="version"]');
+    expect(version?.textContent).toBe("0.1.0-4");
+    expect(paragraph.textContent).toBe(word);
+
+    await userEvent.click(screen.getByRole("button", { name: "Show markdown source" }));
+    await expect
+      .element(screen.getByRole("button", { name: "Show rendered markdown" }))
+      .toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Show rendered markdown" }));
+    await expect.element(screen.getByRole("heading", { name: "Preview" })).toBeVisible();
+  });
+
   it("selects only the rendered file, including after a task toggle", async () => {
     using _settings = setup();
     await using screen = await render(

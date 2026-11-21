@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 
-import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleArray,
+  NonNegativeInt,
+  RunId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 /** Bump for incompatible UsageSummary changes; skipped unknown array variants need no bump. */
 export const USAGE_CONTRACT_VERSION = 6 as const;
@@ -166,6 +171,7 @@ export type UsageSummary = typeof UsageSummary.Type;
 export const HeaderUsageInput = Schema.Struct({
   threadId: Schema.optional(Schema.String),
   providerInstanceId: Schema.optional(Schema.String),
+  includeSessionUsage: Schema.optional(Schema.Boolean),
   /** Page entry/resume request; the server still enforces account cooldown/backoff. */
   refresh: Schema.optional(Schema.Boolean),
 });
@@ -232,6 +238,25 @@ export const HeaderUsageCounters = Schema.Struct({
 });
 export type HeaderUsageCounters = typeof HeaderUsageCounters.Type;
 
+export const ConversationUsageTurn = Schema.Struct({
+  runId: RunId,
+  cumulativeTokens: Schema.NullOr(NonNegativeInt),
+  tokensPerSecond: Schema.NullOr(Schema.Finite),
+  estimatedTokensPerSecond: Schema.NullOr(Schema.Finite),
+  costUsd: Schema.NullOr(Schema.Finite),
+  costPartial: Schema.Boolean,
+  cacheRate: Schema.NullOr(Schema.Finite),
+});
+export type ConversationUsageTurn = typeof ConversationUsageTurn.Type;
+
+export const ConversationUsage = Schema.Struct({
+  costUsd: Schema.NullOr(Schema.Finite),
+  costPartial: Schema.Boolean,
+  categoryCostUsd: Schema.NullOr(UsageCategoryCost),
+  turns: Schema.Array(ConversationUsageTurn),
+});
+export type ConversationUsage = typeof ConversationUsage.Type;
+
 export const HeaderUsageSummary = Schema.Struct({
   providerInstanceId: Schema.NullOr(Schema.String),
   providerLabel: Schema.String,
@@ -254,6 +279,7 @@ export const HeaderUsageSummary = Schema.Struct({
   }),
   conversation: HeaderUsageCounters,
   allConversations: HeaderUsageCounters,
+  sessionUsage: Schema.optionalKey(ConversationUsage),
 });
 export type HeaderUsageSummary = typeof HeaderUsageSummary.Type;
 

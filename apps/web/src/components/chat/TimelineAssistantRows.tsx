@@ -1,4 +1,5 @@
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
+import { formatReplyUsage } from "@t3tools/shared/usageFormat";
 import { type RunId, type TurnItemId } from "@t3tools/contracts";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { agentWorkingDirectories } from "@t3tools/client-runtime/workspace-basename-lookup";
@@ -211,40 +212,68 @@ function AssistantMessageMeta({
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const usage =
+    ctx.replyUsageByRun && !message.streaming
+      ? formatReplyUsage(
+          message.runId === null ? undefined : ctx.replyUsageByRun.get(message.runId),
+        )
+      : null;
+  const revealOnInteraction = !alwaysVisible
+    ? "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100"
+    : undefined;
 
   return (
     <div
       className={cn(
-        "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
-          ? "opacity-100"
-          : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
+        "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs tabular-nums transition-opacity duration-200",
+        !usage && revealOnInteraction,
         className,
       )}
     >
-      {projectedItem && projectedItem.item.status !== "completed" ? (
-        <AssistantStatusBadge status={projectedItem.item.status} />
-      ) : null}
-      <AssistantCopyButton
-        message={message}
-        showCopyButton={showCopyButton}
-        streaming={copyStreaming}
-      />
-      {projectedItem?.item.type === "assistant_message" ? (
-        <AssistantForkButton projectedItem={projectedItem} />
-      ) : null}
-      {!message.streaming && projectedItem ? (
-        <AssistantReplyButton message={message} itemId={projectedItem.sourceItemId} />
-      ) : null}
+      <div
+        className={cn(
+          "flex items-center gap-2 transition-opacity duration-200",
+          usage && revealOnInteraction,
+        )}
+      >
+        {projectedItem && projectedItem.item.status !== "completed" ? (
+          <AssistantStatusBadge status={projectedItem.item.status} />
+        ) : null}
+        <AssistantCopyButton
+          message={message}
+          showCopyButton={showCopyButton}
+          streaming={copyStreaming}
+        />
+        {projectedItem?.item.type === "assistant_message" ? (
+          <AssistantForkButton projectedItem={projectedItem} />
+        ) : null}
+        {!message.streaming && projectedItem ? (
+          <AssistantReplyButton message={message} itemId={projectedItem.sourceItemId} />
+        ) : null}
+      </div>
       {!message.streaming && (
-        <Tooltip>
-          <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-            {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
-          </TooltipTrigger>
-          <TooltipPopup>
-            {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
-          </TooltipPopup>
-        </Tooltip>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+          <Tooltip>
+            <TooltipTrigger render={<p />}>
+              {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
+            </TooltipTrigger>
+            <TooltipPopup>
+              {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
+            </TooltipPopup>
+          </Tooltip>
+          {usage ? (
+            <>
+              <span className="whitespace-nowrap">
+                <span className="sr-only">会话累计 Token </span>
+                <span data-reply-usage="tokens">{usage.tokens}</span>
+              </span>
+              <span className="whitespace-nowrap">
+                <span className="sr-only">本轮输出速度 </span>
+                <span data-reply-usage="speed">{usage.speed}</span>
+              </span>
+            </>
+          ) : null}
+        </div>
       )}
     </div>
   );

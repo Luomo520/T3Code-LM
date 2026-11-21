@@ -25,8 +25,9 @@ class T3NativeControlsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("T3NativeControls")
 
-    AsyncFunction("enqueueFileDownload") { url: String, fileName: String ->
-      T3FileDownloads.enqueue(appContext.reactContext ?: error("应用尚未就绪。"), url, fileName)
+    AsyncFunction("enqueueFileDownload") { url: String, fileName: String, sizeBytes: Double? ->
+      T3FileDownloads.enqueue(appContext.reactContext ?: error("应用尚未就绪。"), url, fileName,
+        sizeBytes?.takeIf { it.isFinite() && it >= 0 }?.toLong())
     }
     AsyncFunction("getFileDownload") { id: String -> T3FileDownloads.status(id) }
     AsyncFunction("cancelFileDownload") { id: String -> T3FileDownloads.cancel(id) }

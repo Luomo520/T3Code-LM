@@ -3,6 +3,8 @@ package expo.modules.t3nativecontrols
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.util.concurrent.ConcurrentHashMap
@@ -10,8 +12,13 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
+import javax.net.ssl.SSLException
 
-internal class DownloadFailure(message: String) : IOException(message)
+internal class DownloadFailure(
+  message: String,
+  val retryable: Boolean = false,
+  val status: Int? = null,
+) : IOException(message)
 
 /** Transfers one HTTP representation into a seekable file. Each range must match the same ETag. */
 internal class T3HttpDownload(
@@ -19,41 +26,45 @@ internal class T3HttpDownload(
   private val checkActive: () -> Unit,
   private val redirectAllowed: (URL, URL) -> Boolean,
   private val progress: (Long, Long?) -> Unit,
+  private val observeResponse: (String, Int) -> Unit = { _, _ -> },
 ) {
   private val connections = ConcurrentHashMap.newKeySet<HttpURLConnection>()
   private val received = AtomicLong()
   @Volatile private var stopped = false
 
   fun transfer(url: URL, output: FileChannel, expectedBytes: Long?) {
-    val probe = response(url, "bytes=0-0") { http, finalUrl ->
-      when (val status = http.responseCode) {
-        HttpURLConnection.HTTP_OK -> {
-          whole(http, output, expectedBytes)
-          null
-        }
-        HttpURLConnection.HTTP_PARTIAL -> {
-          val range = parseRange(http.getHeaderField("Content-Range"))
-          if (range == null || range.start != 0L || range.end != 0L) {
-            throw DownloadFailure("服务器返回的分段范围无效，请重试。")
+    if (expectedBytes == null || expectedBytes < MIN_SEGMENT_BYTES * 2) {
+      transferWhole(url, output, expectedBytes)
+      return
+    }
+    val probe = try {
+      response(url, "分段探测", "bytes=0-0") { http, finalUrl, status ->
+        when (status) {
+          HttpURLConnection.HTTP_OK -> {
+            whole(http, output, expectedBytes)
+            null
           }
-          checkSize(range.total, expectedBytes)
-          Probe(finalUrl, range.total, http.getHeaderField("ETag")?.takeIf(::strongETag))
+          HttpURLConnection.HTTP_PARTIAL -> {
+            val range = parseRange(http.getHeaderField("Content-Range"))
+            if (range == null || range.start != 0L || range.end != 0L) {
+              throw DownloadFailure("服务器返回的分段范围无效，请重试。", retryable = true)
+            }
+            checkSize(range.total, expectedBytes)
+            Probe(finalUrl, range.total, http.getHeaderField("ETag")?.takeIf(::strongETag))
+          }
+          else -> reject(status, "分段探测")
         }
-        416 -> {
-          if (http.getHeaderField("Content-Range") != "bytes */0") reject(status)
-          checkSize(0, expectedBytes)
-          Probe(finalUrl, 0, null)
-        }
-        else -> reject(status)
       }
+    } catch (error: DownloadFailure) {
+      // Rejected probes have not written any bytes. Keep the same signed URL and try a plain GET.
+      if (error.status !in RANGE_FALLBACK_STATUSES) throw error
+      transferWhole(url, output, expectedBytes)
+      return
     }
     if (probe == null) return
     val parts = (probe.total / MIN_SEGMENT_BYTES).coerceIn(1, MAX_SEGMENTS.toLong()).toInt()
-    if (probe.etag == null || parts == 1) {
-      response(probe.url) { http, _ ->
-        if (http.responseCode != HttpURLConnection.HTTP_OK) reject(http.responseCode)
-        whole(http, output, probe.total)
-      }
+    if (probe.etag == null) {
+      transferWhole(probe.url, output, probe.total)
       return
     }
     progress(0, probe.total)
@@ -65,27 +76,44 @@ internal class T3HttpDownload(
         val start = part * partBytes
         val end = if (part == parts - 1) probe.total - 1 else start + partBytes - 1
         work.submit {
-          response(probe.url, "bytes=$start-$end", probe.etag) { http, _ ->
-            val status = http.responseCode
+          response(probe.url, "分段下载", "bytes=$start-$end", probe.etag) { http, _, status ->
             if (status !in listOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_PARTIAL, 416)) {
-              reject(status)
+              reject(status, "分段下载")
             }
             val range = parseRange(http.getHeaderField("Content-Range"))
             if (status != HttpURLConnection.HTTP_PARTIAL ||
               http.getHeaderField("ETag") != probe.etag || range != Range(start, end, probe.total)
-            ) throw DownloadFailure("下载期间文件已变化，或服务器返回了错误的分段，请重新下载。")
+            ) throw DownloadFailure("下载期间文件已变化，或服务器返回了错误的分段，请重新下载。", retryable = true)
             copy(http, output, start, end - start + 1, probe.total)
           }
         }
       }
       repeat(parts) { work.take().get() }
-      if (output.size() != probe.total) throw DownloadFailure("下载文件大小不匹配，请重试。")
+      if (output.size() != probe.total) throw DownloadFailure("下载文件大小不匹配，请重试。", retryable = true)
     } catch (error: ExecutionException) {
       throw (error.cause ?: error)
     } finally {
       stopped = true
       connections.forEach(HttpURLConnection::disconnect)
       pool.shutdownNow()
+    }
+  }
+
+  private fun transferWhole(url: URL, output: FileChannel, expectedBytes: Long?) {
+    try {
+      readWholeResponse(url, output, expectedBytes)
+    } catch (error: DownloadFailure) {
+      // A gateway status arrives before reading the body, so retry without touching partial data.
+      if (error.status != 502 && error.status != 504) throw error
+      Thread.sleep(350)
+      readWholeResponse(url, output, expectedBytes)
+    }
+  }
+
+  private fun readWholeResponse(url: URL, output: FileChannel, expectedBytes: Long?) {
+    response(url, "读取正文") { http, _, status ->
+      if (status != HttpURLConnection.HTTP_OK) reject(status, "读取正文")
+      whole(http, output, expectedBytes)
     }
   }
 
@@ -104,13 +132,13 @@ internal class T3HttpDownload(
     }
     var offset = start
     val bytes = ByteArray(128 * 1024)
-    http.inputStream.use { input ->
+    networkOperation { http.inputStream }.use { input ->
       while (true) {
         ensureActive()
-        val count = input.read(bytes)
+        val count = networkOperation { input.read(bytes) }
         if (count < 0) break
         if (length != null && count > length - (offset - start)) {
-          throw DownloadFailure("接收的数据超出文件大小，请重新下载。")
+          throw DownloadFailure("接收的数据超出文件大小，请重新下载。", retryable = true)
         }
         ensureActive()
         val buffer = ByteBuffer.wrap(bytes, 0, count)
@@ -119,20 +147,21 @@ internal class T3HttpDownload(
       }
     }
     if (length != null && offset - start != length) {
-      throw DownloadFailure("下载内容不完整，请重试。")
+      throw DownloadFailure("下载内容不完整，请重试。", retryable = true)
     }
   }
 
   private fun <T> response(
     url: URL,
+    phase: String,
     range: String? = null,
     etag: String? = null,
-    read: (HttpURLConnection, URL) -> T,
+    read: (HttpURLConnection, URL, Int) -> T,
   ): T {
     var target = url
     repeat(6) {
       ensureActive()
-      val http = connect(target)
+      val http = networkOperation { connect(target) }
       connections.add(http)
       try {
         ensureActive()
@@ -143,7 +172,9 @@ internal class T3HttpDownload(
         http.setRequestProperty("Accept-Encoding", "identity")
         range?.let { http.setRequestProperty("Range", it) }
         etag?.let { http.setRequestProperty("If-Range", it) }
-        if (http.responseCode !in listOf(301, 302, 303, 307, 308)) return read(http, target)
+        val status = networkOperation { http.responseCode }
+        observeResponse(phase, status)
+        if (status !in listOf(301, 302, 303, 307, 308)) return read(http, target, status)
         val location = http.getHeaderField("Location") ?: throw DownloadFailure("下载地址重定向无效。")
         val redirected = URL(target, location)
         if (!redirectAllowed(target, redirected)) throw DownloadFailure("下载地址重定向无效。")
@@ -163,18 +194,39 @@ internal class T3HttpDownload(
 
   private fun checkSize(actual: Long?, expected: Long?) {
     if (actual != null && expected != null && actual != expected) {
-      throw DownloadFailure("下载文件大小与预期不匹配，请重新下载。")
+      throw DownloadFailure("下载文件大小与预期不匹配，请重新下载。", retryable = true)
     }
   }
 
   private fun strongETag(value: String) = value.length >= 2 && value.startsWith('"') && value.endsWith('"')
 
-  private fun reject(status: Int): Nothing = throw DownloadFailure(when (status) {
-    403 -> "服务器拒绝下载。工作区大文件可改用局域网直连后重试。"
-    404, 410 -> "下载文件已不可用，请重新申请下载。"
-    409 -> "文件已变化，请重新点击下载。"
-    else -> "服务器暂时无法提供下载（HTTP $status），请重试。"
-  })
+  private fun reject(status: Int, phase: String): Nothing {
+    val message = when (status) {
+      401 -> "下载授权无效，请重新申请下载。"
+      403 -> "服务器拒绝下载。工作区大文件需要使用局域网直连。"
+      404, 410 -> "下载文件已不可用，请重新申请下载。"
+      409 -> "文件已变化，请重新申请下载。"
+      429 -> "下载请求过多，请稍后重试。"
+      502, 503, 504 -> "${phase}时，服务器或代理暂时无法提供下载（HTTP $status）。请检查网络及 VPN 的局域网访问设置后重试。"
+      else -> "${phase}时收到 HTTP $status。"
+    }
+    throw DownloadFailure(message, retryable = status in RETRYABLE_STATUSES || status in 500..599,
+      status = status)
+  }
+
+  private inline fun <T> networkOperation(operation: () -> T): T {
+    try {
+      return operation()
+    } catch (error: IOException) {
+      ensureActive()
+      throw when (error) {
+        is UnknownHostException -> DownloadFailure("无法找到下载服务器，请检查网络及代理设置。", retryable = true)
+        is SocketTimeoutException -> DownloadFailure("连接或读取下载内容超时，请检查网络后重试。", retryable = true)
+        is SSLException -> DownloadFailure("无法建立安全下载连接，请检查服务器证书及代理设置。")
+        else -> DownloadFailure("下载连接中断，请检查网络及代理设置后重试。", retryable = true)
+      }
+    }
+  }
 
   private data class Probe(val url: URL, val total: Long, val etag: String?)
   private data class Range(val start: Long, val end: Long, val total: Long)
@@ -189,6 +241,8 @@ internal class T3HttpDownload(
 
   private companion object {
     private val CONTENT_RANGE = Regex("bytes ([0-9]+)-([0-9]+)/([0-9]+)")
+    private val RANGE_FALLBACK_STATUSES = setOf(400, 405, 416, 501, 502, 503, 504)
+    private val RETRYABLE_STATUSES = setOf(401, 404, 408, 409, 410, 429)
     private const val MAX_SEGMENTS = 4
     private const val MIN_SEGMENT_BYTES = 2 * 1024 * 1024L
   }

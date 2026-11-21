@@ -1,5 +1,11 @@
 import { decodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import {
+  markdownSemanticHighlightKinds,
+  markdownSemanticHighlightPattern,
+  markdownSemanticInlineCodeEdge,
+  type MarkdownSemanticHighlightKind,
+} from "@t3tools/shared/markdownSemanticHighlight";
+import {
   collectComposerContextReferences,
   formatComposerContextHref,
   formatComposerContextReference,
@@ -39,6 +45,17 @@ import {
   enrichedModelReference,
   enrichedLinkVariantPattern,
 } from "../lib/enrichedLinkPresentation";
+
+const semanticColors = {
+  error: ["#b91c1c", "#fca5a5"],
+  pending: ["#92400e", "#fcd34d"],
+  success: ["#047857", "#6ee7b7"],
+  path: ["#0f766e", "#5eead4"],
+  uuid: ["#6d28d9", "#c4b5fd"],
+  date: ["#0369a1", "#7dd3fc"],
+  version: ["#9d174d", "#f9a8d4"],
+  quantity: ["#4338ca", "#a5b4fc"],
+} satisfies Record<MarkdownSemanticHighlightKind, readonly [string, string]>;
 
 function enrichedStyle(
   style: SelectableMarkdownTextProps["textStyle"],
@@ -346,16 +363,34 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     const style = enrichedStyle(props.textStyle, themeAppearance === "dark", fontScale);
     return {
       ...style,
+      ...(props.semanticHighlights
+        ? {
+            link: { ...style.link, underline: true },
+            textHighlight:
+              Platform.OS === "android"
+                ? {
+                    pattern: markdownSemanticHighlightPattern,
+                    inlineCodeEdge: markdownSemanticInlineCodeEdge,
+                    colors: markdownSemanticHighlightKinds.map(
+                      (kind) => semanticColors[kind][themeAppearance === "dark" ? 1 : 0],
+                    ),
+                  }
+                : undefined,
+          }
+        : {}),
       paragraph: props.textAlign
         ? { ...style.paragraph, textAlign: props.textAlign }
         : style.paragraph,
     };
-  }, [props.textStyle, props.textAlign, themeAppearance, fontScale]);
+  }, [props.textStyle, props.textAlign, props.semanticHighlights, themeAppearance, fontScale]);
   // Link variants change as a message streams. The code renderer reads only the base style, so
   // it stays the same function and the library keeps its rendered blocks.
   const markdownStyle = useMemo(
-    () => ({ ...baseMarkdownStyle, linkVariants }),
-    [baseMarkdownStyle, linkVariants],
+    () => ({
+      ...baseMarkdownStyle,
+      linkVariants: props.semanticHighlights ? undefined : linkVariants,
+    }),
+    [baseMarkdownStyle, linkVariants, props.semanticHighlights],
   );
   const renderers = {
     image: renderImage
@@ -438,7 +473,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           }
           onLinkLongPress={onLinkLongPress}
           linkContextMenuItems={linkContextMenuItems}
-          linkPillContent={linkPillContent}
+          linkPillContent={props.semanticHighlights ? undefined : linkPillContent}
         />
       </View>
     );

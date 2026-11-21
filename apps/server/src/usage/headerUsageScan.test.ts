@@ -452,3 +452,43 @@ it("keeps each pending request's metadata when a snapshot reconciles several int
     { headerTurnId: "two", headerCacheKnown: true, totals: { outputTokens: 3 } },
   ]);
 });
+
+it("reads Claude request fees from the owner transcript and merges repeated output blocks", async () => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-claude-header-"));
+  try {
+    function line(costUSD: number | undefined, output_tokens: number, isSidechain = false) {
+      return (
+        JSON.stringify({
+          type: "assistant",
+          timestamp: "2026-11-22T00:00:00Z",
+          sessionId: "native",
+          requestId: "request-one",
+          costUSD,
+          isSidechain,
+          message: {
+            id: "message-one",
+            model: "custom-claude",
+            usage: { input_tokens: 10, output_tokens, cache_read_input_tokens: 20 },
+          },
+        }) + "\n"
+      );
+    }
+    await NodeFSP.writeFile(
+      NodePath.join(root, "native.jsonl"),
+      line(undefined, 2) + line(0.012, 10) + line(3, 500, true),
+    );
+    await NodeFSP.writeFile(NodePath.join(root, "native-copy.jsonl"), line(7, 800));
+    const scanner = new HeaderTranscriptCache("claude");
+    const result = await scanner.scan([root], new Set(["native"]));
+    expect(result.partial).toBe(false);
+    expect(result.records).toMatchObject([
+      {
+        reportedCostUsd: 0.012,
+        headerCacheKnown: true,
+        totals: { cachedInputTokens: 20, outputTokens: 10 },
+      },
+    ]);
+  } finally {
+    await NodeFSP.rm(root, { recursive: true, force: true });
+  }
+});

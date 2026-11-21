@@ -31,14 +31,14 @@ const release = (build: number, hasApk = true) => ({
     ...(hasApk ? [{ name: `T3Code-LM-0.1.0-${build}-android-arm64-apk.apk` }] : []),
   ],
 });
-const manifest = (build: number) => ({
+const manifest = (build: number, androidVersionCode = 36) => ({
   schemaVersion: 1,
   product: "T3Code-LM",
   repository: "Luomo520/T3Code-LM",
   channel: "release",
   tag: `v0.1.0-${build}`,
   sourceCommit: "a".repeat(40),
-  assets: [asset("arm64", build)],
+  assets: [asset("arm64", build, androidVersionCode)],
 });
 
 describe("Android release selection", () => {
@@ -81,6 +81,30 @@ describe("Android release selection", () => {
     expect(result?.androidVersionCode).toBe(36);
     expect(calls).toHaveLength(2);
     expect(calls.every((url) => !url.endsWith(".apk"))).toBe(true);
+  });
+
+  it("selects the highest numeric build across release pages and rejects equal Android codes", async () => {
+    const calls: string[] = [];
+    using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const address = String(url);
+      calls.push(address);
+      const value = address.includes("page=1")
+        ? [release(2), ...Array.from({ length: 19 }, () => release(3, false))]
+        : address.includes("page=2")
+          ? [release(10)]
+          : address.includes("/v0.1.0-10/")
+            ? manifest(10, 37)
+            : manifest(2);
+      return new Response(JSON.stringify(value), { status: 200 });
+    });
+    const signal = new AbortController().signal;
+    expect(
+      await findAndroidAppUpdate({ installedBuild: 35, architectures: ["arm64-v8a"] }, signal),
+    ).toMatchObject({ build: 10, androidVersionCode: 37 });
+    expect(calls[2]).toContain("/v0.1.0-10/");
+    expect(
+      await findAndroidAppUpdate({ installedBuild: 37, architectures: ["arm64-v8a"] }, signal),
+    ).toBeNull();
   });
 
   it("rejects a manifest redirected to another package origin before offering a download", async () => {

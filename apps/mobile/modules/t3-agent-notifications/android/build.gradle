@@ -24,6 +24,7 @@ dependencies {
   implementation 'com.google.firebase:firebase-messaging:25.0.1'
   implementation 'androidx.core:core:1.17.0'
   implementation 'androidx.lifecycle:lifecycle-process:2.9.3'
+  testImplementation('com.facebook.react:react-android') { transitive = false }
   testImplementation 'junit:junit:4.13.2'
   testImplementation 'org.robolectric:robolectric:4.16.1'
 }

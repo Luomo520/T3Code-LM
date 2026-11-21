@@ -654,6 +654,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly variant: "card" | "slim";
   readonly projectTitle?: string;
   readonly groupedByProject?: boolean;
+  readonly showPinnedDetails?: boolean;
   readonly hasQueuedMessages?: boolean;
   readonly snoozed?: boolean;
   readonly pinned?: boolean;
@@ -784,8 +785,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
-  const rowAccessibilityLabel = `${thread.title}${providerNameLabel ? `, ${providerNameLabel}` : ""}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}`;
   const timeLabel = props.timeLabel;
+  const showPinnedDetails = pinnedRow && props.showPinnedDetails;
+  const pinnedProjectTitle = showPinnedDetails
+    ? (props.projectTitle ?? props.project?.title)
+    : undefined;
+  const pinnedBranch = showPinnedDetails ? thread.branch : null;
+  const rowAccessibilityLabel = [
+    thread.title,
+    showPinnedDetails ? "置顶" : null,
+    pinnedProjectTitle,
+    pinnedBranch,
+    showPinnedDetails && timeLabel ? timeLabel : null,
+    providerNameLabel,
+    props.hasQueuedMessages ? "messages queued to send" : null,
+    isRegeneratingTitle ? "regenerating title" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const handleAcknowledgeWoke = useCallback(() => {
@@ -1272,7 +1289,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 ) : null}
               </Text>
             </View>
-          ) : (
+          ) : null}
+          {timeLabel && (showPinnedDetails || (!showsWoke && !statusLabel)) ? (
             <Text
               className={cn(
                 "text-xs tabular-nums",
@@ -1283,9 +1301,27 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             >
               {timeLabel}
             </Text>
-          )}
+          ) : null}
         </View>
       </View>
+      {pinnedProjectTitle || pinnedBranch ? (
+        <View
+          className="mt-1 flex-row items-center gap-1.5"
+          style={{ paddingLeft: titleTextInset }}
+        >
+          <Text
+            className={cn(
+              "shrink text-xs",
+              selected
+                ? selectedThreadRowColors.mutedForegroundClassName
+                : rowAppearance.tertiaryForegroundClassName,
+            )}
+            numberOfLines={1}
+          >
+            {[pinnedProjectTitle, pinnedBranch].filter(Boolean).join(" · ")}
+          </Text>
+        </View>
+      ) : null}
       {props.searchMatch ? (
         <View className="mt-1" style={{ paddingLeft: titleTextInset }}>
           <ThreadSearchMatchExcerpt
@@ -1380,7 +1416,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           </Pressable>
         ) : null}
         {props.groupedByProject ? (
-          <View className="shrink-0 flex-row items-center gap-1.5">{statusLabel ? <Text className="text-xs text-foreground-muted">{statusLabel.label}</Text> : null}</View>
+          <View className="shrink-0 flex-row items-center gap-1.5">
+            {statusLabel ? (
+              <Text className="text-xs text-foreground-muted">{statusLabel.label}</Text>
+            ) : null}
+          </View>
         ) : null}
         {providerInstance ? (
           <View className="flex-row items-center">

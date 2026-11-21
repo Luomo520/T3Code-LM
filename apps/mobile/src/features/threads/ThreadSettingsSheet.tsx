@@ -6,11 +6,16 @@ import {
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { useModelPopupColors, ReasoningSlider } from "./ReasoningSlider";
 import { reasoningLevelLabel } from "./reasoning-slider-state";
+import { PopupChoice, PopupChoicesDialog, type PopupFrame } from "./ThreadSettingsPopupChoices";
 import * as Dialog from "../../components/ui/Dialog";
 import { DockGlassBackdrop } from "../../components/ui/DockGlass";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { useSheetStackOptions } from "../layout/nested-stacks";
-import { AuthSettingsWriteScope, DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  AuthSettingsWriteScope,
+  DEFAULT_SERVER_SETTINGS,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
@@ -61,6 +66,7 @@ import {
   View,
   useWindowDimensions,
   type TextInputInstance,
+  type ViewInstance,
 } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { SearchField } from "../../components/ui/SearchField";
@@ -77,7 +83,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppBar } from "../../components/ui/AppBar";
-import { Menu } from "../../components/ui/Menu";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { cn } from "../../lib/cn";
@@ -508,7 +513,9 @@ function ThreadSettingsSessionProvider(
     });
   };
   const [showLegacyToggle, setShowLegacyToggle] = useState(false);
-  const [providerFilter, setProviderFilter] = useState<string | null>(() => Platform.OS === "android" ? FAVORITES_PROVIDER_FILTER : null);
+  const [providerFilter, setProviderFilter] = useState<string | null>(() =>
+    Platform.OS === "android" ? FAVORITES_PROVIDER_FILTER : null,
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [providerExpansionOverrides, setProviderExpansionOverrides] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -817,7 +824,9 @@ function ThreadSettingsModelListRow(props: {
           <Text className="min-w-0 flex-1 text-sm" style={{ color: colors.text }} numberOfLines={1}>
             {option.label}
           </Text>
-          {option.isDefault ? <Text style={{ fontSize: 11, color: colors.muted }}>默认</Text> : null}
+          {option.isDefault ? (
+            <Text style={{ fontSize: 11, color: colors.muted }}>默认</Text>
+          ) : null}
           {option.isHidden ? (
             <Text style={{ fontSize: 11, color: colors.muted }}>已隐藏</Text>
           ) : option.isUnavailable ? (
@@ -855,9 +864,7 @@ function ThreadSettingsModelListRow(props: {
           />
         </Pressable>
         <View pointerEvents="none" className="w-6 items-center">
-          {selected ? (
-            <SymbolView name="checkmark" size={15} tintColor={colors.text} />
-          ) : null}
+          {selected ? <SymbolView name="checkmark" size={15} tintColor={colors.text} /> : null}
         </View>
       </View>
     );
@@ -1134,7 +1141,9 @@ function ThreadSettingsMainContent(props: {
   const reducedMotion = useReducedMotion();
   const reduceMotionEnabled = useReduceMotionEnabled();
   const animationsReady = listLoaded && !reducedMotion && !reduceMotionEnabled;
-  const catalogItems = buildThreadSettingsCatalogItems(session).filter((item) => !props.compact || item.kind !== "provider");
+  const catalogItems = buildThreadSettingsCatalogItems(session).filter(
+    (item) => !props.compact || item.kind !== "provider",
+  );
   const hasActiveCatalogFilter =
     session.providerFilter !== null || session.searchQuery.trim().length > 0;
   const listItems = [
@@ -1161,7 +1170,10 @@ function ThreadSettingsMainContent(props: {
     } else if (item.kind === "empty") {
       content = (
         <View className={props.compact ? "items-center px-4 py-4" : "items-center px-8 py-14"}>
-          <Text className="text-center text-sm text-foreground-muted" style={props.compact ? { color: colors.muted } : undefined}>
+          <Text
+            className="text-center text-sm text-foreground-muted"
+            style={props.compact ? { color: colors.muted } : undefined}
+          >
             {session.providerFilter === FAVORITES_PROVIDER_FILTER &&
             session.searchQuery.trim().length === 0
               ? "暂无收藏模型，请切换到全部添加收藏"
@@ -1485,48 +1497,6 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
   );
 }
 
-function PopupChoice(props: {
-  readonly label: string;
-  readonly selected: boolean;
-  readonly isDefault?: boolean;
-  readonly disabled?: boolean;
-  readonly description?: string;
-  readonly onPress: () => void;
-}) {
-  const colors = useModelPopupColors();
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityLabel={[props.label, props.isDefault ? "默认" : null, props.description]
-        .filter(Boolean)
-        .join("，")}
-      accessibilityState={{ checked: props.selected, disabled: props.disabled === true }}
-      disabled={props.disabled}
-      onPress={props.onPress}
-      className={cn(
-        "min-h-12 flex-row items-center gap-2 rounded-md px-3 active:opacity-60",
-        props.disabled && "opacity-50",
-      )}
-      style={{ backgroundColor: props.selected ? colors.selected : "transparent" }}
-    >
-      <Text
-        className={cn("min-w-0 flex-1 text-sm", props.selected && "font-t3-medium")}
-        style={{ color: colors.text }}
-      >
-        {props.label}
-      </Text>
-      <View className="w-9 items-end">
-        <Text style={{ fontSize: 12, color: colors.muted }}>{props.isDefault ? "默认" : ""}</Text>
-      </View>
-      <View className="w-5 items-center">
-        {props.selected ? (
-          <SymbolView name="checkmark" size={15} tintColor={colors.text} />
-        ) : null}
-      </View>
-    </Pressable>
-  );
-}
-
 const POPUP_OPTION_LABELS: Readonly<Record<string, string>> = {
   Reasoning: "思考强度",
   "Reasoning effort": "思考强度",
@@ -1551,15 +1521,61 @@ function PopupSpeedSegments(props: {
   readonly onChange: (value: string) => void;
 }) {
   const colors = useModelPopupColors();
-  return <View style={{ paddingHorizontal: 6, paddingVertical: 6, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-    <Text style={{ color: colors.text, fontSize: 12, flexGrow: 1 }}>响应模式</Text>
-    <View accessibilityRole="radiogroup" style={{ flexDirection: "row", flexWrap: "wrap", backgroundColor: colors.rail, padding: 3, borderRadius: 10 }}>
-      {props.choices.map((choice) => <Pressable key={choice.id} accessibilityRole="radio" accessibilityLabel={choice.label} accessibilityState={{ checked: choice.id === props.current }} onPress={() => props.onChange(choice.id)} style={{ minHeight: 44, paddingHorizontal: 12, borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: choice.id === props.current ? colors.segment : "transparent" }}>
-        {choice.label === "快速" ? <SymbolView name="bolt.circle" size={13} tintColor={colors.muted} /> : null}
-        <Text style={{ fontSize: 12, color: choice.id === props.current ? colors.text : colors.muted }}>{choice.label}</Text>
-      </Pressable>)}
+  return (
+    <View
+      style={{
+        paddingHorizontal: 6,
+        paddingVertical: 6,
+        flexDirection: "row",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: 8,
+      }}
+    >
+      <Text style={{ color: colors.text, fontSize: 12, flexGrow: 1 }}>响应模式</Text>
+      <View
+        accessibilityRole="radiogroup"
+        style={{
+          flexDirection: "row",
+          flexWrap: "wrap",
+          backgroundColor: colors.rail,
+          padding: 3,
+          borderRadius: 10,
+        }}
+      >
+        {props.choices.map((choice) => (
+          <Pressable
+            key={choice.id}
+            accessibilityRole="radio"
+            accessibilityLabel={choice.label}
+            accessibilityState={{ checked: choice.id === props.current }}
+            onPress={() => props.onChange(choice.id)}
+            style={{
+              minHeight: 44,
+              paddingHorizontal: 12,
+              borderRadius: 8,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 4,
+              backgroundColor: choice.id === props.current ? colors.segment : "transparent",
+            }}
+          >
+            {choice.label === "快速" ? (
+              <SymbolView name="bolt.circle" size={13} tintColor={colors.muted} />
+            ) : null}
+            <Text
+              style={{
+                fontSize: 12,
+                color: choice.id === props.current ? colors.text : colors.muted,
+              }}
+            >
+              {choice.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
     </View>
-  </View>;
+  );
 }
 
 function PopupReasoningControl(props: {
@@ -1568,7 +1584,7 @@ function PopupReasoningControl(props: {
   readonly modelLabel: string;
   readonly disabled: boolean;
   readonly defaultValue: string | null;
-  readonly onSetDefault?: (value: string | null) => Promise<boolean>;
+  readonly onSetDefault?: (value: string | null) => Promise<string | null>;
   readonly defaultEditError?: string;
   readonly highlightEnabled: boolean;
   readonly onChange: (value: string) => void;
@@ -1576,6 +1592,7 @@ function PopupReasoningControl(props: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const pending = useRef(false);
   const setDefault = async (value: string | null) => {
     if (!props.onSetDefault || props.defaultEditError || pending.current) return;
@@ -1585,10 +1602,14 @@ function PopupReasoningControl(props: {
     }
     pending.current = true;
     setSaving(true);
+    setError(null);
     try {
-      if (await props.onSetDefault(value)) {
+      const saveError = await props.onSetDefault(value);
+      if (saveError === null) {
         setExpanded(false);
         void Haptics.selectionAsync();
+      } else {
+        setError(saveError);
       }
     } finally {
       pending.current = false;
@@ -1598,7 +1619,7 @@ function PopupReasoningControl(props: {
   const editorExpanded = expanded && !props.defaultEditError;
 
   return (
-    <View>
+    <>
       <ReasoningSlider
         choices={props.choices}
         value={props.current}
@@ -1607,16 +1628,21 @@ function PopupReasoningControl(props: {
         defaultValue={props.defaultValue}
         defaultEditorExpanded={editorExpanded}
         defaultSaving={saving}
-        highlightEnabled={props.highlightEnabled}
+        highlightEnabled={props.highlightEnabled && !editorExpanded}
         defaultEditUnavailable={props.defaultEditError}
         {...(props.onSetDefault && props.choices.length > 0 && !props.defaultEditError
-          ? { onEditDefault: () => setExpanded((value) => !value) }
+          ? {
+              onEditDefault: () => {
+                setError(null);
+                setExpanded(true);
+              },
+            }
           : {})}
         onChange={props.onChange}
         onDraggingChange={props.onDraggingChange}
       />
       {editorExpanded ? (
-        <View accessibilityRole="radiogroup" accessibilityLabel="默认思考强度">
+        <PopupChoicesDialog title="默认思考强度" onClose={() => setExpanded(false)} error={error}>
           <PopupChoice
             label="使用供应商默认"
             selected={!props.choices.some((choice) => choice.id === props.defaultValue)}
@@ -1633,9 +1659,9 @@ function PopupReasoningControl(props: {
               onPress={() => void setDefault(choice.id)}
             />
           ))}
-        </View>
+        </PopupChoicesDialog>
       ) : null}
-    </View>
+    </>
   );
 }
 
@@ -1676,30 +1702,49 @@ function ThreadSettingsPopupOptions(props: {
             input: { patch: { setReasoningEffortDefault: { instanceId, model, effort } } },
           });
           if (!AsyncResult.isSuccess(result)) {
-            Dialog.alert("无法保存默认思考强度", "请检查服务端连接和权限后重试。");
-            return false;
+            return "无法保存默认思考强度。请检查服务端连接和权限后重试。";
           }
           const savedDefaults = result.value.reasoningEffortDefaults;
           if (!savedDefaults || (savedDefaults[instanceId]?.[model] ?? null) !== effort) {
-            Dialog.alert("无法保存默认思考强度", "服务端未确认此档位。请刷新设置后重试。");
-            return false;
+            return "服务端未确认此档位。请刷新设置后重试。";
           }
-          return true;
+          return null;
         }
       : undefined;
-  const modelLabel = session.providerGroups.flatMap((group) => group.models).find(session.isDisplayed)?.label
-    ?? session.displayedModelSelection?.model ?? "";
+  const modelLabel =
+    session.providerGroups.flatMap((group) => group.models).find(session.isDisplayed)?.label ??
+    session.displayedModelSelection?.model ??
+    "";
   return (
     <View className="px-2 pb-2">
       {session.displayedDescriptors.map((descriptor) => {
         if (descriptor.type !== "select") {
           if (descriptor.id === "fastMode") {
-            return <PopupSpeedSegments key={descriptor.id} choices={[{ id: "standard", label: "标准" }, { id: "fast", label: "快速" }]} current={descriptor.currentValue ? "fast" : "standard"} onChange={(value) => session.applyOptionChange(descriptor.id, value === "fast")} />;
+            return (
+              <PopupSpeedSegments
+                key={descriptor.id}
+                choices={[
+                  { id: "standard", label: "标准" },
+                  { id: "fast", label: "快速" },
+                ]}
+                current={descriptor.currentValue ? "fast" : "standard"}
+                onChange={(value) => session.applyOptionChange(descriptor.id, value === "fast")}
+              />
+            );
           }
           return (
-            <View key={descriptor.id} className="min-h-11 flex-row items-center justify-between px-3">
-              <Text style={{ color: colors.text, fontSize: 13 }}>{popupLabel(descriptor.label)}</Text>
-              <ThemedSwitch accessibilityLabel={popupLabel(descriptor.label)} value={descriptor.currentValue ?? false} onValueChange={(value) => session.applyOptionChange(descriptor.id, value)} />
+            <View
+              key={descriptor.id}
+              className="min-h-11 flex-row items-center justify-between px-3"
+            >
+              <Text style={{ color: colors.text, fontSize: 13 }}>
+                {popupLabel(descriptor.label)}
+              </Text>
+              <ThemedSwitch
+                accessibilityLabel={popupLabel(descriptor.label)}
+                value={descriptor.currentValue ?? false}
+                onValueChange={(value) => session.applyOptionChange(descriptor.id, value)}
+              />
             </View>
           );
         }
@@ -1747,7 +1792,22 @@ function ThreadSettingsPopupOptions(props: {
           );
         }
         if (descriptor.id === "serviceTier") {
-          return <PopupSpeedSegments key={descriptor.id} choices={selectableChoices(descriptor).map((choice) => ({ id: choice.id, label: choice.id === "priority" || choice.id === "fast" ? "快速" : choice.id === "default" || choice.id === "standard" ? "标准" : popupLabel(choice.label) }))} current={typeof current === "string" ? current : null} onChange={applyChoice} />;
+          return (
+            <PopupSpeedSegments
+              key={descriptor.id}
+              choices={selectableChoices(descriptor).map((choice) => ({
+                id: choice.id,
+                label:
+                  choice.id === "priority" || choice.id === "fast"
+                    ? "快速"
+                    : choice.id === "default" || choice.id === "standard"
+                      ? "标准"
+                      : popupLabel(choice.label),
+              }))}
+              current={typeof current === "string" ? current : null}
+              onChange={applyChoice}
+            />
+          );
         }
         return (
           <View key={descriptor.id}>
@@ -1798,12 +1858,20 @@ function ThreadSettingsPopupOptions(props: {
           {session.hasLegacyModels ? (
             <View className="min-h-11 flex-row items-center justify-between px-3">
               <Text style={{ color: colors.text, fontSize: 13 }}>显示旧模型</Text>
-              <ThemedSwitch accessibilityLabel="显示旧模型" value={session.showLegacy} onValueChange={session.setShowLegacy} />
+              <ThemedSwitch
+                accessibilityLabel="显示旧模型"
+                value={session.showLegacy}
+                onValueChange={session.setShowLegacy}
+              />
             </View>
           ) : null}
           <View className="min-h-11 flex-row items-center justify-between px-3">
             <Text style={{ color: colors.text, fontSize: 13 }}>管理隐藏的模型</Text>
-            <ThemedSwitch accessibilityLabel="管理隐藏的模型" value={session.manageHidden} onValueChange={session.setManageHidden} />
+            <ThemedSwitch
+              accessibilityLabel="管理隐藏的模型"
+              value={session.manageHidden}
+              onValueChange={session.setManageHidden}
+            />
           </View>
         </View>
       ) : null}
@@ -1823,7 +1891,8 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
   const [headerContentHeight, setHeaderContentHeight] = useState(92);
   const [searchVisible, setSearchVisible] = useState(false);
   const [sliderDragging, setSliderDragging] = useState(false);
-  const [runtimeMenuOpen, setRuntimeMenuOpen] = useState(false);
+  const [runtimeMenuAnchor, setRuntimeMenuAnchor] = useState<PopupFrame | null>(null);
+  const runtimeButton = useRef<ViewInstance>(null);
   const [windowFocused, setWindowFocused] = useState(true);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- stops the rail when Android loses window focus without going into the background
   useEffect(() => {
@@ -1840,12 +1909,11 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
   )?.label;
   const panelLimit = Math.min(560, availableHeight * (keyboardVisible ? 0.98 : 0.9));
   const headerLimit = panelLimit * (searchVisible ? 0.48 : 0.36);
-  const catalogItems = buildThreadSettingsCatalogItems(session).filter((item) => item.kind !== "provider");
+  const catalogItems = buildThreadSettingsCatalogItems(session).filter(
+    (item) => item.kind !== "provider",
+  );
   const estimatedCatalogHeight = catalogItems.length
-    ? catalogItems.reduce(
-        (sum) => sum + 48 * Math.max(1, fontScale),
-        8,
-      )
+    ? catalogItems.reduce((sum) => sum + 48 * Math.max(1, fontScale), 8)
     : 64;
   const catalogHeight = Math.min(192, panelLimit * 0.31, estimatedCatalogHeight);
   const optionsLimit = Math.max(
@@ -1946,52 +2014,51 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
                 >
                   <SymbolView name="magnifyingglass" size={17} tintColor={colors.text} />
                 </Pressable>
-                <Menu
+                <Pressable
+                  ref={runtimeButton}
+                  collapsable={false}
                   accessibilityLabel={runtimeLabel ? `权限，当前${runtimeLabel}` : "权限"}
-                  title="权限"
-                  onOpenMenu={() => setRuntimeMenuOpen(true)}
-                  onCloseMenu={() => setRuntimeMenuOpen(false)}
-                  actions={session.runtimeModeChoices.map((choice) => ({
-                    id: choice.mode,
-                    title: choice.label,
-                    subtitle: choice.disabledReason ?? choice.description,
-                    state: choice.mode === session.runtimeMode ? "on" : "off",
-                    attributes: { disabled: choice.disabledReason !== undefined },
-                  }))}
-                  onPressAction={({ nativeEvent }) => {
-                    const choice = session.runtimeModeChoices.find(
-                      (candidate) => candidate.mode === nativeEvent.event,
-                    );
-                    if (!choice || choice.disabledReason !== undefined) return;
-                    void Haptics.selectionAsync();
-                    session.onUpdateRuntimeMode(choice.mode);
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: runtimeMenuAnchor !== null }}
+                  onPress={() => {
+                    runtimeButton.current?.measureInWindow((x, y, width, height) => {
+                      if (width > 0 && height > 0) setRuntimeMenuAnchor({ x, y, width, height });
+                    });
                   }}
-                  className="min-h-12 min-w-12 max-w-[116px] justify-center rounded-lg px-2 active:opacity-60"
-                  style={{ backgroundColor: colors.rail }}
+                  className="max-w-[116px] justify-center active:opacity-60"
+                  style={{ minHeight: 48, minWidth: 48 }}
                 >
-                  <View className="flex-row items-center justify-center gap-1">
+                  <View
+                    className="min-h-7 flex-row items-center justify-center gap-1 rounded-full px-2.5 py-1"
+                    style={{ backgroundColor: colors.rail }}
+                  >
                     <Text
-                      className="min-w-0 shrink text-xs font-t3-medium"
-                      numberOfLines={1}
-                      style={{ color: colors.text }}
+                      className="min-w-0 shrink text-center"
+                      style={{ color: colors.text, fontSize: 12 }}
                     >
                       {runtimeLabel ?? "权限"}
                     </Text>
-                    <SymbolView name="chevron.down" size={12} tintColor={colors.muted} />
+                    <SymbolView
+                      name={runtimeMenuAnchor ? "chevron.up" : "chevron.down"}
+                      size={12}
+                      tintColor={colors.muted}
+                    />
                   </View>
-                </Menu>
+                </Pressable>
               </View>
-              {searchVisible ? <View className="mx-3 flex-row">
-                <SearchField
-                  inputRef={inputRef}
-                  autoFocus
-                  accessibilityLabel="查找模型"
-                  clearAccessibilityLabel="清空模型搜索"
-                  placeholder="查找模型"
-                  value={session.searchQuery}
-                  onChangeText={session.setSearchQuery}
-                />
-              </View> : null}
+              {searchVisible ? (
+                <View className="mx-3 flex-row">
+                  <SearchField
+                    inputRef={inputRef}
+                    autoFocus
+                    accessibilityLabel="查找模型"
+                    clearAccessibilityLabel="清空模型搜索"
+                    placeholder="查找模型"
+                    value={session.searchQuery}
+                    onChangeText={session.setSearchQuery}
+                  />
+                </View>
+              ) : null}
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -2002,11 +2069,7 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
                   {filterButton(
                     null,
                     "全部",
-                    <SymbolView
-                      name="square.grid.2x2"
-                      size={18}
-                      tintColor={colors.text}
-                    />,
+                    <SymbolView name="square.grid.2x2" size={18} tintColor={colors.text} />,
                   )}
                   {filterButton(
                     FAVORITES_PROVIDER_FILTER,
@@ -2034,18 +2097,47 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
             </View>
             <ScrollView
               scrollEnabled={!sliderDragging}
-              style={{ flexGrow: 0, flexShrink: 1, maxHeight: optionsLimit, borderTopWidth: 1, borderTopColor: colors.border }}
+              style={{
+                flexGrow: 0,
+                flexShrink: 1,
+                maxHeight: optionsLimit,
+                borderTopWidth: 1,
+                borderTopColor: colors.border,
+              }}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator
             >
               <ThreadSettingsPopupOptions
-                highlightEnabled={focused && active && windowFocused && !runtimeMenuOpen}
+                highlightEnabled={focused && active && windowFocused && !runtimeMenuAnchor}
                 onDraggingChange={setSliderDragging}
               />
             </ScrollView>
           </View>
         </View>
       </KeyboardAvoidingView>
+      {runtimeMenuAnchor ? (
+        <PopupChoicesDialog
+          title="权限"
+          anchor={runtimeMenuAnchor}
+          onClose={() => setRuntimeMenuAnchor(null)}
+        >
+          {session.runtimeModeChoices.map((choice) => (
+            <PopupChoice
+              key={choice.mode}
+              label={choice.label}
+              description={choice.disabledReason ?? choice.description}
+              showDescription
+              selected={choice.mode === session.runtimeMode}
+              disabled={choice.disabledReason !== undefined}
+              onPress={() => {
+                setRuntimeMenuAnchor(null);
+                void Haptics.selectionAsync();
+                session.onUpdateRuntimeMode(choice.mode);
+              }}
+            />
+          ))}
+        </PopupChoicesDialog>
+      ) : null}
     </View>
   );
 }

@@ -16,6 +16,8 @@ import {
   type TranscriptParsePosition,
 } from "./usageTranscriptReader.ts";
 import { object } from "./sub2api.ts";
+import { claudeUsageFormat } from "../provider/Drivers/claudeUsage.ts";
+import { mergeUsageCopies } from "./usageAggregation.ts";
 import { headerUsageTiming, type HeaderStreamSample } from "./headerUsageTiming.ts";
 
 export interface HeaderRequest extends UsageRecord {
@@ -89,6 +91,33 @@ export const headerCodexFormat: TranscriptUsageFormat<HeaderCodexScanState> = {
       return [];
     }
     return headerCodexFormat.parseProjected(projected, state);
+  },
+};
+
+const headerClaudeFormat: TranscriptUsageFormat<void> = {
+  ...claudeUsageFormat,
+  selectFields: { ...claudeUsageFormat.selectFields, isSidechain: true },
+  parseLine(line, state) {
+    let projected: unknown;
+    try {
+      projected = JSON.parse(line);
+    } catch {
+      return [];
+    }
+    return headerClaudeFormat.parseProjected(projected, state);
+  },
+  parseProjected(projected, state) {
+    const record = object(projected);
+    if (record.isSidechain === true) return [];
+    const usage = object(object(record.message).usage);
+    return claudeUsageFormat.parseProjected(projected, state).map(
+      (request) =>
+        ({
+          ...request,
+          headerTurnId: "",
+          headerCacheKnown: typeof usage.cache_read_input_tokens === "number",
+        }) satisfies HeaderRequest,
+    );
   },
 };
 
@@ -271,22 +300,35 @@ export class HeaderTranscriptCache {
     }
   >();
 
+  private readonly kind: "codex" | "claude";
+
+  constructor(kind: "codex" | "claude" = "codex") {
+    this.kind = kind;
+  }
+
   async scan(directories: readonly string[], sessionIds: ReadonlySet<string>) {
     const candidates = await Promise.all(directories.map((dir) => listTranscriptFiles(dir, 0)));
     let partial = candidates.some((candidate, index) => index === 0 && candidate.failedPaths > 0);
     const found = new Set<string>();
     const records: HeaderRequest[] = [];
     // Cross-file copies preserve request order. Occurrence numbers keep equal legitimate requests.
-    const seen = new Set<string>();
+    const seen = new Map<string, number>();
     for (const file of candidates.flatMap((candidate) => candidate.files)) {
-      if (![...sessionIds].some((id) => file.path.includes(id))) continue;
+      if (
+        ![...sessionIds].some((id) =>
+          this.kind === "claude"
+            ? file.path.replaceAll("\\", "/").endsWith(`/${id}.jsonl`)
+            : file.path.includes(id),
+        )
+      )
+        continue;
       let cached = this.files.get(file.path);
       if (!cached || cached.size !== file.size || cached.mtime !== file.mtimeMs) {
-        const parsed = await readTranscriptRecords(
-          file.path,
-          headerCodexFormat,
-          cached && file.size > cached.size ? cached.position : undefined,
-        );
+        const position = cached && file.size > cached.size ? cached.position : undefined;
+        const parsed =
+          this.kind === "claude"
+            ? await readTranscriptRecords(file.path, headerClaudeFormat, position)
+            : await readTranscriptRecords(file.path, headerCodexFormat, position);
         if (!parsed) {
           partial = true;
           if (!cached) continue;
@@ -320,10 +362,21 @@ export class HeaderTranscriptCache {
           ]);
         const occurrence = (occurrences.get(key) ?? 0) + 1;
         occurrences.set(key, occurrence);
-        const identity = record.dedupeKey ?? key + ":" + occurrence;
-        if (!seen.has(identity)) {
+        const identity =
+          record.dedupeKey === null
+            ? key + ":" + occurrence
+            : JSON.stringify([record.sessionId, record.dedupeKey]);
+        const previous = seen.get(identity);
+        if (previous === undefined) {
+          seen.set(identity, records.length);
           records.push(record);
-          seen.add(identity);
+        } else if (record.dedupeKey !== null) {
+          const held = records[previous]!;
+          records[previous] = {
+            ...held,
+            ...mergeUsageCopies(held, record),
+            headerCacheKnown: held.headerCacheKnown || record.headerCacheKnown,
+          };
         }
       }
     }

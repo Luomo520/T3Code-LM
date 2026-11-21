@@ -45,7 +45,11 @@ export function FloatingWorkspaceDock(props: {
           paddingHorizontal: 4,
         }}
       >
-        <DockGlassBackdrop scope={props.glassScope} material="navigation" />
+        <DockGlassBackdrop
+          scope={props.glassScope}
+          material="navigation"
+          borderRadius={props.height / 2}
+        />
         {props.tabs.map((tab) => {
           const { label, Icon } = destinations[tab];
           const selected = props.selectedTab === tab;

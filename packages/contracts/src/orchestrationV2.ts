@@ -935,6 +935,15 @@ export const OrchestrationV2Subagent = Schema.Struct({
   title: Schema.NullOr(Schema.String),
   model: Schema.NullOr(Schema.String),
   modelSelection: Schema.optional(ModelSelection),
+  /** Settings reported by the running child, when available independently from the launch request. */
+  runtimeSettings: Schema.optional(
+    Schema.Struct({
+      model: Schema.optional(TrimmedNonEmptyString),
+      reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+  /** Cumulative tokens reported for this subagent by its provider. */
+  totalTokens: Schema.optional(NonNegativeInt),
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
   // The run whose unfinished task was cancelled, committed with its Stop.

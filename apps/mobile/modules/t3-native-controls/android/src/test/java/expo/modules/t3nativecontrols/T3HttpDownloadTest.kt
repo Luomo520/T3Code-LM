@@ -43,7 +43,7 @@ class T3HttpDownloadTest {
 
   @Test
   fun usesFullResponseWhenRangeIsIgnored() {
-    val data = "There is no range support".toByteArray()
+    val data = ByteArray(4 * 1024 * 1024) { it.toByte() }
     val requests = ConcurrentLinkedQueue<String>()
     val output = temporary.newFile()
     serve({ exchange ->
@@ -51,7 +51,7 @@ class T3HttpDownloadTest {
       exchange.sendResponseHeaders(200, 0)
       exchange.responseBody.use { it.write(data) }
     }) { url ->
-      RandomAccessFile(output, "rw").use { download().transfer(url, it.channel, null) }
+      RandomAccessFile(output, "rw").use { download().transfer(url, it.channel, data.size.toLong()) }
     }
     assertEquals(listOf("bytes=0-0"), requests.toList())
     assertArrayEquals(data, output.readBytes())
@@ -65,9 +65,66 @@ class T3HttpDownloadTest {
       exchange.respondRange(data, range, if (range == "bytes=0-0") "\"original\"" else "\"changed\"")
     }) { url ->
       RandomAccessFile(temporary.newFile(), "rw").use {
-        assertThrows(DownloadFailure::class.java) { download().transfer(url, it.channel, null) }
+        assertThrows(DownloadFailure::class.java) { download().transfer(url, it.channel, data.size.toLong()) }
       }
     }
+  }
+
+  @Test
+  fun readsSmallFilesWithoutProbingAndRetriesA502BeforeReadingBytes() {
+    val data = ByteArray(3 * 1024) { it.toByte() }
+    val requests = ConcurrentLinkedQueue<Pair<String, String?>>()
+    val output = temporary.newFile()
+    serve({ exchange ->
+      requests.add(exchange.requestMethod to exchange.requestHeaders.getFirst("Range"))
+      if (requests.size == 1) {
+        exchange.sendResponseHeaders(502, -1)
+      } else {
+        exchange.sendResponseHeaders(200, data.size.toLong())
+        exchange.responseBody.use { it.write(data) }
+      }
+    }) { url ->
+      RandomAccessFile(output, "rw").use { download().transfer(url, it.channel, data.size.toLong()) }
+    }
+    assertEquals(listOf("GET" to null, "GET" to null), requests.toList())
+    assertArrayEquals(data, output.readBytes())
+  }
+
+  @Test
+  fun fallsBackToPlainGetWhenGatewayRejectsRangeProbe() {
+    val data = ByteArray(4 * 1024 * 1024) { it.toByte() }
+    val requests = ConcurrentLinkedQueue<Pair<String, String?>>()
+    val output = temporary.newFile()
+    serve({ exchange ->
+      val range = exchange.requestHeaders.getFirst("Range")
+      requests.add(exchange.requestMethod to range)
+      if (range != null) {
+        exchange.sendResponseHeaders(502, -1)
+      } else {
+        exchange.sendResponseHeaders(200, data.size.toLong())
+        exchange.responseBody.use { it.write(data) }
+      }
+    }) { url ->
+      RandomAccessFile(output, "rw").use { download().transfer(url, it.channel, data.size.toLong()) }
+    }
+    assertEquals(listOf("GET" to "bytes=0-0", "GET" to null), requests.toList())
+    assertArrayEquals(data, output.readBytes())
+  }
+
+  @Test
+  fun reportsPersistentGatewayFailuresAsRetryableWithoutWritingTheErrorBody() {
+    val output = temporary.newFile()
+    serve({ exchange -> exchange.sendResponseHeaders(502, -1) }) { url ->
+      RandomAccessFile(output, "rw").use {
+        val failure = assertThrows(DownloadFailure::class.java) {
+          download().transfer(url, it.channel, null)
+        }
+        assertTrue(failure.retryable)
+        assertTrue(failure.message.orEmpty().contains("读取正文"))
+        assertTrue(failure.message.orEmpty().contains("HTTP 502"))
+      }
+    }
+    assertEquals(0L, output.length())
   }
 
   private fun download(progress: (Long, Long?) -> Unit = { _, _ -> }) = T3HttpDownload(

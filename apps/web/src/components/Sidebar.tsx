@@ -367,7 +367,7 @@ interface SidebarThreadPartitionInput {
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
-  readonly pinnedBeforeSettled: boolean;
+  readonly chronologicalPins: boolean;
   /** Boring mode: folders list active threads by the user's latest message. */
   readonly sortActiveBySend: boolean;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
@@ -507,7 +507,7 @@ function useSidebarThreads(input: {
     connectedEnvironmentIds,
     optimisticDrop,
     workingShelfEnabled,
-    pinnedBeforeSettled: input.taskView === "recent",
+    chronologicalPins: input.taskView !== "status",
     sortActiveBySend: folderGroups !== null,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
@@ -714,7 +714,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
         settled:
           configLoaded &&
           thread.settledOverride === "settled" &&
-          !(input.pinnedBeforeSettled && isPinned),
+          !(input.chronologicalPins && isPinned),
         pinned: isPinned,
       });
       (section === "snoozed"
@@ -728,7 +728,9 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     }
   }
   // Availability gates dragging only; sorting must stay consistent across clients.
-  const sortedPinned = sortPinnedThreadsForSidebar(pinned);
+  const sortedPinned = input.chronologicalPins
+    ? sortSidebarTasks(pinned)
+    : sortPinnedThreadsForSidebar(pinned);
   const sortedActive = sortActiveBySend
     ? sortWorkingThreadsBySend(active)
     : workingShelfEnabled
@@ -736,7 +738,9 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
       : sortThreadsForSidebar(active);
   return {
     pinnedThreads:
-      optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
+      input.chronologicalPins ||
+      optimisticDrop?.section !== "pinned" ||
+      optimisticDrop.order === null
         ? sortedPinned
         : orderItemsByPreferredIds({
             items: sortedPinned,
@@ -1780,11 +1784,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     };
   };
 
-  // Folder rows only drag out to the composer; folders own their order, so nothing drops in the list.
+  const canReorderSidebar = taskView === "status" && projectFolders === null;
   const isContextDrag =
-    projectFolders !== null ||
-    dragState?.contextDrag === true ||
-    dragState?.activeSection === "working";
+    !canReorderSidebar || dragState?.contextDrag === true || dragState?.activeSection === "working";
   const dragTargetSection = isContextDrag ? null : (dragState?.targetSection ?? null);
   const finishThreadDrag = (started: boolean) => {
     dragSensorRef.current = null;
@@ -2165,7 +2167,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     );
   })();
   const handleThreadDragEnd = (event: DragEndEvent) => {
-    if (projectFolders !== null) return;
+    if (!canReorderSidebar) return;
     const activeKey = String(event.active.id);
     const activeSection = sectionByThreadKey.get(activeKey);
     const target =
@@ -3451,18 +3453,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
+                        const projectKey = `${thread.environmentId}:${thread.projectId}` as const;
+                        const project = projectByKey.get(projectKey) ?? null;
                         const isCard =
-                          section === "active" || section === "pinned" || section === "working";
-                        const rowVariant =
-                          taskView === "recent"
-                            ? "slim"
-                            : folderRow
-                              ? folderRowsMultiline
-                                ? "folder-multiline"
-                                : "folder"
-                              : isCard
-                                ? "card"
-                                : "slim";
+                          section === "pinned" ||
+                          (taskView !== "recent" &&
+                            (section === "active" || section === "working"));
+                        const rowVariant = folderRow
+                          ? folderRowsMultiline
+                            ? "folder-multiline"
+                            : "folder"
+                          : isCard
+                            ? "card"
+                            : "slim";
                         return (
                           <SortableThreadRow
                             key={threadKey}
@@ -3476,7 +3479,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             thread={thread}
                             variant={rowVariant}
                             activityTimestamp={
-                              taskView === "recent" ? sidebarTaskActivityAt(thread) : undefined
+                              taskView === "recent" ||
+                              (taskView === "project" && section === "pinned")
+                                ? sidebarTaskActivityAt(thread)
+                                : undefined
                             }
                             navigationParent={
                               folderRow ??
@@ -3533,14 +3539,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               environmentMachineById.get(thread.environmentId) ?? "server"
                             }
                             scratchMachineLabel={scratchMachineLabelFor(thread)}
-                            project={
-                              projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                              null
-                            }
+                            project={project}
                             projectDisplayName={
-                              projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
+                              projectDisplayNameByKey.get(projectKey) ?? project?.title ?? null
                             }
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??

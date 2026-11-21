@@ -11,6 +11,7 @@ import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
 import { deriveTimelineMinimapItems } from "./timelineMinimapItems";
 import {
   type AssistantCitation,
+  type ConversationUsageTurn,
   type EnvironmentId,
   type MessageId,
   type OrchestrationV2TurnItem,
@@ -231,6 +232,7 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   onReplyToResponse?: TimelineRowSharedState["onReplyToResponse"];
+  replyUsageTurns?: readonly ConversationUsageTurn[] | null | undefined;
   isWorking: boolean;
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
@@ -350,6 +352,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
   onReplyToResponse,
+  replyUsageTurns,
   isWorking,
   runlessWorkActive = false,
   activeTurnStartedAt = null,
@@ -1102,6 +1105,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onRespondToApproval,
     citationRequest: readyCitationRequest,
     onReplyToResponse,
+    replyUsageByRun:
+      replyUsageTurns === undefined
+        ? undefined
+        : new Map(replyUsageTurns?.map((turn) => [turn.runId, turn])),
     listRef,
     timestampFormat,
     routeThreadKey,

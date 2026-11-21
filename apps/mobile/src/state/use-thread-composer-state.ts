@@ -3,7 +3,10 @@ import * as Dialog from "../components/ui/Dialog";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { readEnvironmentScope } from "./session";
 import { useAtomValue } from "@effect/atom-react";
-import { compactBeforeSendTokens } from "@t3tools/client-runtime/state/context-window";
+import {
+  compactBeforeSendTokens,
+  deriveComposerContextWindow,
+} from "@t3tools/client-runtime/state/context-window";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { threadSteersDuringCompaction } from "@t3tools/client-runtime/state/thread-workflows";
@@ -427,6 +430,11 @@ export function useThreadComposerState(input: {
     : null;
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
+  const contextWindow = deriveComposerContextWindow(
+    selectedThreadProjection?.projection ?? null,
+    selectedThreadVisibleTurnItems,
+    modelSelection,
+  );
   const resumeCompactionTokens = (selection: ModelSelection | null, text: string, now: string) =>
     selectedEnvironmentRuntime?.connectionState === "connected" &&
     selectedThreadProjection !== null &&
@@ -910,6 +918,7 @@ export function useThreadComposerState(input: {
     ),
     providerSubagentStatus,
     isCompacting,
+    contextWindow,
     compactBeforeSend:
       compactTokens === null || selectedThreadKey === null
         ? null

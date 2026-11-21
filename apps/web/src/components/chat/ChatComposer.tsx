@@ -20,6 +20,7 @@ import {
 import type {
   KeybindingCommand,
   AssistantCitation,
+  ConversationUsage,
   ResponseContextRecord,
   ChatAttachment as ContractChatAttachment,
   ChatFileAttachment,
@@ -109,6 +110,7 @@ import {
   useComposerDraftStore,
   useComposerThreadDraft,
 } from "../../composerDraftStore";
+import { ComposerSessionUsage } from "./ComposerSessionUsage";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
 import { useComposerTriggerState } from "./useComposerTriggerState";
@@ -382,6 +384,11 @@ export interface ChatComposerProps {
   canSteer: boolean;
   bannerItems: readonly ComposerBannerStackItem[];
   resumeCompactionTokens: number | null;
+  sessionUsage?: ConversationUsage | null | undefined;
+  sessionContextWindow?:
+    | { readonly usedTokens: number; readonly maxTokens: number | null }
+    | null
+    | undefined;
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
   onUsageLimitsCommand?: (() => void) | undefined;
@@ -3830,6 +3837,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     {composerControls}
                   </div>
                 </div>
+              </div>
+            ) : null}
+            {routeKind === "server" && activeThreadId !== null ? (
+              <div className="flex min-w-0 justify-end px-2">
+                <ComposerSessionUsage
+                  key={`${environmentId}:${activeThreadId}`}
+                  usage={props.sessionUsage}
+                  contextWindow={
+                    [activeThreadModelSelection, reportedModelSelection].some(
+                      (selection) =>
+                        selection?.instanceId === selectedModelSelection.instanceId &&
+                        selection.model === selectedModelSelection.model,
+                    )
+                      ? props.sessionContextWindow
+                      : null
+                  }
+                  theme={resolvedTheme}
+                />
               </div>
             ) : null}
           </div>

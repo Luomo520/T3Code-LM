@@ -6,7 +6,7 @@ export function SidebarTaskViewControls(props: {
   onViewChange: (view: SidebarTaskView) => void;
 }) {
   return (
-    <div className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
+    <div className="mt-2 mb-1 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
       <h2 className="shrink-0 text-xs font-medium whitespace-nowrap text-sidebar-muted-foreground">
         Tasks
       </h2>

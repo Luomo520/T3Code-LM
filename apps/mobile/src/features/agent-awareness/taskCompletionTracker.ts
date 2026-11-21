@@ -1,11 +1,20 @@
 import {
   isListedThreadLineage,
-  type EnvironmentId,
+  EnvironmentId,
   type OrchestrationV2ThreadShell,
-  type RunId,
-  type ThreadId,
+  RunId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
+import * as Schema from "effect/Schema";
+
+export const TaskCompletionWatch = Schema.Struct({
+  backgroundUntil: Schema.Finite,
+  queuedUntil: Schema.Finite,
+  runs: Schema.Array(
+    Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId, runId: RunId }),
+  ),
+});
 
 interface TaskCompletion {
   readonly path: string;
@@ -21,10 +30,17 @@ interface ActiveRun {
 
 export function createTaskCompletionTracker(input: {
   readonly background: boolean;
+  readonly watchedRuns?: typeof TaskCompletionWatch.Type.runs;
   readonly onCompletion: (completion: TaskCompletion) => void;
 }) {
   let background = input.background;
   const byEnvironment = new Map<EnvironmentId, Map<ThreadId, ActiveRun>>();
+  for (const { environmentId, threadId, runId } of input.watchedRuns ?? []) {
+    const runs = byEnvironment.get(environmentId) ?? new Map<ThreadId, ActiveRun>();
+    runs.set(threadId, { runId, backgrounded: true });
+    byEnvironment.set(environmentId, runs);
+  }
+
   return {
     setBackground(next: boolean) {
       if (background === next) return;
@@ -75,12 +91,20 @@ export function createTaskCompletionTracker(input: {
       else byEnvironment.set(environmentId, active);
     },
 
-    removeEnvironment(environmentId: EnvironmentId) {
-      byEnvironment.delete(environmentId);
+    retainEnvironments(enabled: ReadonlySet<EnvironmentId>) {
+      for (const environmentId of byEnvironment.keys()) {
+        if (!enabled.has(environmentId)) byEnvironment.delete(environmentId);
+      }
     },
 
-    hasActiveRuns() {
-      return byEnvironment.size > 0;
+    watchedRuns() {
+      const watched: Array<(typeof TaskCompletionWatch.Type.runs)[number]> = [];
+      for (const [environmentId, runs] of byEnvironment) {
+        for (const [threadId, run] of runs) {
+          if (run.backgrounded) watched.push({ environmentId, threadId, runId: run.runId });
+        }
+      }
+      return watched;
     },
   };
 }

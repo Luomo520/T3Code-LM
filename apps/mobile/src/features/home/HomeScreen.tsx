@@ -167,10 +167,6 @@ const ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT = 72;
 // rows that are already built instead of rows still being rebuilt.
 const THREAD_LIST_V2_DRAW_DISTANCE = 1_000;
 
-function HomeTopContentSpacer() {
-  return <View className="h-4" />;
-}
-
 function HomeScrollView(props: ComponentProps<typeof ScrollView>) {
   const primaryColumn = use(NativePrimaryColumnContext);
   const sidebarSurface = usePaneRole() === "sidebar" && primaryColumn !== null;
@@ -447,7 +443,7 @@ export function HomeScreen(props: HomeScreenProps) {
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
-    pinnedBeforeSettled: homeView === "time" && !hasSearchQuery,
+    pinnedBeforeSettled: !hasSearchQuery,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     pinReorderEnvironmentIds,
@@ -490,7 +486,7 @@ export function HomeScreen(props: HomeScreenProps) {
     : new Set(collapsedProjects);
   // Keep the selected conversation visible in tablet/sidebar layouts.
   for (const row of threadListV2Items) {
-    if (row.type !== "v2-thread") continue;
+    if (row.type !== "v2-thread" || row.item.pinned) continue;
     const thread = row.item.thread;
     if (scopedThreadKey(thread.environmentId, thread.id) !== selectedThreadKey) continue;
     const key = scopedProjectKey(thread.environmentId, thread.projectId);
@@ -627,9 +623,10 @@ export function HomeScreen(props: HomeScreenProps) {
       );
     }
     const thread = item.item.thread;
+    const projectKey = scopedProjectKey(thread.environmentId, thread.projectId);
     return (
       <ThreadListV2Row
-        groupedByProject={homeView === "projects"}
+        groupedByProject={homeView === "projects" && !item.item.pinned}
         pane={sidebarSurface ? "sidebar" : "screen"}
         selected={scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey}
         fullSwipeWidth={fullSwipeWidth}
@@ -644,7 +641,9 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozeWakeLabelText={item.snoozeWakeLabelText}
         timeLabel={item.timeLabel}
         showTrailingDivider={item.showTrailingDivider}
-        project={projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null}
+        project={projectByKey.get(projectKey) ?? null}
+        projectTitle={v2ProjectTitleByProjectKey.get(projectKey)}
+        showPinnedDetails
         providerInstance={resolveProviderInstance(thread)}
         providers={providersByEnvironmentId.get(thread.environmentId)}
         environmentLabel={
@@ -678,9 +677,9 @@ export function HomeScreen(props: HomeScreenProps) {
         pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
         autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
         reorderSupported={
-          item.item.pinned
-            ? pinReorderEnvironmentIds.has(thread.environmentId)
-            : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+          !item.item.pinned &&
+          !workingShelfEnabled &&
+          activeReorderEnvironmentIds.has(thread.environmentId)
         }
         canMoveUp={item.canMoveUp}
         canMoveDown={item.canMoveDown}
@@ -777,34 +776,28 @@ export function HomeScreen(props: HomeScreenProps) {
     );
   }
 
-  const listHeader = Platform.OS === "ios" ? undefined : <HomeTopContentSpacer />;
-
-  const v2ListHeader = (
-    <>
-      {listHeader}
-      {Platform.OS === "ios" && workspace ? (
-        <ThreadListFilters
-          gutter={sidebarSurface ? 8 : 0}
-          environments={props.environments}
-          projects={pickableProjectGroups(
-            sortHomeProjectScopes({
-              scopes: projectScopes,
-              threads: props.threads,
-              pendingTasks: [],
-              projectSortOrder: "updated_at",
-            }),
-          ).map((scope) => ({
-            key: scope.key,
-            label: scope.title,
-          }))}
-          selectedEnvironmentId={props.selectedEnvironmentId}
-          selectedProjectKey={props.selectedProjectKey}
-          onEnvironmentChange={props.onEnvironmentChange}
-          onProjectChange={props.onProjectChange}
-        />
-      ) : null}
-    </>
-  );
+  const v2ListHeader =
+    Platform.OS === "ios" && workspace ? (
+      <ThreadListFilters
+        gutter={sidebarSurface ? 8 : 0}
+        environments={props.environments}
+        projects={pickableProjectGroups(
+          sortHomeProjectScopes({
+            scopes: projectScopes,
+            threads: props.threads,
+            pendingTasks: [],
+            projectSortOrder: "updated_at",
+          }),
+        ).map((scope) => ({
+          key: scope.key,
+          label: scope.title,
+        }))}
+        selectedEnvironmentId={props.selectedEnvironmentId}
+        selectedProjectKey={props.selectedProjectKey}
+        onEnvironmentChange={props.onEnvironmentChange}
+        onProjectChange={props.onProjectChange}
+      />
+    ) : null;
 
   const v2ListEmpty =
     hasSearchQuery && threadSearch.isPending ? (
@@ -884,11 +877,16 @@ export function HomeScreen(props: HomeScreenProps) {
                 extraData={v2ExtraData}
                 ListHeaderComponent={
                   <>
-                    {" "}
-                    <View className="min-h-11 flex-row items-center justify-end px-4 py-1">
+                    <View
+                      className={cn(
+                        "min-h-11 flex-row items-center justify-end px-4",
+                        Platform.OS !== "android" && "py-1",
+                      )}
+                    >
                       <ListFilterMenu
                         label={homeView === "projects" ? "按项目" : "按时间"}
                         accessibilityLabel="会话排列方式"
+                        largeTouchTarget={Platform.OS === "android"}
                         actions={[
                           {
                             id: "projects",

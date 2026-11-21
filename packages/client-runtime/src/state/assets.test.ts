@@ -31,7 +31,18 @@ import {
   createAssetEnvironmentAtoms,
   createProjectFaviconUrlAtomFamily,
   makeRevisionedAssetUrlFamily,
+  isWorkspaceDownloadError,
+  workspaceDownloadAuthorizationError,
 } from "./assets.ts";
+
+it("offers a download retry on connection failure and explains a workspace boundary denial", () => {
+  const disconnected = workspaceDownloadAuthorizationError(new Error("connection closed"));
+  expect(isWorkspaceDownloadError(disconnected)).toBe(true);
+  expect(disconnected.retryable).toBe(true);
+  const denied = workspaceDownloadAuthorizationError({ _tag: "AssetWorkspacePathValidationError" });
+  expect(denied.retryable).toBeFalsy();
+  expect(denied.message).toContain("当前工作区之外");
+});
 
 describe("project favicon URL cache", () => {
   it("does not reuse another environment, workspace, or selected icon's cached URL", () => {

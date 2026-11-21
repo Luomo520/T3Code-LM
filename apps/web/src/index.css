@@ -1943,6 +1943,54 @@ code {
   font-weight: 600;
 }
 
+.file-markdown-preview.chat-markdown :is(a[href], .chat-markdown-file-link) {
+  color: var(--info-foreground);
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.file-markdown-preview.chat-markdown .chat-markdown-file-link,
+.file-markdown-preview.chat-markdown .chat-markdown-file-link > [data-slot="context-chip-label"] {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.file-markdown-preview.chat-markdown a[href] code {
+  color: inherit;
+}
+
+.file-markdown-preview [data-markdown-highlight="error"] {
+  color: var(--error-foreground);
+}
+
+.file-markdown-preview [data-markdown-highlight="pending"] {
+  color: var(--warning-foreground);
+}
+
+.file-markdown-preview [data-markdown-highlight="success"] {
+  color: var(--success-foreground);
+}
+
+.file-markdown-preview [data-markdown-highlight="path"] {
+  color: light-dark(#0f766e, #5eead4);
+}
+
+.file-markdown-preview [data-markdown-highlight="uuid"] {
+  color: light-dark(#6d28d9, #c4b5fd);
+}
+
+.file-markdown-preview [data-markdown-highlight="date"] {
+  color: light-dark(#0369a1, #7dd3fc);
+}
+
+.file-markdown-preview [data-markdown-highlight="version"] {
+  color: light-dark(#9d174d, #f9a8d4);
+}
+
+.file-markdown-preview [data-markdown-highlight="quantity"] {
+  color: light-dark(#4338ca, #a5b4fc);
+}
+
 /* Outside markers paint past the padding box, so the gutter must fit `0. `,
    measured per font in appearanceFonts. ChatMarkdown widens it inline for
    multi-digit markers; setting it here stops a nested ol inheriting that. */

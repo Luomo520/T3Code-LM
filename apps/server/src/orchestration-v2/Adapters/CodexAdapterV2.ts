@@ -2085,6 +2085,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const turnWaiters = yield* Ref.make(new Map<string, Deferred.Deferred<void, never>>());
         const subagentThreads = yield* Ref.make(new Map<string, CodexSubagentThreadContext>());
         const subagentSelections = new Map<string, Omit<ModelSelection, "instanceId">>();
+        const subagentRuntimeSettings = new Map<
+          string,
+          NonNullable<OrchestrationV2Subagent["runtimeSettings"]>
+        >();
         // A reroute names one turn; until new settings arrive, the thread's model is unknown.
         const reroutedTurnModels = new Map<string, string>();
         const reroutedThreads = new Set<string>();
@@ -3152,9 +3156,23 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           value: string | null,
           effort?: string | null,
           tier?: string | null,
+          source: "runtime" | "spawn" = "runtime",
         ) {
-          const model = value?.trim();
-          if (!model) return;
+          const model = value?.trim() || undefined;
+          const priorRuntimeSettings = subagentRuntimeSettings.get(nativeThreadId);
+          const wasReported = source === "runtime" && (model !== undefined || effort !== undefined);
+          const runtimeModel = model ?? priorRuntimeSettings?.model;
+          const runtimeEffort =
+            effort === undefined && runtimeModel === priorRuntimeSettings?.model
+              ? priorRuntimeSettings?.reasoningEffort
+              : effort?.trim() || undefined;
+          const runtimeSettings = wasReported
+            ? { model: runtimeModel, reasoningEffort: runtimeEffort }
+            : priorRuntimeSettings;
+          if (runtimeSettings !== undefined && wasReported) {
+            subagentRuntimeSettings.set(nativeThreadId, runtimeSettings);
+          }
+          if (model === undefined && !wasReported) return;
           const previous = subagentSelections.get(nativeThreadId);
           const previousOptions = previous?.options;
           const options =
@@ -3173,24 +3191,35 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     value?.trim() ? [{ id, value: value.trim() }] : [],
                   ),
                 ];
-          const selection = {
-            model,
-            ...(options === undefined ? {} : { options }),
-          };
-          subagentSelections.set(nativeThreadId, selection);
+          const selection =
+            model === undefined
+              ? previous
+              : { model, ...(options === undefined ? {} : { options }) };
+          if (selection !== undefined) subagentSelections.set(nativeThreadId, selection);
           const subagent = (yield* Ref.get(subagentThreads)).get(nativeThreadId);
           if (subagent === undefined) return;
-          const modelSelection = { instanceId: subagent.task.providerInstanceId, ...selection };
+          const modelSelection =
+            selection === undefined
+              ? undefined
+              : { instanceId: subagent.task.providerInstanceId, ...selection };
+          const priorSelection = subagent.task.modelSelection;
+          const sameSelection =
+            modelSelection === undefined || priorSelection === undefined
+              ? modelSelection === priorSelection
+              : modelSelectionsEqual(priorSelection, modelSelection);
           if (
-            subagent.task.modelSelection &&
-            modelSelectionsEqual(subagent.task.modelSelection, modelSelection)
+            sameSelection &&
+            subagent.task.runtimeSettings?.model === runtimeSettings?.model &&
+            subagent.task.runtimeSettings?.reasoningEffort === runtimeSettings?.reasoningEffort
           )
             return;
+          const now = yield* DateTime.now;
           subagent.task = {
             ...subagent.task,
-            model,
+            model: model ?? subagent.task.model,
             modelSelection,
-            updatedAt: yield* DateTime.now,
+            runtimeSettings,
+            updatedAt: now,
           };
           yield* emitProviderEvent({
             type: "subagent.updated",
@@ -3219,6 +3248,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 input.nativeThreadId,
                 input.model,
                 input.reasoningEffort,
+                undefined,
+                "spawn",
               );
             }
             if (registeredSubagents.has(input.nativeThreadId)) {
@@ -3267,6 +3298,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updatedAt: now,
             } satisfies OrchestrationV2ProviderThread;
             const reportedSelection = subagentSelections.get(input.nativeThreadId);
+            const runtimeSettings = subagentRuntimeSettings.get(input.nativeThreadId);
+            const totalTokens = turnTokenUsageByThread.get(input.nativeThreadId)?.totalTokens;
             const task = {
               id: subagentNodeId,
               threadId: input.context.projectionThreadId,
@@ -3288,6 +3321,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     ...reportedSelection,
                   }
                 : undefined,
+              ...(runtimeSettings === undefined ? {} : { runtimeSettings }),
+              ...(totalTokens === undefined ? {} : { totalTokens }),
               status: "running",
               result: null,
               startedAt: now,
@@ -3439,16 +3474,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             for (const pendingTurn of pendingTurns) {
               yield* emitSubagentProviderTurnStarted(subagent, pendingTurn);
             }
-            if (task.model === null) {
+            if (runtimeSettings === undefined) {
               yield* client.raw
                 .request("thread/read", { threadId: input.nativeThreadId, includeTurns: false })
                 .pipe(
                   Effect.flatMap(decodeCodexChildThread),
                   Effect.map((response): typeof CodexChildSelection.Type | null =>
-                    response.thread.id === input.nativeThreadId && response.thread.model?.trim()
+                    response.thread.id === input.nativeThreadId &&
+                    (response.thread.model?.trim() || response.thread.reasoningEffort?.trim())
                       ? {
                           thread: response.thread,
-                          model: response.thread.model,
+                          model: response.thread.model ?? null,
                           reasoningEffort: response.thread.reasoningEffort,
                         }
                       : null,
@@ -3467,7 +3503,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   Effect.timeout("5 seconds"),
                   Effect.flatMap((response) =>
                     response.thread.id === input.nativeThreadId &&
-                    !subagentSelections.has(input.nativeThreadId)
+                    !subagentRuntimeSettings.has(input.nativeThreadId)
                       ? updateSubagentSelection(
                           input.nativeThreadId,
                           response.model,
@@ -4930,11 +4966,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("thread/tokenUsage/updated", (payload) =>
           Effect.gen(function* () {
-            accumulateCodexTurnTokenUsage(
-              usageStateForThread(payload.threadId),
-              payload.turnId,
-              payload.tokenUsage,
-            );
+            const usage = usageStateForThread(payload.threadId);
+            accumulateCodexTurnTokenUsage(usage, payload.turnId, payload.tokenUsage);
+            const subagent = (yield* Ref.get(subagentThreads)).get(payload.threadId);
+            if (
+              subagent !== undefined &&
+              usage.totalTokens !== undefined &&
+              usage.totalTokens !== subagent.task.totalTokens
+            ) {
+              const now = yield* DateTime.now;
+              subagent.task = { ...subagent.task, totalTokens: usage.totalTokens, updatedAt: now };
+              yield* emitProviderEvent({
+                type: "subagent.updated",
+                driver: CODEX_PROVIDER,
+                subagent: subagent.task,
+              });
+            }
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
               return;

@@ -21,6 +21,7 @@ interface CodexTurnTokenUsageAccumulator {
 
 export interface CodexTurnTokenUsageState {
   baseline: CodexCumulativeTokenUsage | undefined;
+  totalTokens: number | undefined;
   activeTurnId: string | undefined;
   readonly byTurnId: Map<string, CodexTurnTokenUsageAccumulator>;
 }
@@ -42,6 +43,7 @@ function codexTokenUsageBreakdown(
 export function makeCodexTurnTokenUsageState(): CodexTurnTokenUsageState {
   return {
     baseline: undefined,
+    totalTokens: undefined,
     activeTurnId: undefined,
     byTurnId: new Map(),
   };
@@ -100,6 +102,9 @@ export function accumulateCodexTurnTokenUsage(
   usage: EffectCodexSchema.V2ThreadTokenUsageUpdatedNotification["tokenUsage"],
 ): void {
   const current = codexTokenUsageBreakdown(usage.total);
+  if (Number.isSafeInteger(usage.total.totalTokens) && usage.total.totalTokens >= 0) {
+    state.totalTokens = usage.total.totalTokens;
+  }
   if (state.activeTurnId !== turnId) {
     // Every thread-wide total updates the baseline; late finished-turn updates do not count toward the live turn.
     state.baseline = current;

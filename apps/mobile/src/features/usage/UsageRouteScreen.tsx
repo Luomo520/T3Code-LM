@@ -51,7 +51,7 @@ import { PROVIDER_LABEL, useProviderColors, useUsageMixColors } from "./usagePro
 type UsageView = UsageChartMetric | "limits";
 const VIEW_OPTIONS = [
   { value: "cost", label: "费用" },
-  { value: "tokens", label: "Token" },
+  { value: "tokens", label: "Tokens" },
   { value: "limits", label: "限额" },
 ] as const satisfies readonly { value: UsageView; label: string }[];
 
@@ -79,17 +79,14 @@ function UsageScreen(props: {
   readonly tabParam: string | undefined;
 }) {
   const insets = useSafeAreaInsets();
-  const [selection, setSelection] = useState(() => ({
-    params: props.tabParam,
-    view: (props.tabParam === "usage" ? "cost" : "limits") as UsageView,
-  }));
+  const defaultView = props.tabParam === "limits" ? "limits" : "tokens";
+  const [selection, setSelection] = useState<{ params: string | undefined; view: UsageView }>(
+    () => ({ params: props.tabParam, view: defaultView }),
+  );
   if (selection.params !== props.tabParam) {
-    setSelection({
-      params: props.tabParam,
-      view: props.tabParam === "usage" ? "cost" : "limits",
-    });
+    setSelection({ params: props.tabParam, view: defaultView });
   }
-  const { view } = selection;
+  const view = selection.params === props.tabParam ? selection.view : defaultView;
   const setView = (view: UsageView) => setSelection({ params: props.tabParam, view });
   const [measuredWidth, setWidth] = useState(0);
   // A workspace pane knows its width in the render that resizes it; measuring lags a frame.
@@ -333,7 +330,7 @@ function UsageScreen(props: {
                               {...chart}
                               height={WIDE_CHART_HEIGHT}
                               fill
-                              title={`占费用 ${isPast24Hours ? "Hourly" : "Daily"} ${metric === "cost" ? "cost" : "processed tokens"}占费用 `}
+                              title={`${isPast24Hours ? "每小时" : "每日"}${metric === "cost" ? "费用" : " Token 用量"}`}
                             />
                           </View>
                         </View>

@@ -151,6 +151,44 @@ it.effect(
       yield* sql`INSERT INTO orchestration_v2_projection_provider_turns
       (provider_turn_id,thread_id,provider_thread_id,node_id,ordinal,status,payload_json)
       VALUES ('t','thread','p','node',1,'running',${encode({ nativeTurnRef: { nativeId: "turn" } })})`;
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+      (run_id,thread_id,ordinal,provider,status,requested_at,payload_json,provider_instance_id)
+      VALUES ('run','thread',1,'codex','running','2026-10-28T12:00:00Z','{}','codex')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_nodes
+      (node_id,thread_id,run_id,root_node_id,kind,status,payload_json)
+      VALUES ('node','thread','run','node','root_turn','running','{}')`;
+      const claudeId = ProviderInstanceId.make("claude-fixture");
+      yield* fs.makeDirectory(path.join(home, "projects"));
+      const claudeRequest = (timestamp: string, costUSD: number) =>
+        encode({
+          type: "assistant",
+          sessionId: "claude-native",
+          timestamp,
+          costUSD,
+          message: {
+            id: timestamp,
+            model: "claude-relay",
+            usage: { input_tokens: 12, cache_read_input_tokens: 8, output_tokens: 5 },
+          },
+        }) + "\n";
+      yield* fs.writeFileString(
+        path.join(home, "projects", "claude-native.jsonl"),
+        claudeRequest("2026-10-28T12:02:03Z", 0.03) + claudeRequest("2026-10-28T12:05:00Z", 7),
+      );
+      yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
+      (provider_thread_id,thread_id,provider,status,updated_at,payload_json,driver,provider_instance_id)
+      VALUES ('claude-p','thread',${claudeId},'ready','2026-10-28T12:03:00Z',
+        ${encode({ nativeThreadRef: { nativeId: "claude-native" } })},'claudeAgent',${claudeId})`;
+      yield* sql`INSERT INTO orchestration_v2_projection_provider_turns
+      (provider_turn_id,thread_id,provider_thread_id,node_id,ordinal,status,started_at,completed_at,payload_json)
+      VALUES ('claude-t','thread','claude-p','claude-node',1,'completed','2026-10-28T12:02:00Z',
+        '2026-10-28T12:02:04Z',${encode({ nativeTurnRef: { nativeId: "claude-turn" } })})`;
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+      (run_id,thread_id,ordinal,provider,status,requested_at,payload_json,provider_instance_id)
+      VALUES ('claude-run','thread',2,${claudeId},'completed','2026-10-28T12:02:00Z','{}',${claudeId})`;
+      yield* sql`INSERT INTO orchestration_v2_projection_nodes
+      (node_id,thread_id,run_id,root_node_id,kind,status,payload_json)
+      VALUES ('claude-node','thread','claude-run','claude-node','root_turn','completed','{}')`;
       const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
         Response.json({
           balance: 5,
@@ -162,7 +200,14 @@ it.effect(
         const read = yield* makeHeaderUsage().pipe(
           Effect.provide(
             ServerSettings.layerTest({
+              usagePriceOverrides: {
+                test: { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 4 },
+              },
               providerInstances: {
+                [claudeId]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: home },
+                },
                 [providerId]: {
                   driver: ProviderDriverKind.make("codex"),
                   config: {
@@ -193,6 +238,19 @@ it.effect(
           partial: false,
         });
         expect(result.allConversations.cacheRate).toBe(0.8);
+        expect(result.sessionUsage).toBeUndefined();
+        const usage = (yield* read({ threadId: "thread", includeSessionUsage: true })).sessionUsage;
+        expect(usage?.turns).toMatchObject([
+          { runId: "run", cumulativeTokens: 110, cacheRate: 0.8, costPartial: false },
+          {
+            runId: "claude-run",
+            cumulativeTokens: 135,
+            cacheRate: 0.4,
+            costUsd: 0.03,
+            costPartial: false,
+          },
+        ]);
+        expect(usage?.costUsd).toBeCloseTo(0.03024, 10);
         expect(fetcher).toHaveBeenCalledTimes(1);
         expect(fetcher.mock.calls[0]).toMatchObject([
           "https://manual.example.test/v1/usage",

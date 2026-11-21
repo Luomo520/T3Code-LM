@@ -103,6 +103,8 @@ function WorkflowMemberRow({
             providerInstanceId={providerInstanceId}
             origin="provider_native"
             modelSelection={workflowMemberModelSelection(member, providerInstanceId)}
+            reportedEffort={member.effort}
+            totalTokens={member.usage?.totalTokens}
             provider={provider}
             providers={providers}
             driver={driver}

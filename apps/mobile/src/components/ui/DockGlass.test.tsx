@@ -141,3 +141,25 @@ it("uses a nearly opaque navigation material so unblurred rows cannot compete wi
   await act(async () => native.resolve?.(false));
   expect(tint(container, "#f7f7f8:0.98")).toBe(true);
 });
+
+it.each(["light", "dark"] as const)(
+  "gives the two docks a continuous %s outline",
+  async (theme) => {
+    native.appearance = theme;
+    const { container } = await mount(
+      <DockGlassProvider>
+        <DockGlassBackdrop scope="workspace" material="navigation" borderRadius={24} />
+        <DockGlassBackdrop scope="thread" borderRadius={22} />
+      </DockGlassProvider>,
+    );
+    const color = theme === "dark" ? "rgba(255,255,255,0.13)" : "rgba(26,32,46,0.08)";
+    const outlines = [...container.querySelectorAll("[data-style]")]
+      .map((node) => node.getAttribute("data-style") ?? "")
+      .filter((style) => style.includes("borderWidth"));
+    expect(outlines).toHaveLength(2);
+    for (const outline of outlines) {
+      expect(outline).toContain(`"borderColor":"${color}"`);
+      expect(outline).not.toContain("borderTopColor");
+    }
+  },
+);

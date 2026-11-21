@@ -2,7 +2,7 @@ import { SymbolView } from "./ui/AppSymbol";
 import { AppText } from "./ui/AppText";
 import { Image } from "expo-image";
 import { memo, useLayoutEffect, useMemo, useState } from "react";
-import { View } from "react-native";
+import { Platform, View } from "react-native";
 import type { EnvironmentId, ProjectIconOverride } from "@t3tools/contracts";
 import {
   getProjectFaviconCacheKey,
@@ -111,6 +111,8 @@ function ProjectIconGlyphView(props: { readonly glyph: ProjectIconGlyph; readonl
   }
 
   const colors = projectIconColorClassNames(glyph.color);
+  const android = Platform.OS === "android";
+  const glyphCount = countGlyphs(glyph.text);
   return (
     <View
       className={colors.background}
@@ -125,11 +127,14 @@ function ProjectIconGlyphView(props: { readonly glyph: ProjectIconGlyph; readonl
       <AppText
         allowFontScaling={false}
         numberOfLines={1}
-        className={`font-mono ${colors.text}`}
+        adjustsFontSizeToFit={android}
+        className={android ? colors.text : `font-mono ${colors.text}`}
         style={{
           fontWeight: "700",
-          fontSize: size * (countGlyphs(glyph.text) === 1 ? 0.6 : 0.515625),
+          fontFamily: android ? "sans-serif" : undefined,
+          fontSize: size * (glyphCount === 1 ? 0.6 : android ? 0.44 : 0.515625),
           lineHeight: size,
+          width: android ? size : undefined,
           textAlign: "center",
           includeFontPadding: false,
         }}

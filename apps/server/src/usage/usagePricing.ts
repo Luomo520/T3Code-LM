@@ -356,11 +356,14 @@ export function priceUsage(
   table: RateTable,
   record: PricedRecord,
   overrides?: RateTable,
+  options?: { readonly preferProviderReport: boolean },
 ): PricedUsage {
   const { model, totals, reportedCostUsd } = record;
   const override = overrides?.get(model.trim());
   const reported =
-    override === undefined && reportedCostUsd !== null && Number.isFinite(reportedCostUsd)
+    (options?.preferProviderReport === true || override === undefined) &&
+    reportedCostUsd !== null &&
+    Number.isFinite(reportedCostUsd)
       ? reportedCostUsd
       : null;
   const unsplit = (costUsd: number, costSource: UsageCostSource): PricedUsage => ({

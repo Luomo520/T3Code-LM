@@ -90,6 +90,7 @@ export type AssetImageDimensions = typeof AssetImageDimensions.Type;
 export const AssetCreateUrlResult = Schema.Struct({
   download: Schema.optionalKey(Schema.Boolean),
   fileName: Schema.optionalKey(Schema.String),
+  sizeBytes: Schema.optionalKey(NonNegativeInt),
   relativeUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
   expiresAt: Schema.Number,
   sourcePath: Schema.optional(

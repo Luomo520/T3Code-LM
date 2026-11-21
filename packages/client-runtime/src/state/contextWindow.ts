@@ -42,6 +42,73 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly updatedAt: string;
 };
 
+export function deriveComposerContextWindow(
+  projection: ThreadStructure | null,
+  entries: ReadonlyArray<{ readonly item: ThreadStructureTurnItem }>,
+  selection: ModelSelection | null | undefined,
+): { readonly usedTokens: number; readonly maxTokens: number | null } | null {
+  if (
+    projection === null ||
+    selection?.instanceId !== projection.thread.modelSelection.instanceId ||
+    selection?.model !== projection.thread.modelSelection.model
+  ) {
+    return null;
+  }
+  const providerThreadId = projection.thread.activeProviderThreadId;
+  const providerThread = projection.providerThreads.find(
+    (thread) => thread.id === providerThreadId,
+  );
+  const turns = projection.providerTurns.filter(
+    (turn) => turn.providerThreadId === providerThreadId,
+  );
+  const liveUsage = latestProviderTurnTokenUsage(turns, projection, providerThread);
+  const snapshot = deriveLatestContextWindowSnapshot(
+    providerThread === undefined ? [] : entries,
+    liveUsage,
+    providerThread,
+  );
+  if (snapshot === null) return null;
+
+  // An older turn can remain the last provider report briefly after a model change.
+  const modelRuns = projection.runs.filter(
+    (run) =>
+      run.providerThreadId === providerThreadId &&
+      run.startedAt !== null &&
+      run.status !== "rolled_back",
+  );
+  const latestDifferentModel = modelRuns.findLast(
+    (run) => run.modelSelection.model !== selection.model,
+  );
+  if (latestDifferentModel) {
+    const firstMatchingRun = modelRuns.find((run) => run.ordinal > latestDifferentModel.ordinal);
+    if (
+      firstMatchingRun?.startedAt == null ||
+      Date.parse(snapshot.updatedAt) < DateTime.toEpochMillis(firstMatchingRun.startedAt)
+    ) {
+      return null;
+    }
+  }
+
+  const compacted = entries.findLast(
+    ({ item }) =>
+      item.type === "compaction" &&
+      item.threadId === projection.thread.id &&
+      item.providerThreadId === providerThreadId &&
+      item.status === "completed",
+  )?.item;
+  const maxTokens = snapshot.maxTokens ?? null;
+  if (
+    compacted?.type === "compaction" &&
+    DateTime.toEpochMillis(compacted.completedAt ?? compacted.updatedAt) >
+      Date.parse(snapshot.updatedAt)
+  ) {
+    return compacted.afterTokenCount === undefined
+      ? null
+      : { usedTokens: compacted.afterTokenCount, maxTokens };
+  }
+  return { usedTokens: snapshot.usedTokens, maxTokens };
+}
+
 /**
  * Newest report by timestamp among the active provider thread's turns, since a provider switch leaves
  * the previous provider's report behind. Without an active provider thread, every turn is a candidate.

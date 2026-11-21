@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - The polling timers belong to React hook lifetimes on web and native.
 import type { EnvironmentId, UsageModelFilter, UsageSummaryInput } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import type { AtomRegistry } from "effect/reactivity";
@@ -8,6 +9,20 @@ import { executeAtomQuery, runAtomCommand, squashAtomCommandFailure } from "./ru
 import type { createServerEnvironmentAtoms } from "./server.ts";
 
 const isEnvironmentRpcUnavailable = Schema.is(EnvironmentRpcUnavailableError);
+
+/** Re-read after the transcript cache's active (2s) and idle (12s) scan windows. */
+export function scheduleConversationUsageRefresh(refresh: () => void, active: boolean): () => void {
+  if (active) {
+    const poll = setInterval(refresh, 2500);
+    return () => clearInterval(poll);
+  }
+  const next = setTimeout(refresh, 2500);
+  const idle = setTimeout(refresh, 13_000);
+  return () => {
+    clearTimeout(next);
+    clearTimeout(idle);
+  };
+}
 
 /** The Usage tab asks each environment with that environment's configured model filter. */
 export function usageSummaryInput(

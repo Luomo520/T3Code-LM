@@ -212,6 +212,80 @@ it("opens an idle child from Lineage when its shell has not been loaded", async 
   );
 });
 
+it("switches the reported model, effort and cumulative tokens with the hovered subagent", async () => {
+  setup();
+  const projection = makeThreadProjectionFixture();
+  const providerInstanceId = projection.thread.providerInstanceId;
+  const agent = (id: string, title: string) => ({
+    id: NodeId.make(id),
+    threadId: projection.thread.id,
+    runId: null,
+    parentNodeId: NodeId.make("parent"),
+    origin: "provider_native",
+    createdBy: "agent",
+    driver: "codex",
+    providerInstanceId,
+    providerThreadId: null,
+    childThreadId: ThreadId.make(id),
+    nativeTaskRef: null,
+    prompt: "",
+    title,
+    status: "completed",
+    result: null,
+    startedAt: null,
+    completedAt: projection.thread.updatedAt,
+    updatedAt: projection.thread.updatedAt,
+  });
+  state.projection = {
+    ...projection,
+    subagents: [
+      {
+        ...agent("agent-a", "First agent"),
+        model: "gpt-6.2-astra",
+        modelSelection: {
+          instanceId: providerInstanceId,
+          model: "gpt-6.2-astra",
+          options: [{ id: "reasoningEffort", value: "low" }],
+        },
+        runtimeSettings: { model: "gpt-6.1-sol", reasoningEffort: "high" },
+        totalTokens: 12_400,
+      },
+      {
+        ...agent("agent-b", "Second agent"),
+        model: null,
+        runtimeSettings: { model: "gpt-6.2-astra", reasoningEffort: "low" },
+        totalTokens: 32_100,
+      },
+      { ...agent("agent-c", "Unknown agent"), model: "requested-model" },
+    ],
+  };
+  await using screen = await render(
+    <ThreadRelationshipsPanel
+      environmentId={environmentId}
+      threadId={projection.thread.id}
+      showLineage
+      showSideChats={false}
+    />,
+  );
+  await screen.getByRole("button", { name: /Previous agents/ }).click();
+  await userEvent.hover(screen.getByRole("button", { name: /First agent/ }));
+  await expect.element(page.getByText("GPT-6.1-Sol", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("high", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("12.4k token", { exact: true })).toBeVisible();
+
+  await userEvent.hover(screen.getByRole("button", { name: /Second agent/ }));
+  await expect.element(page.getByText("GPT-6.2-Astra", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("low", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("32.1k token", { exact: true })).toBeVisible();
+
+  await userEvent.hover(screen.getByRole("button", { name: /Unknown agent/ }));
+  await vi.waitFor(() => {
+    const popup = document.querySelector('[data-slot="tooltip-popup"][data-open]');
+    expect(popup?.textContent).toContain("Unknown agent");
+    expect(popup?.textContent?.match(/—/g)).toHaveLength(3);
+  });
+});
+
 it("shows a lineage thread's full title in its tooltip", async () => {
   setup();
   const longTitle = "Compare the lineage tooltip against a title that the row truncates";

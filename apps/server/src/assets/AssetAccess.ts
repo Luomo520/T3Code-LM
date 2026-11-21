@@ -299,13 +299,18 @@ const resolveCanonicalFile = Effect.fn("AssetAccess.resolveCanonicalFile")(funct
 });
 
 const resolveCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWorkspaceFile")(
-  function* (input: { readonly workspaceRoot: string; readonly relativePath: string }) {
+  function* (input: {
+    readonly workspaceRoot: string;
+    readonly relativePath: string;
+    readonly rejectOutsideRoot?: boolean;
+  }) {
     const fileSystem = yield* FileSystem.FileSystem;
     const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
     const resolved = yield* workspacePaths.resolveRelativePathWithinRoot(input).pipe(
       Effect.asSome,
       Effect.catchTags({
-        WorkspacePathOutsideRootError: () => Effect.succeedNone,
+        WorkspacePathOutsideRootError: (cause) =>
+          input.rejectOutsideRoot ? Effect.fail(cause) : Effect.succeedNone,
       }),
     );
     if (Option.isNone(resolved)) return null;
@@ -318,7 +323,16 @@ const resolveCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWor
 
     const path = yield* Path.Path;
     const relative = path.relative(canonicalRoot.value, canonicalFile.value);
-    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    if (relative === "") return null;
+    if (!isWithinRoot(path, canonicalFile.value, canonicalRoot.value)) {
+      if (input.rejectOutsideRoot) {
+        return yield* new WorkspacePaths.WorkspacePathOutsideRootError({
+          workspaceRoot: input.workspaceRoot,
+          relativePath: input.relativePath,
+        });
+      }
+      return null;
+    }
 
     const info = yield* ProjectFaviconResolver.optionOnNotFound(
       fileSystem.stat(canonicalFile.value),
@@ -479,6 +493,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
         input.resource._tag === "draft-workspace-file") &&
       input.resource.disposition === "attachment";
     const isDraftMedia =
+      !download &&
       input.resource._tag === "draft-workspace-file" &&
       (isWorkspaceAudioPreviewPath(resolved.relativePath) ||
         isWorkspaceVideoPreviewPath(resolved.relativePath));
@@ -490,13 +505,12 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
     const canonicalFile = yield* resolveCanonicalWorkspaceFile({
       workspaceRoot: input.workspaceRoot,
       relativePath: resolved.relativePath,
+      rejectOutsideRoot: download,
     }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AssetWorkspaceAssetInspectionError({
-            resource: input.resource,
-            cause,
-          }),
+      Effect.mapError((cause) =>
+        cause._tag === "WorkspacePathOutsideRootError"
+          ? new AssetWorkspacePathValidationError({ resource: input.resource, cause })
+          : new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
       ),
     );
     if (!canonicalFile) {
@@ -644,7 +658,12 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       );
       const finalized = yield* finalizeWorkspaceFileAsset({
         workspaceRoot,
-        requestedPath: input.resource.path,
+        requestedPath: download
+          ? expandHomePath(
+              yield* toWslDrivePath(input.resource.path),
+              yield* HostProcess.HomeDirectory,
+            )
+          : input.resource.path,
         resource: input.resource,
         expiresAt,
       });
@@ -683,7 +702,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       );
       const finalized = yield* finalizeWorkspaceFileAsset({
         workspaceRoot,
-        requestedPath: input.resource.path,
+        requestedPath: download ? hostPath : input.resource.path,
         resource: input.resource,
         expiresAt,
       });
@@ -923,6 +942,9 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   return {
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
     ...(download ? { download: true, fileName } : {}),
+    ...(claims.kind === "workspace-download-exact" && Number.isSafeInteger(Number(claims.size))
+      ? { sizeBytes: Number(claims.size) }
+      : {}),
     expiresAt,
     ...(sourcePath !== undefined ? { sourcePath } : {}),
     ...(imageDimensions !== null ? { imageDimensions } : {}),

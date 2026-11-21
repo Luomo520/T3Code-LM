@@ -31,6 +31,7 @@ export function FileMarkdownPreview(props: {
       threadRef={props.threadRef}
       workspaceMutationId={props.workspaceMutationId}
       className="file-markdown-preview mx-auto max-w-4xl px-6 py-5"
+      semanticHighlights
       onTaskListChange={props.onTaskListChange}
     />
   );

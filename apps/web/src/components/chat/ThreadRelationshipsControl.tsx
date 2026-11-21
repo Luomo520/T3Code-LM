@@ -501,6 +501,7 @@ export function ThreadRelationshipsPanel(props: {
           providerInstanceId: subagent.providerInstanceId,
           origin: subagent.origin,
           modelSelection: subagent.modelSelection,
+          runtimeSettings: subagent.runtimeSettings,
         },
       ]),
   );
@@ -790,6 +791,8 @@ export function ThreadRelationshipsPanel(props: {
         providerInstanceId={agent.providerInstanceId}
         origin={agent.origin}
         modelSelection={agent.modelSelection}
+        runtimeSettings={agent.runtimeSettings}
+        totalTokens={agent.usage?.totalTokens}
         provider={provider}
         providers={providers}
         driver={providerDriver}

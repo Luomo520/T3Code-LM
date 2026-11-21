@@ -677,8 +677,12 @@
     <script>
       // Desktop's preload injects branding before page scripts. Titling before the <title> below
       // parses keeps Electron from reporting the web build's channel to the window first.
-      const desktopDisplayName = window.desktopBridge?.getAppBranding?.()?.displayName;
-      if (desktopDisplayName) document.title = desktopDisplayName;
+      const desktopBranding = window.desktopBridge?.getAppBranding?.();
+      if (desktopBranding) {
+        document.title = /^win(dows)?/i.test(navigator.platform)
+          ? desktopBranding.baseName
+          : desktopBranding.displayName;
+      }
     </script>
     <!-- vite.config.ts stamps the web build's channel into this title. -->
     <title>T3 Code</title>

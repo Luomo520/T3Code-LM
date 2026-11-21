@@ -3,8 +3,10 @@ import {
   FORK_RELEASE_MANIFEST_FILE,
   FORK_RELEASE_REPOSITORY,
   forkReleaseManifestUrl,
+  isForkBuildVersion,
   type ForkReleaseAsset,
 } from "@t3tools/shared/forkRelease";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 
 export type AndroidUpdateAsset = ForkReleaseAsset & { readonly androidVersionCode: number };
 
@@ -42,7 +44,7 @@ export async function findAndroidAppUpdate(
   if (!Number.isSafeInteger(input.installedBuild) || input.installedBuild < 1) {
     throw new Error("无法识别已安装 App 的构建号，请重新打开 App 后重试。");
   }
-  // A Windows-only release must not hide the latest Android package.
+  const candidates = new Map<string, Set<string>>();
   for (let page = 1; page <= 3; page++) {
     const response = await fetch(
       `https://api.github.com/repos/${FORK_RELEASE_REPOSITORY}/releases?per_page=20&page=${page}`,
@@ -63,28 +65,46 @@ export async function findAndroidAppUpdate(
         release.draft === true ||
         release.prerelease === true ||
         typeof release.tag_name !== "string" ||
-        !/^v\d+\.\d+\.\d+-[1-9]\d*$/.test(release.tag_name) ||
-        !Array.isArray(release.assets) ||
-        !release.assets.some(
-          (asset) => isRecord(asset) && asset.name === FORK_RELEASE_MANIFEST_FILE,
-        ) ||
-        !release.assets.some(
-          (asset) =>
-            isRecord(asset) &&
-            typeof asset.name === "string" &&
-            /-android-(arm64|universal)-apk\.apk$/.test(asset.name),
-        )
+        !release.tag_name.startsWith("v") ||
+        !isForkBuildVersion(release.tag_name.slice(1)) ||
+        !Array.isArray(release.assets)
       ) {
         continue;
       }
-      const manifestResponse = await fetch(forkReleaseManifestUrl(release.tag_name), { signal });
-      if (!manifestResponse.ok) throw new Error("无法读取更新清单，请稍后重试。");
-      const manifest = decodeForkReleaseManifest(await manifestResponse.json(), release.tag_name);
-      if (!manifest) throw new Error("更新清单校验失败，未提供下载。");
-      const asset = selectAndroidUpdate(manifest.assets, input.installedBuild, input.architectures);
-      if (asset) return asset;
+      const names = new Set(
+        release.assets.flatMap((asset) =>
+          isRecord(asset) &&
+          typeof asset.name === "string" &&
+          (asset.state === undefined || asset.state === "uploaded")
+            ? [asset.name]
+            : [],
+        ),
+      );
+      const apkPrefix = `T3Code-LM-${release.tag_name.slice(1)}-android-`;
+      if (
+        names.has(FORK_RELEASE_MANIFEST_FILE) &&
+        (names.has(`${apkPrefix}arm64-apk.apk`) || names.has(`${apkPrefix}universal-apk.apk`))
+      ) {
+        candidates.set(release.tag_name, names);
+      }
     }
     if (releases.length < 20) break;
+  }
+  // GitHub's release order can differ from the product and build version order.
+  const ordered = [...candidates].sort(([left], [right]) =>
+    compareSemverVersions(right.slice(1), left.slice(1)),
+  );
+  for (const [tag, names] of ordered) {
+    const manifestResponse = await fetch(forkReleaseManifestUrl(tag), { signal });
+    if (!manifestResponse.ok) throw new Error("无法读取更新清单，请稍后重试。");
+    const manifest = decodeForkReleaseManifest(await manifestResponse.json(), tag);
+    if (!manifest) throw new Error("更新清单校验失败，未提供下载。");
+    const asset = selectAndroidUpdate(
+      manifest.assets.filter((row) => names.has(row.fileName)),
+      input.installedBuild,
+      input.architectures,
+    );
+    if (asset) return asset;
   }
   return null;
 }

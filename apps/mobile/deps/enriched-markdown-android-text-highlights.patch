@@ -1,0 +1,330 @@
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/renderer/Renderer.kt b/android/src/main/java/com/swmansion/enriched/markdown/renderer/Renderer.kt
+index 80606970..a091207d
+--- a/android/src/main/java/com/swmansion/enriched/markdown/renderer/Renderer.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/renderer/Renderer.kt
+@@ -2,11 +2,17 @@ package com.swmansion.enriched.markdown.renderer
+ 
+ import android.content.Context
+ import android.text.SpannableStringBuilder
++import android.text.style.ForegroundColorSpan
++import android.text.style.ReplacementSpan
+ import com.swmansion.enriched.markdown.math.LatexErrorReporter
+ import com.swmansion.enriched.markdown.parser.MarkdownASTNode
++import com.swmansion.enriched.markdown.spans.CodeBlockSpan
++import com.swmansion.enriched.markdown.spans.CodeSpan
+ import com.swmansion.enriched.markdown.spans.ImageSpan
++import com.swmansion.enriched.markdown.spans.LinkSpan
+ import com.swmansion.enriched.markdown.spans.MarginBottomSpan
+ import com.swmansion.enriched.markdown.styles.StyleConfig
++import com.swmansion.enriched.markdown.utils.text.span.SPAN_FLAGS_EXCLUSIVE_EXCLUSIVE
+ 
+ class Renderer {
+   private var cachedFactory: RendererFactory? = null
+@@ -90,10 +96,42 @@ class Renderer {
+     removeTrailingMargin(builder)
+     block?.postProcess(builder)
+     factory.flushDeferredSpans(builder)
++    applyTextHighlights(builder)
+ 
+     return builder
+   }
+ 
++  private fun applyTextHighlights(builder: SpannableStringBuilder) {
++    val style = cachedStyle?.textHighlightStyle ?: return
++    val text = builder.toString()
++    for (match in style.pattern.findAll(text)) {
++      val start = match.range.first
++      val end = match.range.last + 1
++      if (start == end ||
++        builder.getSpans(start, end, LinkSpan::class.java).isNotEmpty() ||
++        builder.getSpans(start, end, CodeBlockSpan::class.java).isNotEmpty() ||
++        builder.getSpans(start, end, ReplacementSpan::class.java).isNotEmpty()
++      ) {
++        continue
++      }
++      val inlineCode = builder.getSpans(start, end, CodeSpan::class.java).firstOrNull()
++      if (inlineCode != null) {
++        val codeStart = builder.getSpanStart(inlineCode)
++        val codeEnd = builder.getSpanEnd(inlineCode)
++        if (start < codeStart || end > codeEnd ||
++          !style.inlineCodeEdge.matches(text.substring(codeStart, start)) ||
++          !style.inlineCodeEdge.matches(text.substring(end, codeEnd))
++        ) {
++          continue
++        }
++      }
++
++      val group = (1 until match.groups.size).firstOrNull { match.groups[it] != null } ?: continue
++      val color = style.colors.getOrNull(group - 1) ?: continue
++      builder.setSpan(ForegroundColorSpan(color), start, end, SPAN_FLAGS_EXCLUSIVE_EXCLUSIVE)
++    }
++  }
++
+   /** Task-list items rendered by the last [renderContent], continuing from its `startingTaskIndex`. */
+   fun getTaskItemCount(): Int = cachedFactory?.blockStyleContext?.taskItemCount ?: 0
+ 
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/styles/StyleConfig.kt b/android/src/main/java/com/swmansion/enriched/markdown/styles/StyleConfig.kt
+index e7c8a612..85e6623e
+--- a/android/src/main/java/com/swmansion/enriched/markdown/styles/StyleConfig.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/styles/StyleConfig.kt
+@@ -122,6 +122,24 @@ class StyleConfig(
+     }
+   }
+ 
++  internal val textHighlightStyle: TextHighlightStyle? by lazy {
++    if (!style.hasKey("textHighlight")) return@lazy null
++    val map = style.getMap("textHighlight") ?: return@lazy null
++    val pattern = map.getString("pattern") ?: return@lazy null
++    val inlineCodeEdge = map.getString("inlineCodeEdge") ?: return@lazy null
++    val colors = map.getArray("colors") ?: return@lazy null
++    if (pattern.isEmpty() || colors.size() == 0) return@lazy null
++    try {
++      TextHighlightStyle(
++        Regex(pattern, RegexOption.IGNORE_CASE),
++        Regex(inlineCodeEdge),
++        List(colors.size()) { index -> colors.getMap(index)?.let { styleParser.parseOptionalColor(it, "color") } },
++      )
++    } catch (_: IllegalArgumentException) {
++      null
++    }
++  }
++
+   /** Whether any variant can produce a pill; lets per-draw code skip pill lookups. */
+   val hasLinkPills: Boolean by lazy { linkVariants.any { it.pill != null } }
+ 
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/styles/TextHighlightStyle.kt b/android/src/main/java/com/swmansion/enriched/markdown/styles/TextHighlightStyle.kt
+new file mode 100755
+index 00000000..7de6b6db
+--- /dev/null
++++ b/android/src/main/java/com/swmansion/enriched/markdown/styles/TextHighlightStyle.kt
+@@ -0,0 +1,7 @@
++package com.swmansion.enriched.markdown.styles
++
++internal data class TextHighlightStyle(
++  val pattern: Regex,
++  val inlineCodeEdge: Regex,
++  val colors: List<Int?>,
++)
+diff --git a/lib/module/normalizeMarkdownStyle.js b/lib/module/normalizeMarkdownStyle.js
+index 2e68c6f5..852a735e
+--- a/lib/module/normalizeMarkdownStyle.js
++++ b/lib/module/normalizeMarkdownStyle.js
+@@ -202,6 +202,7 @@ const DEFAULT_NORMALIZED_STYLE = Object.freeze({
+     backgroundColor: normalizeColor('transparent')
+   },
+   linkVariants: [],
++  textHighlight: undefined,
+   strong: {
+     fontFamily: '',
+     fontWeight: 'bold',
+@@ -351,7 +352,7 @@ export const normalizeMarkdownStyle = style => {
+   }
+   const result = {};
+   Object.keys(DEFAULT_NORMALIZED_STYLE).forEach(key => {
+-    if (Array.isArray(DEFAULT_NORMALIZED_STYLE[key])) return;
++    if (key === 'textHighlight' || Array.isArray(DEFAULT_NORMALIZED_STYLE[key])) return;
+     const userValue = style[key];
+     result[key] = mergeSubStyle(DEFAULT_NORMALIZED_STYLE[key], userValue);
+   });
+@@ -374,6 +375,16 @@ export const normalizeMarkdownStyle = style => {
+       backgroundColor: override.backgroundColor ? normalizeColor(override.backgroundColor) ?? transparent : transparent
+     };
+   });
++  if (style.textHighlight) {
++    const { pattern, inlineCodeEdge, colors } = style.textHighlight;
++    result.textHighlight = {
++      pattern,
++      inlineCodeEdge,
++      colors: colors.map(color => ({
++        color: normalizeColor(color) ?? defaultTextColor
++      }))
++    };
++  }
+   if (style.taskList?.checkboxSize === undefined) {
+     const listSize = result.list.fontSize;
+     result.taskList.checkboxSize = Math.round(listSize * 0.9);
+@@ -416,4 +427,4 @@ export const normalizeMarkdownStyle = style => {
+   if (structuralCache.length > LRU_MAX) structuralCache.pop();
+   return finalResult;
+ };
+-//# sourceMappingURL=normalizeMarkdownStyle.js.map
+\ No newline at end of file
++//# sourceMappingURL=normalizeMarkdownStyle.js.map
+diff --git a/lib/typescript/src/types/MarkdownStyle.d.ts b/lib/typescript/src/types/MarkdownStyle.d.ts
+index f0aa6aea..7532a2a1
+--- a/lib/typescript/src/types/MarkdownStyle.d.ts
++++ b/lib/typescript/src/types/MarkdownStyle.d.ts
+@@ -366,6 +366,12 @@ export interface MarkdownStyle {
+      * }
+      */
+     linkVariants?: Record<string, LinkVariantStyle>;
++    /** Android-only foreground colors for each capture group matched in visible text. */
++    textHighlight?: {
++        pattern: string;
++        inlineCodeEdge: string;
++        colors: readonly string[];
++    };
+     strong?: StrongStyle;
+     em?: EmphasisStyle;
+     strikethrough?: StrikethroughStyle;
+@@ -468,4 +474,4 @@ export interface Md4cFlags {
+     admonitions?: boolean;
+ }
+ export {};
+-//# sourceMappingURL=MarkdownStyle.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=MarkdownStyle.d.ts.map
+diff --git a/lib/typescript/src/types/MarkdownStyleInternal.d.ts b/lib/typescript/src/types/MarkdownStyleInternal.d.ts
+index 501f31aa..26596cf1
+--- a/lib/typescript/src/types/MarkdownStyleInternal.d.ts
++++ b/lib/typescript/src/types/MarkdownStyleInternal.d.ts
+@@ -218,6 +218,11 @@ export interface MarkdownStyleInternal {
+     codeBlock: CodeBlockStyleInternal;
+     link: LinkStyleInternal;
+     linkVariants: ReadonlyArray<Readonly<LinkVariantEntryInternal>>;
++    textHighlight?: {
++        pattern: string;
++        inlineCodeEdge: string;
++        colors: ReadonlyArray<{ color: string }>;
++    };
+     strong: StrongStyleInternal;
+     em: EmphasisStyleInternal;
+     strikethrough: StrikethroughStyleInternal;
+@@ -237,4 +242,4 @@ export interface MarkdownStyleInternal {
+     highlight: HighlightStyleInternal;
+ }
+ export {};
+-//# sourceMappingURL=MarkdownStyleInternal.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=MarkdownStyleInternal.d.ts.map
+diff --git a/src/EnrichedMarkdownNativeComponent.ts b/src/EnrichedMarkdownNativeComponent.ts
+index 31e21dbd..67c335c8
+--- a/src/EnrichedMarkdownNativeComponent.ts
++++ b/src/EnrichedMarkdownNativeComponent.ts
+@@ -121,6 +121,16 @@ interface StrongStyleInternal {
+   color?: ColorValue;
+ }
+ 
++interface TextHighlightColorInternal {
++  color: ColorValue;
++}
++
++interface TextHighlightInternal {
++  pattern: string;
++  inlineCodeEdge: string;
++  colors: ReadonlyArray<Readonly<TextHighlightColorInternal>>;
++}
++
+ interface EmphasisStyleInternal {
+   fontFamily: string;
+   fontStyle: string;
+@@ -254,6 +264,7 @@ export interface MarkdownStyleInternal {
+   codeBlock: CodeBlockStyleInternal;
+   link: LinkStyleInternal;
+   linkVariants: ReadonlyArray<Readonly<LinkVariantEntryInternal>>;
++  textHighlight?: Readonly<TextHighlightInternal>;
+   strong: StrongStyleInternal;
+   em: EmphasisStyleInternal;
+   strikethrough: StrikethroughStyleInternal;
+diff --git a/src/EnrichedMarkdownTextNativeComponent.ts b/src/EnrichedMarkdownTextNativeComponent.ts
+index 58e56974..24a4ba69
+--- a/src/EnrichedMarkdownTextNativeComponent.ts
++++ b/src/EnrichedMarkdownTextNativeComponent.ts
+@@ -121,6 +121,16 @@ interface StrongStyleInternal {
+   color?: ColorValue;
+ }
+ 
++interface TextHighlightColorInternal {
++  color: ColorValue;
++}
++
++interface TextHighlightInternal {
++  pattern: string;
++  inlineCodeEdge: string;
++  colors: ReadonlyArray<Readonly<TextHighlightColorInternal>>;
++}
++
+ interface EmphasisStyleInternal {
+   fontFamily: string;
+   fontStyle: string;
+@@ -255,6 +265,7 @@ export interface MarkdownStyleInternal {
+   codeBlock: CodeBlockStyleInternal;
+   link: LinkStyleInternal;
+   linkVariants: ReadonlyArray<Readonly<LinkVariantEntryInternal>>;
++  textHighlight?: Readonly<TextHighlightInternal>;
+   strong: StrongStyleInternal;
+   em: EmphasisStyleInternal;
+   strikethrough: StrikethroughStyleInternal;
+diff --git a/src/normalizeMarkdownStyle.ts b/src/normalizeMarkdownStyle.ts
+index f3674821..b4765364
+--- a/src/normalizeMarkdownStyle.ts
++++ b/src/normalizeMarkdownStyle.ts
+@@ -190,6 +190,7 @@ const DEFAULT_NORMALIZED_STYLE = Object.freeze({
+     backgroundColor: normalizeColor('transparent')!,
+   },
+   linkVariants: [],
++  textHighlight: undefined,
+   strong: { fontFamily: '', fontWeight: 'bold', color: undefined },
+   em: {
+     fontFamily: '',
+@@ -325,7 +326,8 @@ export const normalizeMarkdownStyle = (
+   (
+     Object.keys(DEFAULT_NORMALIZED_STYLE) as (keyof MarkdownStyleInternal)[]
+   ).forEach((key) => {
+-    if (Array.isArray(DEFAULT_NORMALIZED_STYLE[key])) return;
++    if (key === 'textHighlight' || Array.isArray(DEFAULT_NORMALIZED_STYLE[key]))
++      return;
+     const userValue = style[key] as unknown as
+       | Record<string, unknown>
+       | undefined;
+@@ -362,6 +364,17 @@ export const normalizeMarkdownStyle = (
+     }
+   );
+ 
++  if (style.textHighlight) {
++    const { pattern, inlineCodeEdge, colors } = style.textHighlight;
++    result.textHighlight = {
++      pattern,
++      inlineCodeEdge,
++      colors: colors.map((color) => ({
++        color: normalizeColor(color) ?? defaultTextColor,
++      })),
++    };
++  }
++
+   if (style.taskList?.checkboxSize === undefined) {
+     const listSize = (result.list as { fontSize: number }).fontSize;
+     (result.taskList as { checkboxSize: number }).checkboxSize = Math.round(
+diff --git a/src/types/MarkdownStyle.ts b/src/types/MarkdownStyle.ts
+index 1fda59e9..315592a5
+--- a/src/types/MarkdownStyle.ts
++++ b/src/types/MarkdownStyle.ts
+@@ -399,6 +399,12 @@ export interface MarkdownStyle {
+    * }
+    */
+   linkVariants?: Record<string, LinkVariantStyle>;
++  /** Android-only foreground colors for each capture group matched in visible text. */
++  textHighlight?: {
++    pattern: string;
++    inlineCodeEdge: string;
++    colors: readonly string[];
++  };
+   strong?: StrongStyle;
+   em?: EmphasisStyle;
+   strikethrough?: StrikethroughStyle;
+diff --git a/src/types/MarkdownStyleInternal.ts b/src/types/MarkdownStyleInternal.ts
+index 9117812a..a79a9489
+--- a/src/types/MarkdownStyleInternal.ts
++++ b/src/types/MarkdownStyleInternal.ts
+@@ -266,6 +266,11 @@ export interface MarkdownStyleInternal {
+   codeBlock: CodeBlockStyleInternal;
+   link: LinkStyleInternal;
+   linkVariants: ReadonlyArray<Readonly<LinkVariantEntryInternal>>;
++  textHighlight?: {
++    pattern: string;
++    inlineCodeEdge: string;
++    colors: ReadonlyArray<{ color: string }>;
++  };
+   strong: StrongStyleInternal;
+   em: EmphasisStyleInternal;
+   strikethrough: StrikethroughStyleInternal;

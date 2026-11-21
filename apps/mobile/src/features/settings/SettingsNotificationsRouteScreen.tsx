@@ -166,7 +166,10 @@ function LocalTaskNotificationsSettings() {
   return (
     <SettingsScreen title="通知">
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="px-5 pt-4">
-        <SettingsSection title="智能体活动">
+        <SettingsSection
+          title="智能体活动"
+          footer="直连的后台提醒由 Android 调度，锁屏或省电时可能延迟。"
+        >
           <SettingsRow
             icon="bell.badge"
             label="任务完成通知"

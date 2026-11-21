@@ -13,6 +13,7 @@ import {
 } from "@t3tools/client-runtime/state/subagent-display";
 import { REASONING_EFFORT_OPTION_IDS } from "@t3tools/client-runtime/state/thread-execution";
 import { getModelSelectionStringOptionValue, resolveSelectableModel } from "@t3tools/shared/model";
+import { formatConversationTokens, UNKNOWN_CONVERSATION_USAGE } from "@t3tools/shared/usageFormat";
 import { getTraitsSpeedDisplay, TraitsSpeedIcon } from "./TraitsSpeed";
 import type { ReactNode } from "react";
 import {
@@ -36,6 +37,9 @@ export function SubagentTooltipContent(props: {
   providerInstanceId: ProviderInstanceId;
   origin: OrchestrationV2Subagent["origin"];
   modelSelection?: OrchestrationV2Subagent["modelSelection"];
+  runtimeSettings?: OrchestrationV2Subagent["runtimeSettings"];
+  reportedEffort?: string | null | undefined;
+  totalTokens?: number | undefined;
   provider?: ServerProvider | undefined;
   providers?: ReadonlyArray<ServerProvider> | undefined;
   driver?: ProviderDriverKind | undefined;
@@ -50,6 +54,8 @@ export function SubagentTooltipContent(props: {
   result?: string | null | undefined;
   progress?: string | null | undefined;
 }) {
+  const driver = props.provider?.driver ?? props.driver;
+  const nativeCodex = driver === "codex" && props.origin === "provider_native";
   const childSelection =
     props.modelSelection ??
     (props.origin === "app_owned" ? props.childThread?.modelSelection : undefined);
@@ -57,7 +63,11 @@ export function SubagentTooltipContent(props: {
     modelLabel,
     modelSlug,
     workspace: metadata,
-  } = resolveSubagentMetadata({ ...props, modelSelection: childSelection });
+  } = resolveSubagentMetadata({
+    ...props,
+    model: nativeCodex ? (props.runtimeSettings?.model ?? null) : props.model,
+    modelSelection: props.origin === "app_owned" ? childSelection : undefined,
+  });
   const preview = subagentDetailPreview(props);
   const providerModel = props.provider?.models.find((candidate) => candidate.slug === modelSlug);
   const childModel = props.provider
@@ -72,9 +82,16 @@ export function SubagentTooltipContent(props: {
     childModel === modelSlug && childSelection?.instanceId === props.providerInstanceId
       ? childSelection
       : undefined;
-  const effort = REASONING_EFFORT_OPTION_IDS.map((id) =>
-    getModelSelectionStringOptionValue(matchingSelection, id),
-  ).find(Boolean);
+  const effortSelection =
+    props.origin === "provider_native" && childSelection?.instanceId === props.providerInstanceId
+      ? childSelection
+      : matchingSelection;
+  const effort = nativeCodex
+    ? props.runtimeSettings?.reasoningEffort
+    : (props.reportedEffort ??
+      REASONING_EFFORT_OPTION_IDS.map((id) =>
+        getModelSelectionStringOptionValue(effortSelection, id),
+      ).find(Boolean));
   const speed = provider
     ? providerModel?.capabilities?.optionDescriptors
         ?.map((descriptor) => {
@@ -104,7 +121,6 @@ export function SubagentTooltipContent(props: {
         })
         .find(Boolean)
     : undefined;
-  const driver = props.provider?.driver ?? props.driver;
   const entries = deriveProviderInstanceEntries(props.providers ?? []);
   const entry = entries.find((candidate) => candidate.instanceId === props.provider?.instanceId);
   const showInstanceBadge = entry !== undefined && shouldShowInstanceBadge(entry, entries);
@@ -135,20 +151,27 @@ export function SubagentTooltipContent(props: {
           <BotIcon className="size-3 shrink-0" />
         )}
         <span className="inline-flex min-w-0 items-center gap-1 text-foreground/75">
+          <span className="sr-only">Model</span>
           <span className="min-w-0 truncate">
-            {showInstanceBadge ? `${modelLabel} · ${entry.displayName}` : modelLabel}
+            {modelSlug === null
+              ? UNKNOWN_CONVERSATION_USAGE
+              : showInstanceBadge
+                ? `${modelLabel} · ${entry.displayName}`
+                : modelLabel}
           </span>
-          {effort || speed?.speedIcon ? (
-            <span className="inline-flex shrink-0 items-center gap-1">
-              {effort ? " · " : null}
-              {speed?.speedIcon && provider ? (
-                <TraitsSpeedIcon provider={provider.driver} speedIcon={speed.speedIcon} size="xs" />
-              ) : null}
-              {effort}
-            </span>
+          {speed?.speedIcon && provider ? (
+            <TraitsSpeedIcon provider={provider.driver} speedIcon={speed.speedIcon} size="xs" />
           ) : null}
         </span>
       </div>
+      <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1">
+        <dt>Reasoning effort</dt>
+        <dd className="text-right text-foreground/75">{effort ?? UNKNOWN_CONVERSATION_USAGE}</dd>
+        <dt>Tokens</dt>
+        <dd className="text-right text-foreground/75 tabular-nums">
+          {formatConversationTokens(props.totalTokens)}
+        </dd>
+      </dl>
       <div className="flex min-w-0 items-center justify-between gap-4">
         <span
           className={cn(

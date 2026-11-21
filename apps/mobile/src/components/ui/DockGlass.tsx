@@ -79,7 +79,9 @@ export function DockGlassBackdrop({
             borderRadius: borderRadius ?? (material === "popup" ? 22 : 999),
             borderWidth: 1,
             borderColor: dark ? "rgba(255,255,255,0.13)" : "rgba(26,32,46,0.08)",
-            borderTopColor: dark ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.95)",
+            ...(material === "popup"
+              ? { borderTopColor: dark ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.95)" }
+              : {}),
           },
         ]}
       />

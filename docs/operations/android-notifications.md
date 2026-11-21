@@ -1,6 +1,10 @@
 # Android notifications
 
-The Android app receives Firebase Cloud Messaging (FCM) data messages. The relay sends them directly through FCM HTTP v1; an Expo Push account is not required.
+With Firebase configured, the Android app receives Firebase Cloud Messaging (FCM) data messages. The relay sends them directly through FCM HTTP v1; an Expo Push account is not required.
+
+## Direct connections without Firebase
+
+On builds without Firebase configuration, Android schedules short, network-constrained checks for tasks observed when the app is backgrounded. The checks use the saved connection and the same live thread state as the app. Android controls when these checks run, so Doze, app standby or a dropped connection can delay an alert until the app reconnects. The background checks expire two hours after leaving the app. Test this path with a real run, then press Home and lock the screen. The task should produce a single completion alert without a persistent monitoring notification. Tapping the alert should reopen the original thread.
 
 ## Android compatibility and automated checks
 

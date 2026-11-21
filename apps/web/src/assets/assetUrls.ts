@@ -6,6 +6,7 @@ import {
   EMPTY_ASSET_URL_ATOM,
   makeRevisionedAssetUrlFamily,
   resolveAssetUrl,
+  workspaceDownloadAuthorizationError,
 } from "@t3tools/client-runtime/state/assets";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { AssetResource, EnvironmentId } from "@t3tools/contracts";
@@ -124,7 +125,8 @@ export function useWorkspaceDownloadUrl(
     if (!environmentId || !resource || connection._tag !== "Some")
       throw new Error("环境未连接，请连接后重试。");
     const result = await create({ environmentId, input: { resource } });
-    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+    if (result._tag === "Failure")
+      throw workspaceDownloadAuthorizationError(squashAtomCommandFailure(result));
     if (!result.value.download || !result.value.fileName)
       throw new Error("当前服务端未提供此文件的下载能力。");
     const url = resolveAssetUrl(connection.value.httpBaseUrl, result.value.relativeUrl);

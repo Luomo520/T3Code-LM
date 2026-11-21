@@ -126,7 +126,7 @@ export function FileMarkdownPreview(props: {
           accessibilityRole="link"
           accessibilityLabel={`Open ${name}`}
           onPress={() => openMedia(image.href, true)}
-          style={{ color: styles.nativeTextStyle.linkColor }}
+          style={{ color: styles.nativeTextStyle.linkColor, textDecorationLine: "underline" }}
         >
           {name}
         </Text>
@@ -238,6 +238,7 @@ export function FileMarkdownPreview(props: {
       <View className="mx-auto w-full max-w-[760px]">
         <SelectableMarkdownText
           markdown={maskMarkdownFrontmatter(props.markdown)}
+          semanticHighlights
           fileEmbedLabel={(href) =>
             markdownFileEmbedLabel(
               href,

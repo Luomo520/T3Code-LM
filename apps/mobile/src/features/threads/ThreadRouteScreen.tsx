@@ -974,7 +974,15 @@ function ThreadRouteContent(
           header={
             props.inspectorPresentation ? null : (
               <ThreadHeader
-                headerUsage={<HeaderUsageStats environmentId={selectedThread.environmentId} threadId={selectedThread.id} providerInstanceId={(composer.modelSelection ?? selectedThread.modelSelection)?.instanceId} />}
+                headerUsage={
+                  <HeaderUsageStats
+                    environmentId={selectedThread.environmentId}
+                    threadId={selectedThread.id}
+                    providerInstanceId={
+                      (composer.modelSelection ?? selectedThread.modelSelection)?.instanceId
+                    }
+                  />
+                }
                 title={selectedThread.title}
                 subtitle={headerSubtitle}
                 gitControls={threadGitControlProps}
@@ -1007,6 +1015,7 @@ function ThreadRouteContent(
               : composer.activeWorkStartedAt
           }
           isCompacting={composer.isCompacting}
+          contextWindow={composer.contextWindow}
           compactBeforeSend={composer.compactBeforeSend}
           runlessWorkActive={composer.runlessWorkActive}
           extensionStatuses={composer.extensionStatuses}

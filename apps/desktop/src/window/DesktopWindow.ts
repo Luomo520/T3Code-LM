@@ -393,6 +393,8 @@ export const make = Effect.gen(function* () {
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const electronApp = yield* ElectronApp.ElectronApp;
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
+  const defaultWindowTitle =
+    environment.platform === "win32" ? environment.branding.baseName : environment.displayName;
   const backendReadyRef = yield* Ref.make(false);
   let backendHasStarted = false;
   let mainClosedDuringStartup = false;
@@ -482,7 +484,7 @@ export const make = Effect.gen(function* () {
       ...(environment.platform === "darwin" ? { disableAutoHideCursor: true } : {}),
       backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
       ...iconOption,
-      title: environment.displayName,
+      title: defaultWindowTitle,
       ...getWindowTitleBarOptions(shouldUseDarkColors, environment.platform),
       webPreferences: {
         preload: environment.preloadPath,
@@ -820,7 +822,7 @@ export const make = Effect.gen(function* () {
     window.on("page-title-updated", (event, title) => {
       if (title.trim() !== "") return;
       event.preventDefault();
-      window.setTitle(environment.displayName);
+      window.setTitle(defaultWindowTitle);
     });
     window.on("resize", scheduleBoundsPersist);
     window.on("move", scheduleBoundsPersist);
@@ -1069,7 +1071,7 @@ export const make = Effect.gen(function* () {
       show: false,
       skipTaskbar: false,
       backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
-      title: environment.displayName,
+      title: defaultWindowTitle,
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,

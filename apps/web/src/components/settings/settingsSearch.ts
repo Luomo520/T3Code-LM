@@ -712,6 +712,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["timestamp clock locale system browser os 12 hour 24 hour"],
   },
   {
+    id: "windows-taskbar-title",
+    title: msg("Taskbar name"),
+    to: "/settings/general",
+    desktopOnly: true,
+    windowsOnly: true,
+    searchTerms: ["windows taskbar window title label project thread session 任务栏 窗口标题"],
+  },
+  {
     id: "response-streaming",
     title: "Response streaming",
     to: "/settings/threads",

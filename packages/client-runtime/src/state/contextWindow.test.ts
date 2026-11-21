@@ -14,8 +14,8 @@ import {
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
-import { compactBeforeSendTokens } from "./contextWindow.ts";
-import type { ThreadStructure } from "./models.ts";
+import { compactBeforeSendTokens, deriveComposerContextWindow } from "./contextWindow.ts";
+import type { ThreadStructure, ThreadStructureTurnItem } from "./models.ts";
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 
 const claude = ProviderInstanceId.make("claudeAgent");
@@ -24,6 +24,39 @@ const claudeOtherHome = ProviderInstanceId.make("claude_other_home");
 const codex = ProviderInstanceId.make("codex");
 const lastTurnAt = "2026-10-30T14:23:02.000Z";
 const returnedAt = "2026-10-30T23:03:21.000Z";
+
+describe("deriveComposerContextWindow", () => {
+  it("updates a known context after compaction and hides it when the selected model changes", () => {
+    const { projection } = sendInput({ usedTokens: 90_000 });
+    const currentUsage = projection.providerTurns[0]!;
+    const withLimit = {
+      ...projection,
+      providerTurns: [
+        { ...currentUsage, tokenUsage: { ...currentUsage.tokenUsage!, maxTokens: 180_000 } },
+      ],
+    };
+    const selection = projection.thread.modelSelection;
+    const compaction = {
+      threadId: projection.thread.id,
+      providerThreadId: projection.thread.activeProviderThreadId,
+      status: "completed",
+      type: "compaction",
+      completedAt: DateTime.makeUnsafe(returnedAt),
+      afterTokenCount: 12_000,
+    } as ThreadStructureTurnItem;
+    expect(deriveComposerContextWindow(withLimit, [], selection)).toEqual({
+      usedTokens: 90_000,
+      maxTokens: 180_000,
+    });
+    expect(deriveComposerContextWindow(withLimit, [{ item: compaction }], selection)).toEqual({
+      usedTokens: 12_000,
+      maxTokens: 180_000,
+    });
+    expect(
+      deriveComposerContextWindow(withLimit, [], { ...selection, model: "claude-sonnet-4-6" }),
+    ).toBeNull();
+  });
+});
 
 function sendInput(
   overrides: {

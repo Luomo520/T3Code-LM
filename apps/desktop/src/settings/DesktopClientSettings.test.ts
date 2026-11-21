@@ -70,6 +70,7 @@ const clientSettings: ClientSettings = {
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
   pullRequestMergeMethodOverrides: {},
   timestampFormat: "24-hour",
+  windowsTaskbarTitleMode: "project-thread",
   wordWrap: true,
 };
 
@@ -234,6 +235,7 @@ describe("DesktopClientSettings", () => {
         assert.isTrue(Option.isSome(persisted));
         if (Option.isSome(persisted)) {
           assert.equal(persisted.value.timestampFormat, "24-hour");
+          assert.equal(persisted.value.windowsTaskbarTitleMode, "app");
         }
       }),
     ),

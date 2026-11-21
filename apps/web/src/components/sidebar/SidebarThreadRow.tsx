@@ -146,11 +146,13 @@ function compactSidebarTimeLabel(label: string): string {
 // minute. The minute is passed as the clock so it is the formatter's input.
 function RelativeTimeLabel(props: { timestamp: string | null }) {
   const nowMinute = useNowMinute();
-  return props.timestamp === null
-    ? null
-    : compactSidebarTimeLabel(
+  return props.timestamp === null ? null : (
+    <time dateTime={props.timestamp}>
+      {compactSidebarTimeLabel(
         formatRelativeTimeLabel(props.timestamp, Date.parse(`${nowMinute}:00.000Z`)),
-      );
+      )}
+    </time>
+  );
 }
 
 function JumpHintBadge(props: { label: string }) {
@@ -551,7 +553,7 @@ type SidebarThreadRowProps = {
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
   navigationParent?: string | undefined;
-  activityTimestamp?: string | undefined;
+  activityTimestamp?: string | null | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
   snoozeSupported: boolean;
@@ -977,7 +979,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" &&
       !props.isActive &&
-      "[&:not(:hover):not(:focus-within)_*]:text-secondary-label",
+      "[&:not(:hover):not(:focus-within)_:not(:where([data-slot=sidebar-project-icon]_*))]:text-secondary-label",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
       : isSelected || props.sweepAction !== null
@@ -1262,7 +1264,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             {/* `contents` keeps one-line rows a single flex row. */}
             <div className={multiline ? "flex h-6 min-w-0 items-center gap-2.5" : "contents"}>
               {inFolder ? null : (
-                <span className="flex shrink-0 items-center">
+                <span data-slot="sidebar-project-icon" className="flex shrink-0 items-center">
                   {props.project ? (
                     <ProjectFavicon project={props.project} className="size-4" />
                   ) : null}
@@ -1538,7 +1540,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         </span>
                       )
                     ) : (
-                      <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
+                      <RelativeTimeLabel
+                        timestamp={
+                          props.activityTimestamp === undefined
+                            ? resolveThreadActivityTimestamp(thread)
+                            : props.activityTimestamp
+                        }
+                      />
                     )}
                   </span>
                   {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (
@@ -1610,6 +1618,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 </span>
               ) : null}
               {titleLineIcons}
+              {topStatus && props.activityTimestamp != null ? (
+                <span className="shrink-0 text-xs tabular-nums text-secondary-label">
+                  <RelativeTimeLabel timestamp={props.activityTimestamp} />
+                </span>
+              ) : null}
             </div>
             {metaLine}
           </div>
