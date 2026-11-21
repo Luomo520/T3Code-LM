@@ -1,26 +1,32 @@
 package expo.modules.t3nativecontrols
 
-import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import java.io.File
+import java.net.URL
 import java.security.MessageDigest
 
-/** One explicit APK download, owned by Android and recoverable after the app exits. */
+/** Owns one explicitly requested update and keeps a completed package available for installation. */
 object T3AppUpdates {
   private const val STORE = "t3-app-update"
-  private const val APK_MIME = "application/vnd.android.package-archive"
   private const val REPOSITORY_PATH = "/Luomo520/T3Code-LM/releases/download/"
 
   private fun preferences(context: Context) = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
-  private fun manager(context: Context) = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+
+  @Synchronized
+  private fun rememberCompleted(context: Context, id: String, uri: Uri) {
+    val store = preferences(context)
+    if (store.all["id"] != id) throw InterruptedException()
+    if (!store.edit().putString("uri", uri.toString()).commit()) {
+      throw DownloadFailure("无法保存更新任务，请重试。")
+    }
+  }
 
   @Synchronized
   fun enqueue(context: Context, url: String, fileName: String, version: String,
@@ -41,60 +47,60 @@ object T3AppUpdates {
     val existing = status(context)
     if (existing != null && existing["status"] !in listOf("failed", "missing")) {
       require(store.getString("sha256", null) == sha256) { "已有更新下载，请先完成或取消该任务。" }
-      return store.getLong("id", -1).toString()
+      return existing.getValue("id") as String
     }
-    val previousId = store.getLong("id", -1)
-    if (previousId >= 0) manager(context).remove(previousId)
+    if (existing != null) cancel(context)
     File(context.cacheDir, "t3-app-updates").deleteRecursively()
-    val request = DownloadManager.Request(uri)
-      .setTitle(fileName)
-      .setDescription("T3Code-LM 更新 · 下载完成后返回 App 校验并安装")
-      .setMimeType(APK_MIME)
-      .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-      .setAllowedOverMetered(allowMetered)
-      .setAllowedOverRoaming(false)
-      .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "T3Code/$fileName")
-    val id = manager(context).enqueue(request)
-    check(store.edit().clear().putLong("id", id).putString("fileName", fileName)
+    val application = context.applicationContext
+    val task = DownloadTask(URL(url), fileName, allowMetered, sizeBytes.toLong()) { id, destination ->
+      rememberCompleted(application, id, destination)
+    }
+    check(store.edit().clear().putString("id", task.id).putString("fileName", fileName)
       .putString("version", version).putInt("versionCode", versionCode)
       .putLong("sizeBytes", sizeBytes.toLong()).putString("sha256", sha256).commit()) {
-      manager(context).remove(id)
       "无法保存更新任务，请重试。"
     }
-    return id.toString()
+    try {
+      T3Downloads.start(application, task)
+    } catch (error: Exception) {
+      store.edit().clear().apply()
+      throw error
+    }
+    return task.id
   }
 
   @Synchronized
   fun status(context: Context): Map<String, Any>? {
     val store = preferences(context)
-    val id = store.getLong("id", -1)
-    if (id < 0) return null
+    val id = store.all["id"]?.toString() ?: return null
     if (code(context.packageManager.getPackageInfo(context.packageName, 0)) >= store.getInt("versionCode", Int.MAX_VALUE)) {
       File(context.cacheDir, "t3-app-updates").deleteRecursively()
       store.edit().clear().apply()
       return null
     }
-    val base = mutableMapOf<String, Any>("id" to id.toString(),
+    val base = mapOf<String, Any>("id" to id,
       "fileName" to (store.getString("fileName", "") ?: ""),
       "version" to (store.getString("version", "") ?: ""))
-    manager(context).query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
-      if (cursor.moveToFirst()) {
-        val state = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-        base["status"] = when (state) {
-          DownloadManager.STATUS_SUCCESSFUL -> "downloaded"
-          DownloadManager.STATUS_FAILED -> "failed"
-          DownloadManager.STATUS_PAUSED -> "paused"
-          DownloadManager.STATUS_RUNNING -> "downloading"
-          else -> "pending"
-        }
-        base["bytesDownloaded"] = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)).toDouble()
-        base["totalBytes"] = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)).toDouble()
-        base["reason"] = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-        return base
-      }
+    val state = T3Downloads.get(id)?.state
+    if (state?.status == "cancelled") {
+      cancel(context)
+      return null
     }
-    base["status"] = "missing"
-    return base
+    val total = store.getLong("sizeBytes", 0)
+    val uri = store.getString("uri", null)?.let(Uri::parse)
+    val current = when {
+      state != null && state.status != "downloaded" -> state
+      uri == null -> DownloadState("missing", total = total)
+      canRead(context, uri) -> DownloadState("downloaded", total, total, uri)
+      else -> DownloadState("missing", total = total)
+    }
+    return base + current.toMap()
+  }
+
+  private fun canRead(context: Context, uri: Uri): Boolean = try {
+    context.contentResolver.openFileDescriptor(uri, "r")?.use { true } ?: false
+  } catch (_: Exception) {
+    false
   }
 
   /** Never called on completion: installation always starts from a user action. */
@@ -108,8 +114,8 @@ object T3AppUpdates {
       error("请允许此 App 安装应用，然后返回再次点击“校验并安装”。")
     }
     val store = preferences(context)
-    val id = store.getLong("id", -1)
-    val uri = manager(context).getUriForDownloadedFile(id) ?: error("下载文件已不存在，请重新下载。")
+    val uri = store.getString("uri", null)?.let(Uri::parse)
+      ?: error("下载文件已不存在，请重新下载。")
     val directory = File(context.cacheDir, "t3-app-updates")
     check(directory.isDirectory || directory.mkdirs()) { "无法准备安装文件，请检查可用空间。" }
     val apk = File(directory, "update.apk")
@@ -148,7 +154,7 @@ object T3AppUpdates {
       }
       val contentUri = FileProvider.getUriForFile(context, "${context.packageName}.FileSystemFileProvider", apk)
       context.startActivity(Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(contentUri, APK_MIME)
+        setDataAndType(contentUri, APK_DOWNLOAD_MIME)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
       })
     } catch (error: Exception) {
@@ -160,8 +166,8 @@ object T3AppUpdates {
   @Synchronized
   fun cancel(context: Context) {
     val store = preferences(context)
-    val id = store.getLong("id", -1)
-    if (id >= 0) manager(context).remove(id)
+    store.all["id"]?.toString()?.let { T3Downloads.get(it)?.cancel() }
+    store.getString("uri", null)?.let { T3DownloadDestination.remove(context, Uri.parse(it)) }
     store.edit().clear().apply()
     File(context.cacheDir, "t3-app-updates").deleteRecursively()
   }

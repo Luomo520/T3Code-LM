@@ -30,6 +30,7 @@ import { supportsAgentAwarenessPush } from "../agent-awareness/capabilities";
 import {
   openAndroidLiveUpdateSettings,
   supportsAndroidLiveUpdateSettings,
+  supportsAndroidLocalTaskCompletion,
 } from "../agent-awareness/androidNotifications";
 import { setLiveActivityUpdatesEnabled } from "../agent-awareness/liveActivityPreferences";
 import { requestAgentNotificationPermission } from "../agent-awareness/notificationPermissions";
@@ -118,6 +119,9 @@ function useNotificationsReady(): boolean {
 }
 
 export function SettingsNotificationsRouteScreen() {
+  if (supportsAndroidLocalTaskCompletion()) {
+    return <LocalTaskNotificationsSettings />;
+  }
   if (!hasCloudPublicConfig()) {
     return (
       <SettingsScreen title="通知">
@@ -125,13 +129,57 @@ export function SettingsNotificationsRouteScreen() {
           contentInsetAdjustmentBehavior="automatic"
           contentContainerClassName="px-5 pt-4"
         >
-          <Text className="text-base text-foreground-muted">{"此构建版本的通知功能需要 T3 Connect。"}</Text>
+          <Text className="text-base text-foreground-muted">
+            {"此构建版本的通知功能需要 T3 Connect。"}
+          </Text>
         </ScrollView>
       </SettingsScreen>
     );
   }
 
   return <ConfiguredSettingsNotificationsRouteScreen />;
+}
+
+function LocalTaskNotificationsSettings() {
+  const status = useAtomValue(notificationStatusAtom);
+  const setStatus = useAtomSet(notificationStatusAtom);
+  const onPress = async () => {
+    if (status === "enabled") {
+      await Linking.openSettings();
+      return;
+    }
+    const result = await settleAsyncResult(() =>
+      runtime.runPromiseExit(requestAgentNotificationPermission),
+    );
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        reportAtomCommandResult(result, { label: "task completion notification permission" });
+        Dialog.alert("无法开启任务通知", "请检查 Android 的通知设置。");
+      }
+    } else if (result.value.type === "granted") {
+      setStatus("enabled");
+    } else if (result.value.type === "denied") {
+      setStatus("disabled");
+      if (!result.value.canAskAgain) await Linking.openSettings();
+    }
+  };
+  return (
+    <SettingsScreen title="通知">
+      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="px-5 pt-4">
+        <SettingsSection title="智能体活动">
+          <SettingsRow
+            icon="bell.badge"
+            label="任务完成通知"
+            value={status === "enabled" ? "已授权" : status === "checking" ? "正在检查" : "未授权"}
+            disabled={status === "checking" || status === "unsupported"}
+            onPress={() => {
+              void onPress().catch(() => Dialog.alert("无法打开 Android 通知设置"));
+            }}
+          />
+        </SettingsSection>
+      </ScrollView>
+    </SettingsScreen>
+  );
 }
 
 function ConfiguredSettingsNotificationsRouteScreen() {

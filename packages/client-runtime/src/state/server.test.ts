@@ -64,6 +64,7 @@ import {
   resolveServerConfigValue,
   resolveServerWelcomeState,
   resolveServerUpdateProgressResult,
+  serverUpdateDownloadPercent,
   serverUpdateStateForProgressEvent,
   serverUpdateStateAtom,
   serverUpdateStateForServerVersion,
@@ -824,6 +825,24 @@ describe("server state projection", () => {
         result: { targetVersion: "0.0.31", method: "desktop-app", desktopUpdateToken: "token" },
       }).stage,
     ).toBe("installing");
+  });
+
+  it("derives download progress from the server's byte counts or the remote desktop updater", () => {
+    const event = serverUpdateStateForProgressEvent("0.1.0-1", "0.1.0-4", {
+      type: "progress",
+      stage: "downloading",
+      downloadedBytes: 25,
+      totalBytes: 100,
+    });
+    expect(event).toMatchObject({
+      status: "running",
+      stage: "downloading",
+      downloadedBytes: 25,
+      totalBytes: 100,
+    });
+    expect(serverUpdateDownloadPercent(event)).toBe(25);
+    expect(serverUpdateDownloadPercent({ downloadPercent: 12.5 })).toBe(12.5);
+    expect(serverUpdateDownloadPercent({ downloadedBytes: 25 })).toBeUndefined();
   });
 
   it("keeps active update state and hides stale failures after a version change", () => {

@@ -13,7 +13,11 @@ import type {
   ServerInstallation,
   ServerSelfUpdateCapability,
 } from "@t3tools/contracts";
-import type { ServerUpdateStage, ServerUpdateState } from "@t3tools/client-runtime/state/server";
+import {
+  serverUpdateDownloadPercent,
+  type ServerUpdateStage,
+  type ServerUpdateState,
+} from "@t3tools/client-runtime/state/server";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -38,9 +42,9 @@ import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const UPDATE_STAGE_LABELS: Record<ServerUpdateStage, string> = {
-  downloading: "Downloading…",
-  installing: "Downloading…",
-  resuming: "Restarting…",
+  downloading: "正在下载更新…",
+  installing: "正在安装更新…",
+  resuming: "正在重启并重新连接…",
 };
 const pendingUpdateEnvironmentIds = new Set<EnvironmentId>();
 
@@ -231,6 +235,31 @@ export function canUpdateServer(
   return sessionGrantsScope(result.value, AuthEnvironmentMaintainScope);
 }
 
+export function UpdateDownloadProgress({
+  label,
+  percent,
+  detail,
+}: {
+  readonly label: string;
+  readonly percent?: number | undefined;
+  readonly detail?: string | undefined;
+}) {
+  return (
+    <div className="mt-1 grid min-w-32 max-w-md gap-1 text-xs tabular-nums">
+      <span className="text-foreground">
+        {detail ?? label}
+        {percent === undefined ? "" : ` ${Math.floor(percent)}%`}
+      </span>
+      <progress
+        aria-label={label}
+        className="block h-1.5 w-full overflow-hidden rounded-full accent-primary"
+        value={percent}
+        max={100}
+      />
+    </div>
+  );
+}
+
 export function ServerUpdateProgress({
   state,
 }: {
@@ -247,12 +276,16 @@ export function ServerUpdateProgress({
       </div>
     );
   }
-  return (
-    <div className="mt-1 flex items-center gap-2 text-xs font-medium text-foreground">
-      <span className="size-1.5 shrink-0 rounded-full bg-foreground" aria-hidden="true" />
-      <span>{serverUpdateStageLabel(state.stage)}</span>
-    </div>
-  );
+  if (state.stage === "downloading") {
+    return (
+      <UpdateDownloadProgress
+        label="服务端更新下载进度"
+        detail={serverUpdateStageLabel(state.stage)}
+        percent={serverUpdateDownloadPercent(state)}
+      />
+    );
+  }
+  return <div role="status">{serverUpdateStageLabel(state.stage)}</div>;
 }
 
 /** client-runtime owns self-updates so unmounting during reconnect preserves operation state. */
@@ -269,7 +302,8 @@ export function ServerUpdateAction({
   size = "xs",
   className,
   appearance = "button",
-}: ServerUpdateTarget & UpdateButtonProps) {
+  confirmServerRestart = false,
+}: ServerUpdateTarget & UpdateButtonProps & { readonly confirmServerRestart?: boolean }) {
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
   const serverVersion = useServerConfigs().get(environmentId)?.environment.serverVersion;
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
@@ -305,13 +339,14 @@ export function ServerUpdateAction({
     ) {
       return;
     }
-    if (isDesktopAppUpdate) {
-      const confirmed =
-        (await requestConfirmDialog(
-          `Update the T3 Code desktop app that runs the ${serverLabel}? It will close and relaunch on that machine.`,
-          { initialFocus: "confirm" },
-        )) ?? true;
-      if (!confirmed) {
+    if (isDesktopAppUpdate || confirmServerRestart) {
+      const confirmed = await requestConfirmDialog(
+        isDesktopAppUpdate
+          ? `更新 ${serverLabel} 上的 T3 Code 桌面应用至 ${targetVersion}？该机器上的应用将关闭并重新启动。`
+          : `更新 ${serverLabel} 的服务端至 ${targetVersion}？服务端会重启并重新连接。正在运行的会话可能会中断。`,
+        { initialFocus: "cancel" },
+      );
+      if (!(confirmed ?? !confirmServerRestart)) {
         return;
       }
     }

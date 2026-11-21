@@ -317,7 +317,7 @@ export function AttachmentFilePreview(props: {
           <ChatMarkdown
             text={maskMarkdownFrontmatter(content.text)}
             cwd={undefined}
-            className="mx-auto max-w-4xl px-6 py-5"
+            className="file-markdown-preview mx-auto max-w-4xl px-6 py-5"
           />
         </ScrollArea>
       ) : (

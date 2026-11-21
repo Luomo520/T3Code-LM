@@ -10,7 +10,7 @@ export interface AppUpdateDownload {
   readonly fileName: string;
   readonly bytesDownloaded?: number;
   readonly totalBytes?: number;
-  readonly reason?: number;
+  readonly error?: string;
 }
 
 interface NativeAppUpdates {
@@ -44,7 +44,7 @@ export async function enqueueAppUpdate(asset: AndroidUpdateAsset, allowMetered: 
       !(await PermissionsAndroid.check(permission)) &&
       (await PermissionsAndroid.request(permission)) !== PermissionsAndroid.RESULTS.GRANTED
     ) {
-      throw new Error("下载 APK 到 Download/T3Code 需要存储权限，请允许后重试。");
+      throw new Error("下载 APK 到 Download/t3code 需要存储权限，请允许后重试。");
     }
   }
   return native.enqueueAppUpdateDownload(

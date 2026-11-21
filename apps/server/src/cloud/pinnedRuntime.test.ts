@@ -168,15 +168,20 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         httpClient: client,
         runner: extractingRunner(fs, path),
         validate: () => Effect.die("must not validate an interrupted archive"),
-        onProgress: (event) => {
-          progress.push(event);
-          if (event.stage === "download" && event.received === 4)
-            Deferred.doneUnsafe(firstChunk, Effect.void);
-        },
+        onProgress: (event) =>
+          Effect.sync(() => {
+            progress.push(event);
+            if (event.stage === "download" && event.received === 4)
+              Deferred.doneUnsafe(firstChunk, Effect.void);
+          }),
       }).pipe(Effect.forkScoped);
       yield* Deferred.await(firstChunk);
       yield* Fiber.interrupt(install);
-      assert.deepEqual(progress.at(-1), { stage: "download", received: 4, total: undefined });
+      assert.deepEqual(progress.at(-1), {
+        stage: "download",
+        received: 4,
+        total: archiveBytes.byteLength,
+      });
       assert.isTrue(progress.every((event) => event.stage === "download"));
       assert.isTrue(cancelled);
       assert.deepEqual(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions")), []);

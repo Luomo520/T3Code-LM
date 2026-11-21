@@ -1934,6 +1934,15 @@ code {
   list-style-type: disc;
 }
 
+.file-markdown-preview.chat-markdown :is(h1, h2),
+.file-markdown-preview.chat-markdown ol > li::marker {
+  color: var(--info-foreground);
+}
+
+.file-markdown-preview.chat-markdown ol > li::marker {
+  font-weight: 600;
+}
+
 /* Outside markers paint past the padding box, so the gutter must fit `0. `,
    measured per font in appearanceFonts. ChatMarkdown widens it inline for
    multi-digit markers; setting it here stops a nested ol inheriting that. */

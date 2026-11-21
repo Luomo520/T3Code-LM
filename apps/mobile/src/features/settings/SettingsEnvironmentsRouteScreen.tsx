@@ -7,6 +7,8 @@ import { useRef, useState } from "react";
 import { RefreshControl } from "../../components/ui/RefreshControl";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
+import { EnvironmentServerUpdateRows } from "./components/EnvironmentServerUpdateRows";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { CloudEnvironmentRows } from "../connection/CloudEnvironmentRows";
 import { LocalEnvironmentList } from "../connection/LocalEnvironmentList";
@@ -24,6 +26,10 @@ import {
 } from "../showcase/showcaseEnvironmentRows";
 
 const SHOWCASE_ENABLED = process.env.EXPO_PUBLIC_SHOWCASE === "1";
+
+function renderEnvironmentUpdate(environment: ConnectedEnvironmentSummary) {
+  return <EnvironmentServerUpdateRows environment={environment} compact />;
+}
 
 export function SettingsEnvironmentsRouteScreen() {
   const {
@@ -137,6 +143,7 @@ export function SettingsEnvironmentsRouteScreen() {
           onRemove={onRemoveEnvironmentPress}
           onSetEnabled={onSetEnvironmentEnabled}
           onUpdate={handleUpdateEnvironment}
+          renderBelow={renderEnvironmentUpdate}
         />
 
         {/* Keep connected relays visible and removable without cloud config or sign-in; this component gates discovery. */}
@@ -145,6 +152,7 @@ export function SettingsEnvironmentsRouteScreen() {
           onOpenEnvironment={openEnvironment}
           onSetEnvironmentEnabled={onSetEnvironmentEnabled}
           onRemoveEnvironment={onRemoveEnvironmentPress}
+          renderBelow={renderEnvironmentUpdate}
           {...(SHOWCASE_ENABLED
             ? {
                 showcaseAvailableEnvironments: SHOWCASE_AVAILABLE_CLOUD_ENVIRONMENTS,

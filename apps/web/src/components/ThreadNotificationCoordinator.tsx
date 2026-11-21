@@ -170,6 +170,9 @@ export function startThreadNotifications(
         type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",
         title,
         description: thread.title,
+        ...(kind === "completion" && window.desktopBridge?.getClientPlatform?.() === "win32"
+          ? { timeout: 6000 }
+          : {}),
         data: {
           hideCopyButton: true,
           leadingIcon:
@@ -211,8 +214,11 @@ export function startThreadNotifications(
         body: thread.title,
         tag: threadNotificationTag(environmentId, thread.id),
         silent: true,
-        // Windows drops clicks after a toast moves into Notification Center.
-        requireInteraction: kind === "completion" && isWindowsPlatform(navigator.platform),
+        // The PC app uses Windows' normal banner duration, then keeps the unread taskbar badge.
+        requireInteraction:
+          kind === "completion" &&
+          window.desktopBridge === undefined &&
+          isWindowsPlatform(navigator.platform),
       });
       trackNotification(environmentId, thread.id, notification);
       notification.addEventListener("click", () => {

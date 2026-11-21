@@ -43,6 +43,9 @@ const releaseHttpClient = (order: string[], urls: string[], beforeDownload?: Eff
     Effect.gen(function* () {
       urls.push(request.url);
       if (request.url.endsWith("/T3Code-LM-release.json")) {
+        if (!request.url.endsWith("/v1.1.0-1/T3Code-LM-release.json")) {
+          return HttpClientResponse.fromWeb(request, new Response(null, { status: 404 }));
+        }
         const digest = yield* Effect.promise(() => crypto.subtle.digest("SHA-256", archiveBytes));
         const hex = Array.from(new Uint8Array(digest), (byte) =>
           byte.toString(16).padStart(2, "0"),
@@ -180,6 +183,7 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
       options.desktopAppUpdate ?? {
         available: false,
         run: () => Effect.die("unexpected desktop app update run"),
+        commit: () => Effect.die("unexpected desktop app update commit"),
       },
     ),
     Effect.provideService(
@@ -420,6 +424,48 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       expect(order).toEqual(["download", "extract", "preflight"]);
       expect((yield* selfUpdate.update({ targetVersion: "1.1.0-1" })).updateId).toBe("launcher-id");
       expect(order).toEqual(["download", "extract", "preflight", "preflight", "accept"]);
+    }),
+  );
+
+  it.effect("reports actual archive bytes with the manifest total for a chunked download", () =>
+    Effect.gen(function* () {
+      const { selfUpdate } = yield* makeHarness({
+        httpClient: releaseHttpClient([], []).pipe(
+          HttpClient.transform((response, request) =>
+            request.url.endsWith(".tar.gz")
+              ? Effect.succeed(
+                  HttpClientResponse.fromWeb(
+                    request,
+                    new Response(
+                      new ReadableStream({
+                        start(controller) {
+                          controller.enqueue(archiveBytes.slice(0, 4));
+                          controller.enqueue(archiveBytes.slice(4));
+                          controller.close();
+                        },
+                      }),
+                    ),
+                  ),
+                )
+              : response,
+          ),
+        ),
+      });
+      const events = yield* ServerSelfUpdate.updateProgressStream(selfUpdate, {
+        targetVersion: "1.1.0-1",
+      }).pipe(Stream.runCollect);
+      const totalBytes = archiveBytes.byteLength;
+      expect(events).toEqual([
+        { type: "progress", stage: "downloading" },
+        { type: "progress", stage: "downloading", downloadedBytes: 0, totalBytes },
+        { type: "progress", stage: "downloading", downloadedBytes: 4, totalBytes },
+        { type: "progress", stage: "downloading", downloadedBytes: totalBytes, totalBytes },
+        { type: "progress", stage: "installing" },
+        {
+          type: "complete",
+          result: { targetVersion: "1.1.0-1", method: "boot-service", updateId: "launcher-id" },
+        },
+      ]);
     }),
   );
 

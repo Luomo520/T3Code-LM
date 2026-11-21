@@ -120,7 +120,7 @@ interface PinnedRuntimeInstallInput {
   readonly releaseBaseUrl?: string | undefined;
   /** Reuse a cached runtime only while the release source still lists it, as a policy mirror does. */
   readonly requirePublishedRelease?: boolean;
-  readonly onProgress?: (progress: PinnedRuntimeProgress) => void;
+  readonly onProgress?: (progress: PinnedRuntimeProgress) => Effect.Effect<void>;
 }
 
 // GitHub release downloads intermittently answer 5xx during incidents; a retry usually lands.
@@ -141,7 +141,8 @@ const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(
   httpClient: HttpClient.HttpClient,
   url: string,
   step: string,
-  onProgress?: (progress: PinnedRuntimeProgress) => void,
+  onProgress: (progress: PinnedRuntimeProgress) => Effect.Effect<void> = () => Effect.void,
+  expectedSize?: number,
 ) {
   // Bound stalls while holding the install lock, but allow transfers that keep
   // receiving bytes to finish regardless of their total duration.
@@ -151,24 +152,23 @@ const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(
     Effect.flatMap(
       Effect.fn(function* (response) {
         const length = Number(response.headers["content-length"]);
-        const total = Number.isFinite(length) && length > 0 ? length : undefined;
+        const total =
+          expectedSize ?? (Number.isSafeInteger(length) && length > 0 ? length : undefined);
         let received = 0;
-        onProgress?.({ stage: "download", received, total });
+        yield* onProgress({ stage: "download", received, total });
         const chunks = yield* response.stream.pipe(
           Stream.timeoutOrElse({
             duration: PINNED_RUNTIME_DOWNLOAD_STALL_TIMEOUT,
             orElse: () => Stream.fail(new Cause.TimeoutError()),
           }),
-          Stream.tap((chunk) =>
-            Effect.sync(() => {
-              received += chunk.byteLength;
-              onProgress?.({ stage: "download", received, total });
-            }),
-          ),
+          Stream.tap((chunk) => {
+            received += chunk.byteLength;
+            return onProgress({ stage: "download", received, total });
+          }),
           Stream.runCollect,
         );
         if (total === undefined && received > 0) {
-          onProgress?.({ stage: "download", received, total: received });
+          yield* onProgress({ stage: "download", received, total: received });
         }
         const bytes = new Uint8Array(received);
         let offset = 0;
@@ -209,15 +209,16 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
     });
   }
   const httpClient = input.httpClient;
-  input.onProgress?.({ stage: "download", received: 0, total: undefined });
+  yield* input.onProgress?.({ stage: "download", received: 0, total: undefined }) ?? Effect.void;
   const { fileName, expected, sizeBytes } = yield* publishedArchive(input, platformKey);
   const archive = yield* fetchReleaseAsset(
     httpClient,
     cliReleaseAssetUrl(input.version, fileName, input.releaseBaseUrl),
     "downloading the t3 release archive",
     input.onProgress,
+    sizeBytes,
   );
-  input.onProgress?.({ stage: "verify" });
+  yield* input.onProgress?.({ stage: "verify" }) ?? Effect.void;
   if (sizeBytes !== undefined && archive.byteLength !== sizeBytes) {
     return yield* new PinnedRuntimeInstallError({ step: "verifying the t3 release archive size" });
   }
@@ -240,7 +241,7 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
         (cause) => new PinnedRuntimeInstallError({ step: "writing the t3 release archive", cause }),
       ),
     );
-  input.onProgress?.({ stage: "extract" });
+  yield* input.onProgress?.({ stage: "extract" }) ?? Effect.void;
   const extractStep = "extracting the t3 release archive";
   // Strip the archive's stem directory so the executable lands at <versionDir>/t3.
   yield* input.runner
@@ -354,7 +355,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
       }
       yield* publishedArchive(input, platformKey);
     }
-    input.onProgress?.({ stage: "cached" });
+    yield* input.onProgress?.({ stage: "cached" }) ?? Effect.void;
     yield* input.validate(paths);
     return paths;
   }
@@ -403,7 +404,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
   return yield* Effect.gen(function* () {
     yield* installFromArchive(input, stagingDir);
 
-    input.onProgress?.({ stage: "validate" });
+    yield* input.onProgress?.({ stage: "validate" }) ?? Effect.void;
     yield* input.validate(stagingPaths);
     yield* fs
       .writeFileString(stagingPaths.sentinelPath, `${input.version}\n`)

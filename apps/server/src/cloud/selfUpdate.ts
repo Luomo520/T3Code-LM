@@ -3,12 +3,14 @@ import {
   ServerSelfUpdateError,
   ServerRestartError,
   type ServerSelfUpdateCapability,
+  type ServerSelfUpdateDownloadProgress,
   type ServerSelfUpdateInput,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateProgressStage,
   type ServerSelfUpdateResult,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -44,6 +46,7 @@ import {
   pinnedRuntimePaths,
   PinnedRuntimePreflightBlockedError,
   prunePinnedRuntimes,
+  type PinnedRuntimeProgress,
 } from "./pinnedRuntime.ts";
 import { bootServiceProgramOf, bootServiceUnitPath } from "./bootService.ts";
 import { decodeServicePreflightResult } from "./servicePreflight.ts";
@@ -52,6 +55,7 @@ import { isExactServiceVersion } from "./serviceProtocol.ts";
 
 // A staged runtime's cold start can take over a minute on a loaded, swapping host.
 const PREFLIGHT_TIMEOUT = Duration.minutes(3);
+const DOWNLOAD_PROGRESS_INTERVAL_MS = 250;
 
 export function resolveServerSelfUpdateCapability(input: {
   readonly desktopManaged: boolean;
@@ -72,6 +76,7 @@ export class ServerSelfUpdate extends Context.Service<
       input: ServerSelfUpdateInput,
       reportProgress?: (
         stage: ServerSelfUpdateProgressStage,
+        download?: ServerSelfUpdateDownloadProgress,
       ) => Effect.Effect<void, ServerSelfUpdateError>,
       onHandoffAccepted?: () => Effect.Effect<void>,
     ) => Effect.Effect<ServerSelfUpdateResult, ServerSelfUpdateError>;
@@ -183,7 +188,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
 
   const update: ServerSelfUpdate["Service"]["update"] = Effect.fn(
     "cloud.server_self_update.update",
-  )(function* (input, reportProgress = () => Effect.void, onHandoffAccepted = () => Effect.void) {
+  )(function* (input, reportProgress, onHandoffAccepted = () => Effect.void) {
     const policyRefusal = managedUpdateRefusal(
       policy.document,
       capability === "boot-service" ? cliReleaseChannelOf(input.targetVersion.trim()) : undefined,
@@ -199,7 +204,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
           return yield* failWith("A server update or restart is already in progress.");
         return yield* desktopAppUpdate
           .run(
-            reportProgress,
+            reportProgress ?? (() => Effect.void),
             input.channel === undefined
               ? undefined
               : { channel: input.channel, targetVersion: input.targetVersion },
@@ -228,8 +233,38 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
       return yield* failWith("A server update or restart is already in progress.");
     }
 
+    let lastBytes = 0;
+    let lastTotal: number | undefined;
+    let lastReportAt = -Infinity;
+    const reportArchiveProgress = Effect.fn("ServerSelfUpdate.reportArchiveProgress")(function* (
+      progress: PinnedRuntimeProgress,
+    ) {
+      if (reportProgress === undefined || progress.stage !== "download") return;
+      const { received, total } = progress;
+      if (received === lastBytes && total === lastTotal) return;
+      const now = yield* Clock.currentTimeMillis;
+      // Deliver the first chunk, the final chunk and resets immediately. A large download can
+      // otherwise enqueue thousands of intermediate socket events in a single second.
+      if (
+        lastBytes > 0 &&
+        received > lastBytes &&
+        total === lastTotal &&
+        received !== total &&
+        now - lastReportAt < DOWNLOAD_PROGRESS_INTERVAL_MS
+      ) {
+        return;
+      }
+      lastBytes = received;
+      lastTotal = total;
+      lastReportAt = now;
+      yield* reportProgress("downloading", {
+        downloadedBytes: received,
+        ...(total === undefined ? {} : { totalBytes: total }),
+      }).pipe(Effect.ignore);
+    });
+
     return yield* Effect.gen(function* () {
-      yield* reportProgress("downloading");
+      yield* reportProgress?.("downloading") ?? Effect.void;
       const paths = yield* ensurePinnedRuntimeInstalled({
         baseDir: serverConfig.baseDir,
         version: targetVersion,
@@ -241,6 +276,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         arch,
         releaseBaseUrl,
         requirePublishedRelease: mirror !== undefined,
+        ...(reportProgress === undefined ? {} : { onProgress: reportArchiveProgress }),
         validate: (runtime) =>
           runner
             .run({
@@ -338,7 +374,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         yield* Ref.set(inFlight, false);
         return { targetVersion, method: "boot-service" as const };
       }
-      yield* reportProgress("installing");
+      yield* reportProgress?.("installing") ?? Effect.void;
       const updateId = yield* Effect.uninterruptible(
         launcher.requestUpdate({ targetVersion, dbPath: serverConfig.dbPath }).pipe(
           Effect.mapError((error) =>
@@ -404,7 +440,7 @@ export const updateProgressStream = (
       Queue.offer(queue, event).pipe(Effect.ignore);
 
     return selfUpdate
-      .update(input, (stage) => offer({ type: "progress", stage }))
+      .update(input, (stage, download) => offer({ type: "progress", stage, ...download }))
       .pipe(
         Effect.flatMap((result) => offer({ type: "complete", result })),
         Effect.catchTags({

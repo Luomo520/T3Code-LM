@@ -35,20 +35,36 @@ describe("home time and project views", () => {
       ),
     ).toEqual(["home-project:0:two", "b", "home-project:0:one"]);
   });
-  it("orders across former lifecycle boundaries without giving pinned rows priority", () => {
+  it("keeps the supplied pin order ahead of newer conversations, including history", () => {
     const items = [
       ...rows,
-      { key: "settled", project: "", time: 0 },
-      { key: "old", project: "one", time: 9 },
+      { key: "second-pin", project: "one", time: 9 },
+      { key: "settled", project: "one", time: 8 },
     ];
     expect(
       arrangeHomeList({
         rows: items,
-        describe: (r) => (r.key === "settled" ? null : { ...describe(r), pinned: r.key === "a" }),
+        describe: (r) => ({ ...describe(r), pinned: r.key === "a" || r.key === "second-pin" }),
         mode: "time",
         collapsed: new Set(),
       }).map((r) => r.key),
-    ).toEqual(["settled", "old", "b", "c", "a"]);
+    ).toEqual(["a", "second-pin", "settled", "b", "c"]);
+    expect(
+      arrangeHomeList({
+        rows: items,
+        describe: (r) => ({ ...describe(r), pinned: r.key === "second-pin" }),
+        mode: "time",
+        collapsed: new Set(),
+      }).map((r) => r.key),
+    ).toEqual(["second-pin", "settled", "b", "c", "a"]);
+    expect(
+      arrangeHomeList({
+        rows: items.filter((row) => row.project === "two"),
+        describe,
+        mode: "time",
+        collapsed: new Set(),
+      }).map((r) => r.key),
+    ).toEqual(["b"]);
   });
   it("uses conversation time rather than metadata or run time and tolerates old backends", () => {
     expect(

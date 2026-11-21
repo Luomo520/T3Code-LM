@@ -33,16 +33,20 @@ export function arrangeHomeList<T extends { readonly key: string }>(input: {
   ) => { projectKey: string; title: string; timestamp: number; pinned: boolean } | null;
 }): Array<T | ProjectHeading> {
   const result: Array<T | ProjectHeading> = [];
+  const pinnedRows: T[] = [];
   const conversations: Array<{ row: T; info: NonNullable<ReturnType<typeof input.describe>> }> = [];
   for (const row of input.rows) {
     const info = input.describe(row);
-    if (info) conversations.push({ row, info });
-    else result.push(row);
+    if (!info) result.push(row);
+    else if (input.mode === "time" && info.pinned) {
+      // The thread list already applies persisted and pending pin order.
+      pinnedRows.push(row);
+    } else conversations.push({ row, info });
   }
   const sorted = conversations.sort(
     (a, b) => b.info.timestamp - a.info.timestamp || a.row.key.localeCompare(b.row.key),
   );
-  if (input.mode === "time") result.push(...sorted.map((item) => item.row));
+  if (input.mode === "time") result.push(...pinnedRows, ...sorted.map((item) => item.row));
   else {
     const groups = new Map<string, typeof sorted>();
     for (const item of sorted) {

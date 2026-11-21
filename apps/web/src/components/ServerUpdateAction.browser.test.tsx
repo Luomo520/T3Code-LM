@@ -60,6 +60,7 @@ import { resetConfirmDialogForTests } from "~/confirmDialog";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import {
   ServerUpdateAction,
+  ServerUpdateProgress,
   ServerUpdatesAction,
   type ServerUpdateTarget,
 } from "./ServerUpdateAction";
@@ -130,6 +131,30 @@ function renderAction(props: Partial<Parameters<typeof ServerUpdateAction>[0]> =
     />,
   );
 }
+
+describe("ServerUpdateProgress", () => {
+  const state = {
+    status: "running",
+    stage: "downloading",
+    fromVersion: "0.1.0-1",
+    targetVersion: "0.1.0-4",
+  } as const;
+
+  it("displays the selected host's downloaded bytes as a percentage", async () => {
+    const screen = await renderUpdate(
+      <ServerUpdateProgress state={{ ...state, downloadedBytes: 25, totalBytes: 100 }} />,
+    );
+    const bar = screen.container.querySelector("progress");
+    expect(bar?.getAttribute("aria-label")).toBe("服务端更新下载进度");
+    expect(bar?.value).toBe(25);
+    expect(screen.container.textContent).toContain("25%");
+  });
+
+  it("renders an indeterminate bar for a host that only reports stages", async () => {
+    const screen = await renderUpdate(<ServerUpdateProgress state={state} />);
+    expect(screen.container.querySelector("progress")?.hasAttribute("value")).toBe(false);
+  });
+});
 
 describe("ServerUpdateAction", () => {
   it.each([

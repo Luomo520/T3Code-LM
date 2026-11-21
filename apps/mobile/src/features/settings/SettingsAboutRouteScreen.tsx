@@ -15,15 +15,21 @@ import {
   registerHiddenUpdateTap,
   runAppUpdateCheck,
 } from "../updates/app-updates";
+import { useWorkspaceEnvironments } from "../../state/workspace";
+import { AndroidAppUpdateSection } from "./components/AndroidAppUpdateSection";
+import { EnvironmentServerUpdateRows } from "./components/EnvironmentServerUpdateRows";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsScreen } from "./components/SettingsScreen";
 
 export function SettingsAboutRouteScreen() {
   const insets = useSafeAreaInsets();
+  const connectedEnvironments = useWorkspaceEnvironments().filter(
+    (environment) => environment.isEnabled,
+  );
 
   return (
-    <SettingsScreen title="About">
+    <SettingsScreen title="关于">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -32,6 +38,17 @@ export function SettingsAboutRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         <AppSettingsSection />
+        <AndroidAppUpdateSection />
+        {connectedEnvironments.length > 0 ? (
+          <SettingsSection title="服务端">
+            {connectedEnvironments.map((environment) => (
+              <EnvironmentServerUpdateRows
+                key={environment.environmentId}
+                environment={environment}
+              />
+            ))}
+          </SettingsSection>
+        ) : null}
       </ScrollView>
     </SettingsScreen>
   );
@@ -122,11 +139,7 @@ function AppSettingsSection() {
     <SettingsSection title="应用">
       <SettingsRow icon="internaldrive" label="客户端存储" target="SettingsClientStorage" />
       <SettingsRow icon="stethoscope" label="诊断" target="SettingsDiagnostics" />
-      <SettingsRow
-        icon="doc.on.doc"
-        label="开源许可证"
-        target="SettingsOpenSourceLicenses"
-      />
+      <SettingsRow icon="doc.on.doc" label="开源许可证" target="SettingsOpenSourceLicenses" />
       <SettingsRow icon="doc.text" label="法律信息" fullScreenTarget="SettingsLegal" />
       {updateCheckAvailable ? (
         <Pressable

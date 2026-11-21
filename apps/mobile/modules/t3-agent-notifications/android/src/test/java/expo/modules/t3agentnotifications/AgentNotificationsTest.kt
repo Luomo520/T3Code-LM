@@ -71,6 +71,25 @@ abstract class AgentNotificationsFixture {
 @Config(sdk = [24, 26, 33, 36], manifest = Config.NONE)
 class AgentNotificationsTest : AgentNotificationsFixture() {
   @Test
+  fun replayedLocalCompletionDoesNotAlertAgainAfterDismissal() {
+    val path = "/threads/environment/thread"
+    AgentNotifications.postTaskCompletion(context, "t3code-dev", path, "run-one", "Test thread", false)
+    val completion = manager.activeNotifications.single()
+    assertEquals("任务已完成", completion.notification.extras.getString(Notification.EXTRA_TITLE))
+    assertEquals("Test thread", completion.notification.extras.getString(Notification.EXTRA_TEXT))
+    manager.cancel(completion.tag, completion.id)
+
+    AgentNotifications.postTaskCompletion(context, "t3code-dev", path, "run-one", "Renamed", false)
+    assertTrue(manager.activeNotifications.isEmpty())
+
+    AgentNotifications.postTaskCompletion(context, "t3code-dev", path, "run-two", "Renamed", true)
+    assertEquals(
+      "任务失败",
+      manager.activeNotifications.single().notification.extras.getString(Notification.EXTRA_TITLE)
+    )
+  }
+
+  @Test
   fun alertHistoryEvictsOnlyTheOldestEntryAfterCapacity() {
     lifecycle.currentState = Lifecycle.State.RESUMED
     for (id in 0..64) AgentNotifications.receive(context, update("alert-$id", false))

@@ -6,8 +6,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { autoUpdater } from "electron-updater";
+import { NsisUpdater, autoUpdater } from "electron-updater";
 import type * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
 import { vi } from "vite-plus/test";
 
@@ -45,6 +46,57 @@ const childProcess = NodeModule.createRequire(import.meta.url)("node:child_proce
     options: NodeChildProcess.SpawnOptions,
   ) => NodeChildProcess.ChildProcess;
 };
+
+it.live("hands the verified Windows download to the existing NSIS install cache", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-nsis-download-" });
+    const updater = new NsisUpdater();
+    updater.logger = null;
+    updater.autoInstallOnAppQuit = false;
+    const installer = "installer fixture";
+    const url = new URL("https://example.test/update.exe");
+    Object.assign(updater, {
+      app: { name: "T3 Code", baseCachePath: directory },
+      configOnDisk: {
+        value: Promise.resolve({ publisherName: "Publisher", updaterCacheDirName: "cache" }),
+      },
+      updateInfoAndProvider: {
+        info: { version: "1.0.1", files: [{ url: "update.exe" }] },
+        provider: {
+          fileExtraDownloadHeaders: null,
+          resolveFiles: () => [
+            {
+              url,
+              info: {
+                url: "update.exe",
+                sha512: NodeCrypto.createHash("sha512").update(installer).digest("base64"),
+              },
+            },
+          ],
+        },
+      },
+    });
+    Object.defineProperty(updater, "netSession", {
+      value: {
+        fetch: async () =>
+          new Response(installer, { headers: { "content-length": String(installer.length) } }),
+      },
+    });
+    const verify = vi.fn().mockResolvedValue(null);
+    updater.verifyUpdateCodeSignature = verify;
+    const progress: number[] = [];
+    const downloaded: string[] = [];
+    updater.on("download-progress", (event) => progress.push(event.percent));
+    updater.on("update-downloaded", (event) => downloaded.push(event.downloadedFile));
+    const [path] = yield* Effect.promise(() => ElectronUpdater.downloadWindowsInstaller(updater));
+    assert.isDefined(path);
+    assert.deepEqual(downloaded, [path]);
+    assert.deepEqual(progress, [0, 100]);
+    assert.deepEqual(verify.mock.calls[0]?.[0], ["Publisher"]);
+    assert.equal(yield* fileSystem.readFileString(path!), installer);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
   "ElectronUpdater AppImage install",

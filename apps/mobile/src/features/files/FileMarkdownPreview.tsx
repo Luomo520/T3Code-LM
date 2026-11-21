@@ -254,7 +254,10 @@ export function FileMarkdownPreview(props: {
           renderImage={renderImage}
           resolveImageSource={resolveImageSource}
           onImagePress={onImagePress}
-          textStyle={styles.nativeTextStyle}
+          textStyle={{
+            ...styles.nativeTextStyle,
+            documentAccentColor: styles.nativeTextStyle.linkColor,
+          }}
         />
         <FilePreviewModal source={expandedFile} onRequestClose={() => setExpandedFile(null)} />
         <VideoPreviewModal source={expandedVideo} onRequestClose={() => setExpandedVideo(null)} />

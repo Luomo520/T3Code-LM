@@ -10,6 +10,7 @@ export function FileDownloadFallback(props: {
   readonly sizeBytes?: number;
   readonly reason?: string;
   readonly downloading: boolean;
+  readonly downloadLabel: string;
   readonly onDownload?: () => void;
   readonly onRetry?: () => void;
 }) {
@@ -36,7 +37,7 @@ export function FileDownloadFallback(props: {
         <View className="flex-row flex-wrap gap-3">
           {props.onDownload ? (
             <Button
-              label={props.downloading ? "正在准备…" : "下载"}
+              label={props.downloadLabel}
               tone="primary"
               icon="arrow.down.circle"
               loading={props.downloading}
@@ -52,7 +53,7 @@ export function FileDownloadFallback(props: {
         </View>
         {props.onDownload ? (
           <AppText className="text-sm text-foreground-muted">
-            保存到 Download/T3Code；大文件仅支持局域网下载。
+            保存到 Download/t3code；大文件仅支持局域网下载。
           </AppText>
         ) : null}
       </View>

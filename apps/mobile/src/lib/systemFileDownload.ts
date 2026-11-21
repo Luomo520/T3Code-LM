@@ -1,18 +1,27 @@
 import { requireOptionalNativeModule } from "expo";
 import { PermissionsAndroid, Platform } from "react-native";
 
+export interface FileDownload {
+  readonly status: "pending" | "downloading" | "paused" | "downloaded" | "failed" | "cancelled";
+  readonly bytesDownloaded: number;
+  readonly totalBytes?: number;
+  readonly error?: string;
+}
+
 interface NativeDownloads {
-  enqueueFileDownload?: (url: string, name: string) => Promise<string>;
-  showFileDownloads?: () => Promise<void>;
+  enqueueFileDownload: (url: string, name: string) => Promise<string>;
+  getFileDownload: (id: string) => Promise<FileDownload | null>;
+  cancelFileDownload: (id: string) => Promise<void>;
+  showFileDownloads: () => Promise<void>;
 }
 function nativeDownloads(): NativeDownloads {
   const module = requireOptionalNativeModule<NativeDownloads>("T3NativeControls");
-  if (!module?.enqueueFileDownload)
-    throw new Error("当前 App 不支持系统下载，请安装包含下载功能的新 APK。");
+  if (Platform.OS !== "android" || !module?.getFileDownload)
+    throw new Error("当前 App 不支持内置下载，请安装新版 APK。");
   return module;
 }
-export async function enqueueSystemFileDownload(url: string, name: string): Promise<string> {
-  if (Platform.OS !== "android") throw new Error("此下载方式仅支持安卓。");
+export async function enqueueFileDownload(url: string, name: string): Promise<string> {
+  const native = nativeDownloads();
   const response = await fetch(url, { method: "HEAD", cache: "no-store" });
   if (!response.ok) {
     throw new Error(
@@ -29,11 +38,11 @@ export async function enqueueSystemFileDownload(url: string, name: string): Prom
       !(await PermissionsAndroid.check(permission)) &&
       (await PermissionsAndroid.request(permission)) !== PermissionsAndroid.RESULTS.GRANTED
     ) {
-      throw new Error("保存到 Download/T3Code 需要存储权限，请允许后重试。");
+      throw new Error("保存到 Download/t3code 需要存储权限，请允许后重试。");
     }
   }
-  return nativeDownloads().enqueueFileDownload!(url, name);
+  return native.enqueueFileDownload(url, name);
 }
-export async function showSystemFileDownloads(): Promise<void> {
-  await nativeDownloads().showFileDownloads?.();
-}
+export const readFileDownload = (id: string) => nativeDownloads().getFileDownload(id);
+export const cancelFileDownload = (id: string) => nativeDownloads().cancelFileDownload(id);
+export const showDownloadedFiles = () => nativeDownloads().showFileDownloads();

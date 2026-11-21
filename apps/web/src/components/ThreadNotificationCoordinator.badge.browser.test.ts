@@ -279,18 +279,35 @@ it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
   },
 );
 
-it("presents completion notifications and sound as soon as the shell completes", async () => {
+it("presents an automatically dismissed PC completion with a link to its thread", async () => {
   await using app = setup();
+  using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+  const revealWindow = vi.fn().mockResolvedValue(undefined);
+  using _bridge = stubGlobal("desktopBridge", {
+    getClientPlatform: () => "win32",
+    onNotificationBadgeClear: () => () => {},
+    revealWindow,
+  });
   state.mode = "notifications-and-sound";
   app.start();
-  state.shells.set(
-    "one",
-    shell({
-      latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:00:01.000Z" },
-    }),
-  );
+  const completed = shell({
+    latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:00:01.000Z" },
+  });
+  state.shells.set("one", completed);
   expect(TestNotification.sent.map((sent) => sent.title)).toEqual(["Thread completed"]);
+  const notification = TestNotification.sent[0]!;
+  expect(notification.options.requireInteraction).toBe(false);
+  notification.dispatchEvent(new Event("close"));
+  expect(state.badge).toHaveBeenLastCalledWith(1);
   expect(state.sound).toHaveBeenCalledWith("completion", expect.any(Function));
+  state.shells.set("two", completed);
+  expect(state.badge).toHaveBeenLastCalledWith(2);
+  TestNotification.sent[1]!.dispatchEvent(new Event("click"));
+  expect(revealWindow).toHaveBeenCalled();
+  expect(state.navigate).toHaveBeenCalledWith({
+    to: "/$environmentId/$threadId",
+    params: { environmentId: "two", threadId: "thread" },
+  });
 });
 
 it.each([false, true])(

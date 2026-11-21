@@ -1,8 +1,10 @@
+import { useIsFocused } from "@react-navigation/native";
 import { nativeApplicationVersion, nativeBuildVersion } from "expo-application";
 import { supportedCpuArchitectures } from "expo-device";
 import * as Network from "expo-network";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Platform } from "react-native";
+import { AppState, Platform, View } from "react-native";
+import { Progress } from "../../../components/ui/Progress";
 
 import * as Dialog from "../../../components/ui/Dialog";
 import { ListActionRow } from "../../../components/ui/ListActionRow";
@@ -13,7 +15,7 @@ import {
   readAppUpdateDownload,
   type AppUpdateDownload,
 } from "../../../lib/systemAppUpdate";
-import { showSystemFileDownloads } from "../../../lib/systemFileDownload";
+import { showDownloadedFiles } from "../../../lib/systemFileDownload";
 import {
   findAndroidAppUpdate,
   requiresMobileDownloadConfirmation,
@@ -28,23 +30,24 @@ const sizeLabel = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 function taskDescription(task: AppUpdateDownload): string {
   switch (task.status) {
     case "downloaded":
-      return "已下载；点击校验并交给系统安装。";
+      return "已下载，可校验并安装。";
     case "failed":
-      return "系统下载失败，可查看详情或取消后重新下载。";
+      return task.error ?? "下载失败，可取消后重新下载。";
     case "missing":
       return "下载任务已不存在，请取消后重新下载。";
     case "paused":
-      return "系统下载已暂停；等待网络或查看系统下载。";
+      return "下载已暂停，等待网络恢复。";
     case "pending":
-      return "等待系统开始下载，切到后台后仍会继续。";
+      return "等待开始下载，切到后台后仍会继续。";
     case "downloading":
       return task.totalBytes && task.totalBytes > 0
-        ? `${sizeLabel(task.bytesDownloaded ?? 0)} / ${sizeLabel(task.totalBytes)} · 由系统后台下载`
-        : "正在由系统后台下载。";
+        ? `${sizeLabel(task.bytesDownloaded ?? 0)} / ${sizeLabel(task.totalBytes)}`
+        : "正在后台下载。";
   }
 }
 
 export function AndroidAppUpdateSection() {
+  const focused = useIsFocused();
   const [checking, setChecking] = useState(false);
   const [working, setWorking] = useState(false);
   const [asset, setAsset] = useState<AndroidUpdateAsset | null>(null);
@@ -52,17 +55,25 @@ export function AndroidAppUpdateSection() {
   const [notice, setNotice] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
   const mounted = useRef(true);
+  const readGeneration = useRef(0);
   const busy = useRef(false);
+  const activeTask =
+    task?.status === "pending" || task?.status === "downloading" || task?.status === "paused";
+  const fraction =
+    task?.totalBytes && task.totalBytes > 0
+      ? Math.max(0, Math.min(1, (task.bytesDownloaded ?? 0) / task.totalBytes))
+      : undefined;
 
   const refreshTask = useCallback(async () => {
+    const generation = ++readGeneration.current;
     try {
       const value = await readAppUpdateDownload();
-      if (mounted.current) setTask(value);
+      if (mounted.current && generation === readGeneration.current) setTask(value);
     } catch (error) {
-      if (mounted.current) setNotice(messageOf(error));
+      if (mounted.current && generation === readGeneration.current) setNotice(messageOf(error));
     }
   }, []);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- restores the system-owned DownloadManager task on mount and after Android resumes the App.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the native download task on mount and when Android resumes the app.
   useEffect(() => {
     mounted.current = true;
     if (Platform.OS !== "android") return;
@@ -77,6 +88,22 @@ export function AndroidAppUpdateSection() {
       subscription.remove();
     };
   }, [refreshTask]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls persisted native download progress while this screen is visible.
+  useEffect(() => {
+    if (!activeTask || !focused) return;
+    let reading = false;
+    const timer = setInterval(async () => {
+      if (AppState.currentState !== "active" || busy.current || reading) return;
+      reading = true;
+      try {
+        await refreshTask();
+      } finally {
+        reading = false;
+      }
+    }, 750);
+    return () => clearInterval(timer);
+  }, [activeTask, focused]);
 
   if (Platform.OS !== "android") return null;
 
@@ -155,8 +182,8 @@ export function AndroidAppUpdateSection() {
 
   return (
     <SettingsSection
-      title="App 更新"
-      footer={notice ?? "下载到 Download/T3Code，安装由系统确认。不会更新已连接的服务端。"}
+      title="更新 App"
+      footer={notice ?? "更新包保存到 Download/t3code，下载完成后可确认安装。"}
     >
       <ListActionRow
         icon="arrow.clockwise"
@@ -185,18 +212,32 @@ export function AndroidAppUpdateSection() {
           <ListActionRow
             icon={task.status === "downloaded" ? "checkmark.circle" : "arrow.clockwise"}
             label={task.status === "downloaded" ? "校验并安装" : "刷新下载状态"}
-            description={`${task.version} · ${taskDescription(task)}`}
+            description={[
+              task.version,
+              taskDescription(task),
+              activeTask && fraction !== undefined ? `${Math.floor(fraction * 100)}%` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
             loading={working}
             disabled={checking}
             onPress={() => {
               void run(task.status === "downloaded" ? openAppUpdateInstaller : refreshTask);
             }}
           />
+          {activeTask ? (
+            <View className="px-4 pb-3">
+              <Progress
+                label="App 更新下载进度"
+                {...(fraction === undefined ? {} : { value: fraction })}
+              />
+            </View>
+          ) : null}
           <ListActionRow
             icon="arrow.down.circle"
-            label="查看系统下载"
+            label="查看下载文件"
             onPress={() => {
-              void run(showSystemFileDownloads);
+              void run(showDownloadedFiles);
             }}
             disabled={working || checking}
           />

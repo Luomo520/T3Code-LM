@@ -1,21 +1,13 @@
-import * as Dialog from "../../components/ui/Dialog";
-import { useAtom, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
-  managedUpdatesDenial,
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
-import {
-  executeAtomQuery,
-  settlePromise,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { sessionPermissionsUnavailableMessage } from "@t3tools/shared/authScopeOptions";
-import * as Cause from "effect/Cause";
-import * as Exit from "effect/Exit";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
 import { Linking, View } from "react-native";
@@ -24,7 +16,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
-import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { environmentSession, useEnvironmentScope, readEnvironmentScope } from "../../state/session";
@@ -33,17 +24,12 @@ import { useRemoteConnections } from "../../state/use-remote-environment-registr
 import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
 import { EnvironmentRoutesSection } from "./EnvironmentRoutesSection";
 import { OutdatedServerUpdateSection } from "./OutdatedServerUpdateSection";
+import { EnvironmentServerUpdateRows } from "./components/EnvironmentServerUpdateRows";
 import { HeaderUsageSettings } from "../usage/HeaderUsageSettings";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
-import {
-  canMaintainEnvironment,
-  canUpdateEnvironmentProvider,
-  supportsEnvironmentUpdate,
-  ENVIRONMENT_RELEASES_PAGE_URL,
-} from "./environment-maintenance";
-import { environmentReleaseCheckAtom, releaseCheckValue } from "./environmentUpdateCheck";
+import { canMaintainEnvironment, canUpdateEnvironmentProvider } from "./environment-maintenance";
 
 export function SettingsEnvironmentDetailRouteScreen({
   route,
@@ -72,7 +58,6 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const outdated =
     useAtomValue(environmentPresentations.presentationAtom(environmentId))?.entry
       .serverUpdateRequired === true;
-  const updateServer = useAtomCommand(serverEnvironment.updateServer);
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders);
   const [connectionExpanded, setConnectionExpanded] = useState(false);
@@ -80,11 +65,6 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const pendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [releaseCheck, checkRelease] = useAtom(environmentReleaseCheckAtom(environmentId), {
-    mode: "promiseExit",
-  });
-  const release = releaseCheckValue(releaseCheck);
-
   const connected = environment?.isEnabled === true && environment.connectionState === "connected";
   const allowed =
     !AsyncResult.isFailure(sessionResult) && canMaintainEnvironment(session, connected);
@@ -97,14 +77,8 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const busy = !connected || pending !== null || running || providerBusy;
-  const disabled = !allowed || busy;
-  const version = config?.environment.serverVersion;
-  const checkedRelease = release?.fromVersion === version ? release : null;
-  const capabilities = config?.environment.capabilities;
   const managedPolicy = config?.managedPolicy;
   const supportUrl = managedPolicy?.supportUrl;
-  // The server refuses checks and installs; say so instead of offering them.
-  const updatesDenial = managedUpdatesDenial(managedPolicy);
 
   async function run(label: string, action: () => Promise<void>) {
     if (pendingRef.current) return;
@@ -121,41 +95,6 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
         cause instanceof Error ? cause.message : "The action could not be completed. Try again.",
       );
     }
-  }
-
-  function requestServerUpdate() {
-    const targetVersion = checkedRelease?.targetVersion;
-    if (disabled || !targetVersion || !capabilities || !supportsEnvironmentUpdate(capabilities))
-      return;
-    Dialog.alert(
-      `更新 ${environment?.environmentLabel ?? "环境"}？`,
-      `安装 T3 Code ${targetVersion}。${capabilities.serverSelfUpdate === "desktop-managed" ? "桌面应用将关闭并重新启动。" : "服务器将重启并重新连接。"} 正在运行的会话可能会中断。`,
-      [
-        { text: "取消", style: "cancel" },
-        {
-          text: "更新",
-          onPress: () =>
-            void run("server", async () => {
-              if (
-                AsyncResult.isFailure(
-                  appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId)),
-                ) ||
-                !canMaintainEnvironment(
-                  appAtomRegistry.get(environmentSession.sessionStateValueAtom(environmentId)),
-                  connected,
-                )
-              )
-                return;
-              const result = await updateServer({
-                environmentId,
-                input: { targetVersion },
-              });
-              if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-              setNotice(`Updated to ${result.value.targetVersion}.`);
-            }),
-        },
-      ],
-    );
   }
 
   function requestProviderUpdate(provider: ServerProvider) {
@@ -237,107 +176,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
             {config && !outdated ? (
               <>
                 <SettingsSection title="T3 Code">
-                  <View className="gap-1 p-4">
-                    <Text className="text-base text-foreground">Version {version}</Text>
-                    {managedPolicy ? (
-                      <Text className="text-sm text-foreground-muted">
-                        Managed by {managedPolicy.organization}
-                      </Text>
-                    ) : null}
-                    {updatesDenial ? (
-                      <Text className="text-sm text-foreground-muted">{updatesDenial}</Text>
-                    ) : null}
-                    {running ? (
-                      <Text className="text-sm text-foreground-muted">
-                        {updateState.stage === "resuming" ? "正在重启并重新连接…" : "正在下载更新…"}
-                      </Text>
-                    ) : updateState.status === "failed" ? (
-                      <Text selectable className="text-sm text-danger-foreground">
-                        {updateState.message}
-                      </Text>
-                    ) : null}
-                    {checkedRelease && !updatesDenial ? (
-                      <Text className="text-sm text-foreground-muted">
-                        {checkedRelease.targetVersion
-                          ? `版本 ${checkedRelease.targetVersion} 已可用。`
-                          : checkedRelease.manualCheckRequired
-                            ? "此环境无法确认适用更新，请查看发布页手动核对。"
-                            : "未发现适用于此环境的更新。"}
-                      </Text>
-                    ) : null}
-                    {checkedRelease?.targetVersion &&
-                    !updatesDenial &&
-                    !supportsEnvironmentUpdate(config.environment.capabilities) ? (
-                      <Text className="text-sm text-foreground-muted">
-                        {capabilities?.serverSelfUpdate === "desktop-managed"
-                          ? "更新此电脑上的桌面应用。"
-                          : "更新并重启此电脑上的 T3 Code。"}
-                      </Text>
-                    ) : null}
-                  </View>
-                  {supportUrl ? (
+                  <EnvironmentServerUpdateRows environment={environment} />
+                  {supportUrl && managedPolicy ? (
                     <SettingsActionRow
                       icon="questionmark.bubble"
                       label={`Get help from ${managedPolicy.organization}`}
                       onPress={() => void Linking.openURL(supportUrl).catch(() => undefined)}
-                    />
-                  ) : null}
-                  {updatesDenial ? null : (
-                    <SettingsActionRow
-                      icon="arrow.clockwise"
-                      label="检查更新"
-                      disabled={disabled}
-                      loading={pending === "check"}
-                      onPress={() => {
-                        if (disabled) return;
-                        const fromVersion = config.environment.serverVersion;
-                        void run("check", async () => {
-                          const exit = await checkRelease({
-                            readServerVersion: async () => fromVersion,
-                            ...(capabilities?.npmReleaseLookup === true
-                              ? {
-                                  lookupRelease: async (signal) => {
-                                    const result = await executeAtomQuery(
-                                      appAtomRegistry,
-                                      serverEnvironment.npmRelease({
-                                        environmentId,
-                                        input: { spec: "latest" },
-                                      }),
-                                      { signal, refresh: true, reportFailure: false },
-                                    );
-                                    if (result._tag === "Failure")
-                                      throw squashAtomCommandFailure(result);
-                                    return result.value;
-                                  },
-                                }
-                              : {}),
-                          });
-                          // `run` owns the error message, so a failed lookup rethrows to it.
-                          if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
-                        });
-                      }}
-                    />
-                  )}
-                  {checkedRelease?.manualCheckRequired && !updatesDenial ? (
-                    <SettingsActionRow
-                      icon="arrow.up.right"
-                      label="查看 GitHub 发布页"
-                      onPress={() =>
-                        void Linking.openURL(ENVIRONMENT_RELEASES_PAGE_URL).catch(() =>
-                          setError("无法打开发布页，请检查网络后重试。"),
-                        )
-                      }
-                    />
-                  ) : null}
-                  {checkedRelease?.targetVersion &&
-                  !updatesDenial &&
-                  supportsEnvironmentUpdate(config.environment.capabilities) ? (
-                    <SettingsActionRow
-                      icon="arrow.up.circle"
-                      label={`Update to ${checkedRelease.targetVersion}`}
-                      disabled={disabled}
-                      loading={pending === "server" || running}
-                      onPress={requestServerUpdate}
                     />
                   ) : null}
                 </SettingsSection>

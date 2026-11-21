@@ -472,7 +472,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   }
 
   const runtime = yield* ensurePinnedRuntimeInstalled({
-    onProgress: progress.report,
+    onProgress: (event) => Effect.sync(() => progress.report(event)),
     baseDir: input.baseDir,
     version: targetVersion,
     fs,

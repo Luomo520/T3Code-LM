@@ -28,6 +28,8 @@ class T3NativeControlsModule : Module() {
     AsyncFunction("enqueueFileDownload") { url: String, fileName: String ->
       T3FileDownloads.enqueue(appContext.reactContext ?: error("应用尚未就绪。"), url, fileName)
     }
+    AsyncFunction("getFileDownload") { id: String -> T3FileDownloads.status(id) }
+    AsyncFunction("cancelFileDownload") { id: String -> T3FileDownloads.cancel(id) }
     AsyncFunction("showFileDownloads") {
       T3FileDownloads.show(appContext.reactContext ?: error("应用尚未就绪。"))
     }

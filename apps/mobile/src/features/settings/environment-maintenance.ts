@@ -6,9 +6,10 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import type { ServerNpmRelease } from "@t3tools/contracts";
-import { compareSemverVersions } from "@t3tools/shared/semver";
+import { CLI_RELEASES_PAGE_URL } from "@t3tools/shared/cliRelease";
+import { resolveForkUpdateTarget } from "@t3tools/shared/forkRelease";
 
-export const ENVIRONMENT_RELEASES_PAGE_URL = "https://github.com/Luomo520/T3Code-LM/releases";
+export const ENVIRONMENT_RELEASES_PAGE_URL = CLI_RELEASES_PAGE_URL;
 
 export function canMaintainEnvironment(session: AuthSessionState | null, connected: boolean) {
   return (
@@ -55,13 +56,5 @@ export async function findEnvironmentUpdate(
 ): Promise<EnvironmentReleaseLookup> {
   if (!lookupRelease) return { targetVersion: null, manualCheckRequired: true };
   const release = await lookupRelease(signal);
-  if (release === null) return { targetVersion: null, manualCheckRequired: false };
-  const version = release.version;
-  const forkVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[1-9]\d*$/;
-  // An older host's registry lookup is not a fork/platform-aware release answer.
-  if (!forkVersion.test(version)) return { targetVersion: null, manualCheckRequired: true };
-  const newer = forkVersion.test(currentVersion)
-    ? compareSemverVersions(version, currentVersion) > 0
-    : version !== currentVersion;
-  return { targetVersion: newer ? version : null, manualCheckRequired: false };
+  return resolveForkUpdateTarget(currentVersion, release?.version ?? null);
 }

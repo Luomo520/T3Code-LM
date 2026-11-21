@@ -2,6 +2,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   type EnvironmentId,
   type ExecutionEnvironmentDescriptor,
+  type ServerSelfUpdateDownloadProgress,
   type ServerSelfUpdateInput,
   type ServerSelfUpdateResult,
   WS_METHODS,
@@ -22,7 +23,11 @@ import * as Socket from "effect/socket/Socket";
 
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { makeWsRpcProtocolClient, PING_TIMEOUT } from "../rpc/protocol.ts";
-import { isLegacyUpdateHandoffLoss, resolveServerUpdateProgressResult } from "../state/server.ts";
+import {
+  isLegacyUpdateHandoffLoss,
+  resolveServerUpdateProgressResult,
+  type ServerUpdateStage,
+} from "../state/server.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as ConnectionResolver from "./resolver.ts";
 import * as EnvironmentRegistry from "./registry.ts";
@@ -45,8 +50,6 @@ export class OutdatedHostUpdateError extends Schema.TaggedError<OutdatedHostUpda
     message: Schema.String,
   },
 ) {}
-
-export type OutdatedHostUpdateStage = "downloading" | "installing" | "resuming";
 
 const reachOutdatedHost = Effect.fn("clientRuntime.connection.reachOutdatedHost")(function* (
   environmentId: EnvironmentId,
@@ -76,7 +79,10 @@ export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutd
   function* (
     environmentId: EnvironmentId,
     input: ServerSelfUpdateInput,
-    onStage: (stage: OutdatedHostUpdateStage) => Effect.Effect<void>,
+    onStage: (
+      stage: ServerUpdateStage,
+      download?: ServerSelfUpdateDownloadProgress,
+    ) => Effect.Effect<void>,
   ) {
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
     const webSocketConstructor = yield* Socket.WebSocketConstructor;
@@ -148,9 +154,11 @@ export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutd
                   Stream.runForEach((event) =>
                     event.type === "complete"
                       ? Ref.set(terminal, Option.some(event.result))
-                      : Effect.sync(() => {
+                      : Effect.suspend(() => {
                           receivedProgress = true;
-                        }).pipe(Effect.andThen(onStage(event.stage))),
+                          const { type: _, stage, ...download } = event;
+                          return onStage(stage, download);
+                        }),
                   ),
                   Effect.exit,
                 );

@@ -49,6 +49,7 @@ export function useThreadListV2(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly searchQuery: string;
+  readonly pinnedBeforeSettled?: boolean;
   /** Threads that match the search by content, keyed like `threadSearchMatchKey`. */
   readonly searchMatches: ReadonlyMap<string, unknown>;
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
@@ -94,6 +95,7 @@ export function useThreadListV2(input: {
           section,
           pendingOrder: input.pendingOrder,
           now: layoutTime,
+          ...(input.pinnedBeforeSettled ? { pinnedBeforeSettled: true } : {}),
           settlementEnvironmentIds: input.settlementEnvironmentIds,
           snoozeEnvironmentIds: input.snoozeEnvironmentIds,
           queuedThreadKeys: input.queuedThreadKeys,
@@ -109,6 +111,7 @@ export function useThreadListV2(input: {
     input.pinReorderEnvironmentIds,
     input.activeReorderEnvironmentIds,
     layoutTime,
+    input.pinnedBeforeSettled,
     input.settlementEnvironmentIds,
     input.snoozeEnvironmentIds,
     input.queuedThreadKeys,
@@ -140,6 +143,7 @@ export function useThreadListV2(input: {
         projectRefs: input.projectRefs,
         searchQuery: input.searchQuery,
         matchedThreadKeys: new Set(input.searchMatches.keys()),
+        ...(input.pinnedBeforeSettled ? { pinnedBeforeSettled: true } : {}),
         settlementEnvironmentIds: input.settlementEnvironmentIds,
         snoozeEnvironmentIds: input.snoozeEnvironmentIds,
         queuedThreadKeys: input.queuedThreadKeys,
@@ -172,6 +176,7 @@ export function useThreadListV2(input: {
       input.projectRefs,
       input.searchQuery,
       input.searchMatches,
+      input.pinnedBeforeSettled,
       input.settlementEnvironmentIds,
       input.snoozeEnvironmentIds,
       input.queuedThreadKeys,

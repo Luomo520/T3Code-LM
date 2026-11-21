@@ -359,6 +359,139 @@ describe("sidebar settled pagination", () => {
   });
 });
 
+it("keeps project pins at the top of Recent across paging, scope, and unpinning", async () => {
+  using stack = new DisposableStack();
+  const previousSettings = getClientSettings();
+  stack.defer(() => __setClientSettingsForTests(previousSettings));
+  __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+  const key = "t3.sidebar.task-view.v1";
+  const previousView = localStorage.getItem(key);
+  stack.defer(() =>
+    previousView === null ? localStorage.removeItem(key) : localStorage.setItem(key, previousView),
+  );
+  localStorage.setItem(key, JSON.stringify("project"));
+
+  const previousUi = useUiStateStore.getState();
+  stack.defer(() => useUiStateStore.setState(previousUi));
+  useUiStateStore.setState({
+    sidebarProjectScopeKeys: ["local:/projects/scoped"],
+    projectExpandedById: {},
+  });
+
+  const scoped = project("scoped");
+  const other = project("other");
+  const active = {
+    ...threadShell(scoped.id, 1000),
+    latestConversationMessageAt: "2026-04-01T00:00:00Z",
+  };
+  const firstPin = {
+    ...threadShell(scoped.id, 1001),
+    latestConversationMessageAt: "2026-01-01T00:00:00Z",
+    pinnedAt: "2026-04-02T00:00:00Z",
+    pinOrderKey: "a",
+  };
+  const secondPin = {
+    ...threadShell(scoped.id, 1002),
+    latestConversationMessageAt: "2026-03-01T00:00:00Z",
+    pinnedAt: "2026-04-03T00:00:00Z",
+    pinOrderKey: "b",
+  };
+  const history = Array.from({ length: 201 }, (_, index) => ({
+    ...threadShell(scoped.id, index),
+    settledOverride: "settled" as const,
+    settledAt: "2026-04-01T00:00:00Z",
+    latestConversationMessageAt: "2026-04-01T00:00:00Z",
+  }));
+  const outsideScope = {
+    ...threadShell(other.id, 1003),
+    pinnedAt: firstPin.pinnedAt,
+    pinOrderKey: "0",
+  };
+  const legacySettledPin = {
+    ...threadShell(scoped.id, 1004),
+    settledOverride: "settled" as const,
+    settledAt: "2026-01-01T00:00:00Z",
+    latestConversationMessageAt: "2026-01-02T00:00:00Z",
+    pinnedAt: firstPin.pinnedAt,
+    pinOrderKey: "c",
+  };
+  const snoozedPin = {
+    ...threadShell(scoped.id, 1005),
+    latestConversationMessageAt: "2026-02-01T00:00:00Z",
+    snoozedUntil: "2099-01-01T00:00:00Z",
+    pinnedAt: firstPin.pinnedAt,
+    pinOrderKey: "0",
+  };
+  const allThreads = [
+    active,
+    secondPin,
+    firstPin,
+    outsideScope,
+    legacySettledPin,
+    snoozedPin,
+    ...history,
+  ];
+  vi.mocked(useProjects).mockReturnValue([scoped, other]);
+  vi.mocked(useQuietThreadShells).mockReturnValue(allThreads);
+  const routeThreadRef = { environmentId: scoped.environmentId, threadId: active.id };
+  vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef: routeThreadRef });
+  vi.mocked(useHandleNewThread).mockReturnValue({
+    activeDraftThread: null,
+    activeThread: null,
+    defaultProjectRef: { environmentId: scoped.environmentId, projectId: scoped.id },
+    defaultProjectFallbackReady: true,
+    handleNewThread: vi.fn().mockResolvedValue(null),
+    routeDraftId: null,
+    routeThreadRef,
+  });
+  vi.mocked(useServerConfigs).mockReturnValue(
+    new Map([
+      [
+        scoped.environmentId,
+        {
+          scratchWorkspaceRoot: null,
+          shellThreadFamilies: false,
+        } as unknown as EnvironmentServerConfig,
+      ],
+    ]),
+  );
+  const sidebar = () => (
+    <SidebarProvider>
+      <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+    </SidebarProvider>
+  );
+  await using screen = await render(sidebar());
+  const rowKeys = () =>
+    [...screen.container.querySelectorAll<HTMLElement>("[data-thread-item]")].map(
+      (element) => element.dataset.threadItem,
+    );
+  const threadKey = (thread: EnvironmentThreadShell) => `${thread.environmentId}:${thread.id}`;
+  const pins = [threadKey(firstPin), threadKey(secondPin)];
+  expect(rowKeys().slice(0, 2)).toEqual(pins);
+  expect(rowKeys()).not.toContain(threadKey(legacySettledPin));
+
+  await screen.getByRole("button", { name: "Recent", exact: true }).click();
+  const recentPins = [...pins, threadKey(legacySettledPin)];
+  expect(rowKeys().slice(0, 3)).toEqual(recentPins);
+  expect(rowKeys()).toHaveLength(205);
+  expect(rowKeys()).not.toContain(threadKey(outsideScope));
+  expect(rowKeys().indexOf(threadKey(snoozedPin))).toBeGreaterThan(
+    rowKeys().indexOf(threadKey(active)),
+  );
+  await screen.getByRole("button", { name: "Show 1 more", exact: true }).click();
+  expect(rowKeys().slice(0, 3)).toEqual(recentPins);
+  expect(rowKeys()).toHaveLength(206);
+
+  vi.mocked(useQuietThreadShells).mockReturnValue(
+    allThreads.map((thread) =>
+      thread.id === legacySettledPin.id ? { ...thread, pinnedAt: null, pinOrderKey: null } : thread,
+    ),
+  );
+  await screen.rerender(sidebar());
+  expect(rowKeys().slice(0, 2)).toEqual(pins);
+  expect(rowKeys().at(-1)).toBe(threadKey(legacySettledPin));
+});
+
 describe("sidebar project completeness", () => {
   it.each([68, 230])(
     "lists %i settled conversations inside the scoped project with history collapsed",

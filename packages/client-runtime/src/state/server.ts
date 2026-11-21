@@ -6,6 +6,7 @@ import {
   type ServerLifecycleWelcomePayload,
   type ServerLifecycleStreamReadyEvent,
   type ServerProviderWorkspaceSnapshot,
+  type ServerSelfUpdateDownloadProgress,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
   shouldRecommendDatabaseCompaction,
@@ -68,14 +69,33 @@ export type { ServerConfigProjection } from "./serverConfigProjection.ts";
 
 export type ServerUpdateStage = "downloading" | "installing" | "resuming";
 
+export function serverUpdateDownloadPercent(
+  progress: ServerSelfUpdateDownloadProgress,
+): number | undefined {
+  const { downloadedBytes, totalBytes } = progress;
+  if (
+    downloadedBytes === undefined ||
+    !Number.isFinite(downloadedBytes) ||
+    downloadedBytes < 0 ||
+    totalBytes === undefined ||
+    !Number.isFinite(totalBytes) ||
+    totalBytes <= 0
+  ) {
+    return progress.downloadPercent !== undefined && Number.isFinite(progress.downloadPercent)
+      ? Math.max(0, Math.min(100, progress.downloadPercent))
+      : undefined;
+  }
+  return Math.min(100, (downloadedBytes / totalBytes) * 100);
+}
+
 export type ServerUpdateState =
   | { readonly status: "idle" }
-  | {
+  | (ServerSelfUpdateDownloadProgress & {
       readonly status: "running";
       readonly stage: ServerUpdateStage;
       readonly fromVersion: string;
       readonly targetVersion: string;
-    }
+    })
   | {
       readonly status: "failed";
       readonly stage: ServerUpdateStage;
@@ -302,6 +322,15 @@ export function serverUpdateStateForProgressEvent(
         : event.result.method === "desktop-app" && event.result.desktopUpdateToken !== undefined
           ? "installing"
           : "resuming",
+    ...(event.type === "progress" && event.downloadedBytes !== undefined
+      ? { downloadedBytes: event.downloadedBytes }
+      : {}),
+    ...(event.type === "progress" && event.totalBytes !== undefined
+      ? { totalBytes: event.totalBytes }
+      : {}),
+    ...(event.type === "progress" && event.downloadPercent !== undefined
+      ? { downloadPercent: event.downloadPercent }
+      : {}),
     fromVersion,
     targetVersion,
   };

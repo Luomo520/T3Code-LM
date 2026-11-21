@@ -8,6 +8,15 @@ interface AndroidAgentNotifications {
   setThreadOnScreen?(path: string | null): void;
   openLiveUpdateSettings?(): boolean;
   showShowcaseActivity?(scheme: string, data: Record<string, string>): void;
+  supportsLocalTaskCompletion?(): boolean;
+  setTaskCompletionMonitoring?(enabled: boolean): boolean;
+  postTaskCompletion?(
+    scheme: string,
+    path: string,
+    runId: string,
+    title: string,
+    failed: boolean,
+  ): void;
 }
 
 const native =
@@ -44,6 +53,29 @@ export function clearAndroidAgentNotifications(): void {
 
 export function setAndroidThreadOnScreen(path: string | null): void {
   native?.setThreadOnScreen?.(path);
+}
+
+export function supportsAndroidLocalTaskCompletion(): boolean {
+  return native?.supportsLocalTaskCompletion?.() === true;
+}
+
+export function setAndroidTaskCompletionMonitoring(enabled: boolean): boolean {
+  return native?.setTaskCompletionMonitoring?.(enabled) === true;
+}
+
+export function postAndroidTaskCompletion(completion: {
+  readonly path: string;
+  readonly runId: string;
+  readonly title: string;
+  readonly failed: boolean;
+}): void {
+  native?.postTaskCompletion?.(
+    appScheme(),
+    completion.path,
+    completion.runId,
+    completion.title,
+    completion.failed,
+  );
 }
 
 export function supportsAndroidLiveUpdateSettings(): boolean {

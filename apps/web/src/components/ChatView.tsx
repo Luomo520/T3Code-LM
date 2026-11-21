@@ -373,6 +373,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { observeResize } from "~/lib/observeResize";
+import { startFileDownload } from "~/lib/fileDownload";
 import { ThreadVisitWatermark } from "./chat/ThreadVisitWatermark";
 import { ChatTerminalDrawers } from "./chat/ChatTerminalDrawers";
 import { ChatRightPanel } from "./chat/ChatRightPanel";
@@ -1524,12 +1525,18 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     try {
+      const windowsDownload = window.desktopBridge?.getClientPlatform() === "win32";
       const url = await resolveFileAttachmentUrl({
         attachment,
         environmentId,
         httpBaseUrl: connection.httpBaseUrl,
         createAssetUrl: createAttachmentAssetUrl,
+        download: windowsDownload,
       });
+      if (windowsDownload) {
+        await startFileDownload({ url, fileName: attachment.name });
+        return;
+      }
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = attachment.name;

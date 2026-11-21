@@ -106,27 +106,36 @@ const makeHarness = Effect.fn("test.make_desktop_app_update_harness")(function* 
 });
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("desktop app update", (it) => {
-  it.effect("collapses state reports into progress stages and succeeds on installing", () =>
+  it.effect("forwards distinct download percentages and signals installation", () =>
     Effect.gen(function* () {
       const { service } = yield* makeHarness({
         reports: (requestId) => [
           report(requestId, makeState({ status: "checking" })),
           report(requestId, makeState({ status: "available", availableVersion: "1.2.4" })),
           report(requestId, makeState({ status: "downloading", downloadPercent: 40 })),
+          report(requestId, makeState({ status: "downloading", downloadPercent: 40 })),
+          report(requestId, makeState({ status: "downloading", downloadPercent: 85 })),
           report("other-run", makeState({ status: "error", message: "unrelated" })),
           report(requestId, makeState({ status: "downloaded", downloadedVersion: "1.2.4" }), {
             outcome: "ready-to-install",
           }),
         ],
       });
-      const stages: string[] = [];
-      const result = yield* service.run((stage) => Effect.sync(() => void stages.push(stage)));
+      const progress: Array<[string, number | undefined]> = [];
+      const result = yield* service.run((stage, download) =>
+        Effect.sync(() => void progress.push([stage, download?.downloadPercent])),
+      );
       expect(result).toEqual({
         targetVersion: "1.2.4",
         method: "desktop-app",
         desktopUpdateToken: expect.any(String),
       });
-      expect(stages).toEqual(["downloading", "installing"]);
+      expect(progress).toEqual([
+        ["downloading", undefined],
+        ["downloading", 40],
+        ["downloading", 85],
+        ["installing", undefined],
+      ]);
 
       const retry = yield* service.run(() => Effect.void).pipe(Effect.flip);
       expect(retry.reason).not.toBe("A desktop app update is already in progress.");

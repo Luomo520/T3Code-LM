@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -12,6 +12,7 @@ export function LocalEnvironmentList({
   environments,
   expandedId,
   onToggle,
+  renderBelow,
   ...rowActions
 }: Pick<
   EnvironmentRowProps,
@@ -20,6 +21,7 @@ export function LocalEnvironmentList({
   readonly environments: ReadonlyArray<EnvironmentRowProps["environment"]>;
   readonly expandedId: EnvironmentId | null;
   readonly onToggle: (environmentId: EnvironmentId) => void;
+  readonly renderBelow?: (environment: EnvironmentRowProps["environment"]) => ReactNode;
 }) {
   if (environments.length === 0) {
     return (
@@ -35,8 +37,12 @@ export function LocalEnvironmentList({
             type="monochrome"
           />
         </View>
-        <Text className="text-center text-sm leading-normal text-foreground-muted">{"尚未连接任何环境。"}{"\n"}{"轻触"}{" "}
-          <Text className="font-t3-bold text-foreground">+</Text>{"以添加环境。"}</Text>
+        <Text className="text-center text-sm leading-normal text-foreground-muted">
+          {"尚未连接任何环境。"}
+          {"\n"}
+          {"轻触"} <Text className="font-t3-bold text-foreground">+</Text>
+          {"以添加环境。"}
+        </Text>
       </View>
     );
   }
@@ -51,6 +57,7 @@ export function LocalEnvironmentList({
             onToggle={() => onToggle(environment.environmentId)}
             {...rowActions}
           />
+          {renderBelow?.(environment)}
         </View>
       ))}
     </View>

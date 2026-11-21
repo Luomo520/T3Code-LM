@@ -321,6 +321,7 @@ function getCanRetryFromState(state: DesktopUpdateState): boolean {
 function shouldBroadcastDownloadProgress(
   currentState: DesktopUpdateState,
   nextPercent: number,
+  step: number,
 ): boolean {
   if (currentState.status !== "downloading") {
     return true;
@@ -331,8 +332,8 @@ function shouldBroadcastDownloadProgress(
     return true;
   }
 
-  const previousStep = Math.floor(currentPercent / 10);
-  const nextStep = Math.floor(nextPercent / 10);
+  const previousStep = Math.floor(currentPercent / step);
+  const nextStep = Math.floor(nextPercent / step);
   return nextStep !== previousStep || nextPercent === 100;
 }
 
@@ -1081,7 +1082,11 @@ export const make = Effect.gen(function* () {
         Effect.fn("desktop.updates.applyDownloadProgress")(function* (progress) {
           const state = yield* Ref.get(updateStateRef);
           const percent = Math.floor(progress.percent);
-          if (shouldBroadcastDownloadProgress(state, progress.percent) || state.message !== null) {
+          const step = environment.platform === "win32" ? 1 : 10;
+          if (
+            shouldBroadcastDownloadProgress(state, progress.percent, step) ||
+            state.message !== null
+          ) {
             yield* setState(reduceDesktopUpdateStateOnDownloadProgress(state, progress.percent));
           }
           const milestone = percent - (percent % 10);

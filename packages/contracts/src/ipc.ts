@@ -1062,7 +1062,7 @@ export interface DesktopBridge {
   downloadFile?: (input: {
     url: string;
     fileName: string;
-  }) => Promise<{ method: "idm" | "electron" | "cancelled"; id?: string }>;
+  }) => Promise<{ method: "builtin" | "idm" | "electron" | "cancelled"; id?: string }>;
   cancelFileDownload?: (id: string) => Promise<void>;
   onFileDownload?: (listener: (event: DesktopFileDownloadEvent) => void) => () => void;
   getAppBranding: () => DesktopAppBranding | null;

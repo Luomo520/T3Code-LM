@@ -79,6 +79,21 @@ describe("versionSkew", () => {
     expect(resolveVersionMismatch("9.9.9")).toBeNull();
   });
 
+  it("compares numeric fork builds on the same product version", () => {
+    branding.APP_VERSION = "0.1.0-4";
+    expect(resolveVersionMismatch("0.1.0-1")).toEqual({
+      clientVersion: "0.1.0-4",
+      serverVersion: "0.1.0-1",
+      hint: MISMATCH_HINT,
+    });
+    expect(resolveVersionMismatch("0.1.0-4")).toBeNull();
+    expect(resolveVersionMismatch("0.1.0-10")).toBeNull();
+    expect(resolveVersionMismatch("0.1.0-4", "0.1.0-10")).toMatchObject({
+      clientVersion: "0.1.0-10",
+      serverVersion: "0.1.0-4",
+    });
+  });
+
   it("does not warn when a nightly and a stable build share a core version", () => {
     expect(resolveVersionMismatch("0.0.34-nightly.20260818.1124")).toBeNull();
 

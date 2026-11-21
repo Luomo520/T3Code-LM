@@ -1,8 +1,3 @@
-import { useCallback } from "react";
-import { Alert } from "react-native";
-import { enqueueSystemFileDownload, showSystemFileDownloads } from "../../lib/systemFileDownload";
-import { useWorkspaceDownloadUrl } from "../../state/assets";
-const pendingFileDownloads = new Set<string>();
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
@@ -13,8 +8,15 @@ import {
   usePreventRemove,
   type StaticScreenProps,
 } from "@react-navigation/native";
-import { type ComponentProps, type ReactNode, useId, useState } from "react";
-import { Platform, View } from "react-native";
+import {
+  type ComponentProps,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+} from "react";
+import { Alert, AppState, Platform, View } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { EnvironmentId, type ProjectReadFileResult, ThreadId } from "@t3tools/contracts";
 import { videoMimeType } from "@t3tools/shared/video";
@@ -34,6 +36,13 @@ import { FilePreviewModal, type FilePreviewSource } from "../../components/ui/Fi
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { isPdfFile } from "../../lib/filePreview";
+import {
+  cancelFileDownload,
+  enqueueFileDownload,
+  readFileDownload,
+  showDownloadedFiles,
+  type FileDownload,
+} from "../../lib/systemFileDownload";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import type { MediaVideoPreviewSource } from "../../lib/videoPreviewSource";
@@ -43,6 +52,7 @@ import { useThreadSelection } from "../../state/use-thread-selection";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentPresentation } from "../../state/presentation";
+import { useWorkspaceDownloadUrl } from "../../state/assets";
 import { projectEnvironment } from "../../state/projects";
 import type { AssetUrlFailureReason } from "../../state/asset-url-state";
 import {
@@ -79,6 +89,33 @@ import {
 } from "./filePath";
 import { useWorkspaceFileAssetUrlState } from "./workspaceFileAssetUrl";
 import { FileDownloadFallback } from "./FileDownloadFallback";
+
+const pendingFileDownloads = new Set<string>();
+
+function fileDownloadProgress(task: FileDownload): string {
+  switch (task.status) {
+    case "pending":
+      return "等待开始下载";
+    case "paused":
+      return "等待网络连接";
+    case "downloading":
+      return task.totalBytes && task.totalBytes > 0
+        ? `下载中 · ${Math.min(100, Math.floor((task.bytesDownloaded / task.totalBytes) * 100))}%`
+        : "正在下载";
+    case "downloaded":
+      return "已保存到 Download/t3code";
+    case "failed":
+      return task.error ?? "下载失败，请重试。";
+    case "cancelled":
+      return "下载已取消";
+  }
+}
+
+function showDownloadDirectory() {
+  void showDownloadedFiles().catch(() =>
+    Alert.alert("无法打开下载目录", "请在设备的文件管理器中打开 Download/t3code。"),
+  );
+}
 
 function FilesBrowserHeader(props: {
   readonly projectName: string;
@@ -204,7 +241,8 @@ function normalizeRouteLine(value: string | null): number | null {
 
 function defaultViewMode(path: string | null): FileViewMode {
   return path !== null &&
-    (isWorkspaceBrowserPreviewPath(path) ||
+    (isMarkdownPreviewFile(path) ||
+      isWorkspaceBrowserPreviewPath(path) ||
       isWorkspaceImagePreviewPath(path) ||
       isVideoPreviewFile(path) ||
       isAudioPreviewFile(path) ||
@@ -259,6 +297,7 @@ function FileContent(props: {
   readonly selectable: boolean;
   readonly onDownload?: () => void;
   readonly downloading: boolean;
+  readonly downloadLabel: string;
   readonly sizeBytes?: number;
   readonly onRefresh?: () => Promise<void> | void;
 }) {
@@ -331,6 +370,7 @@ function FileContent(props: {
         sizeBytes={props.sizeBytes}
         reason={props.fileError}
         downloading={props.downloading}
+        downloadLabel={props.downloadLabel}
         onDownload={props.onDownload}
       />
     );
@@ -686,7 +726,10 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   const activeMode =
     relativePath !== null && modeOverride?.path === relativePath
       ? modeOverride.mode
-      : targetLine !== null && filePreviewDelimiter({ name: relativePath ?? "" }) !== null
+      : targetLine !== null &&
+          relativePath !== null &&
+          (isMarkdownPreviewFile(relativePath) ||
+            filePreviewDelimiter({ name: relativePath }) !== null)
         ? "source"
         : defaultViewMode(relativePath);
   const resolvedActiveMode =
@@ -826,7 +869,67 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
     </>
   );
 
-  const [downloading, setDownloading] = useState(false);
+  const [requestingDownload, setRequestingDownload] = useState(false);
+  const [fileDownload, setFileDownload] = useState<{
+    key: string;
+    id: string;
+    task: FileDownload;
+  } | null>(null);
+  const fileDownloadKey = JSON.stringify([environmentId, cwd, relativePath]);
+  const currentDownload = fileDownload?.key === fileDownloadKey ? fileDownload : null;
+  const activeDownloadId =
+    currentDownload && ["pending", "downloading", "paused"].includes(currentDownload.task.status)
+      ? currentDownload.id
+      : null;
+  const downloading = requestingDownload || activeDownloadId !== null;
+  const downloadLabel = requestingDownload
+    ? "正在申请下载…"
+    : currentDownload && activeDownloadId
+      ? fileDownloadProgress(currentDownload.task)
+      : "下载到本机";
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The native foreground service owns the transfer and publishes its current progress.
+  useEffect(() => {
+    if (!activeDownloadId) return;
+    let closed = false;
+    let polling = false;
+    const refresh = async () => {
+      if (polling || AppState.currentState !== "active") return;
+      polling = true;
+      try {
+        const task = await readFileDownload(activeDownloadId);
+        if (!closed) {
+          setFileDownload((current) =>
+            current?.id === activeDownloadId
+              ? {
+                  ...current,
+                  task: task ?? {
+                    status: "failed",
+                    bytesDownloaded: 0,
+                    error: "下载任务已不存在，请重新下载。",
+                  },
+                }
+              : current,
+          );
+        }
+      } catch {
+        // A transient bridge failure must leave the native transfer available for the next read.
+      } finally {
+        polling = false;
+      }
+    };
+    void refresh();
+    const timer = setInterval(refresh, 750);
+    const appState = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refresh();
+    });
+    return () => {
+      closed = true;
+      clearInterval(timer);
+      appState.remove();
+    };
+  }, [activeDownloadId]);
+
   const downloadUrl = useWorkspaceDownloadUrl(
     environmentId,
     cwd && relativePath
@@ -834,35 +937,24 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       : null,
   );
   const handleDownload = useCallback(async () => {
-    const key = JSON.stringify([environmentId, cwd, relativePath]);
-    if (pendingFileDownloads.has(key)) return;
-    pendingFileDownloads.add(key);
-    setDownloading(true);
+    if (activeDownloadId || pendingFileDownloads.has(fileDownloadKey)) return;
+    pendingFileDownloads.add(fileDownloadKey);
+    setRequestingDownload(true);
     try {
       const file = await downloadUrl();
-      await enqueueSystemFileDownload(file.url, file.fileName);
-      Alert.alert(
-        "已提交系统下载",
-        "保存位置：Download/T3Code。切到后台后仍由系统继续下载，可在系统下载界面查看进度、取消或查看失败原因。",
-        [
-          { text: "知道了", style: "cancel" },
-          {
-            text: "查看下载",
-            onPress: () => {
-              void showSystemFileDownloads().catch(() =>
-                Alert.alert("无法打开下载界面", "请从系统下载通知查看。"),
-              );
-            },
-          },
-        ],
-      );
+      const id = await enqueueFileDownload(file.url, file.fileName);
+      setFileDownload({
+        key: fileDownloadKey,
+        id,
+        task: { status: "pending", bytesDownloaded: 0 },
+      });
     } catch (error) {
       Alert.alert("下载未启动", error instanceof Error ? error.message : "请检查连接后重试。");
     } finally {
-      pendingFileDownloads.delete(key);
-      setDownloading(false);
+      pendingFileDownloads.delete(fileDownloadKey);
+      setRequestingDownload(false);
     }
-  }, [downloadUrl, environmentId, cwd, relativePath]);
+  }, [activeDownloadId, downloadUrl, fileDownloadKey]);
 
   const fileMenuActions = (() => {
     if (relativePath === null) return [];
@@ -871,23 +963,43 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       Platform.OS === "android" && canReadFiles && directoryPath === null
         ? ({
             id: "download",
-            title: downloading ? "正在申请下载…" : "下载到本机",
+            title: downloadLabel,
             icon: "arrow.down.circle",
             inline: false,
-            onPress: handleDownload,
+            onPress:
+              currentDownload && activeDownloadId
+                ? () =>
+                    Alert.alert("文件下载", fileDownloadProgress(currentDownload.task), [
+                      { text: "继续下载", style: "cancel" },
+                      {
+                        text: "取消下载",
+                        style: "destructive",
+                        onPress: () => {
+                          void cancelFileDownload(activeDownloadId).catch(() =>
+                            Alert.alert("无法取消下载", "请稍后重试。"),
+                          );
+                        },
+                      },
+                    ])
+                : handleDownload,
+          } as const)
+        : null,
+      currentDownload && !activeDownloadId
+        ? ({
+            id: "file-download-result",
+            title: "查看本次下载结果",
+            icon: "arrow.down.circle",
+            inline: false,
+            onPress: () => Alert.alert("文件下载", fileDownloadProgress(currentDownload.task)),
           } as const)
         : null,
       Platform.OS === "android"
         ? ({
-            id: "system-downloads",
-            title: "查看系统下载",
+            id: "downloads",
+            title: "打开下载目录",
             icon: "arrow.down.circle",
             inline: false,
-            onPress: () => {
-              void showSystemFileDownloads().catch(() =>
-                Alert.alert("无法打开下载界面", "请从系统下载通知查看。"),
-              );
-            },
+            onPress: showDownloadDirectory,
           } as const)
         : null,
       canToggleMode
@@ -1137,6 +1249,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
           truncated={fileData?.truncated ?? false}
           sizeBytes={metadata.data?.byteLength}
           downloading={downloading}
+          downloadLabel={downloadLabel}
           onDownload={
             Platform.OS === "android" && metadata.data?.kind === "file" ? handleDownload : undefined
           }

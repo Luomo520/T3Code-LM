@@ -1033,10 +1033,21 @@ export type DesktopUpdateCommitInput = typeof DesktopUpdateCommitInput.Type;
 export const ServerSelfUpdateProgressStage = Schema.Literals(["downloading", "installing"]);
 export type ServerSelfUpdateProgressStage = typeof ServerSelfUpdateProgressStage.Type;
 
+const ServerSelfUpdateDownloadProgress = Schema.Struct({
+  downloadedBytes: Schema.optionalKey(NonNegativeInt),
+  totalBytes: Schema.optionalKey(PositiveInt),
+  /** Desktop-managed hosts expose the app updater's download percentage. */
+  downloadPercent: Schema.optionalKey(
+    Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  ),
+});
+export type ServerSelfUpdateDownloadProgress = typeof ServerSelfUpdateDownloadProgress.Type;
+
 export const ServerSelfUpdateProgressEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("progress"),
     stage: ServerSelfUpdateProgressStage,
+    ...ServerSelfUpdateDownloadProgress.fields,
   }),
   Schema.Struct({
     type: Schema.Literal("complete"),

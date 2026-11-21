@@ -1,20 +1,20 @@
-// @effect-diagnostics nodeBuiltinImport:off - Native event and subprocess boundary tests.
+// @effect-diagnostics nodeBuiltinImport:off - Native Electron event boundary tests.
 import * as NodeEvents from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
-  spawn: vi.fn(),
-  execFile: vi.fn(),
-  access: vi.fn(),
+  downloadToFile: vi.fn(),
   dialog: vi.fn(),
   sender: vi.fn(),
   owner: vi.fn(),
 }));
-vi.mock("node:child_process", () => ({ spawn: mocks.spawn, execFile: mocks.execFile }));
 vi.mock("node:fs/promises", () => ({
-  access: mocks.access,
   readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
   writeFile: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("./ResumableDownload.ts", () => ({
+  downloadKey: () => "destination",
+  downloadToFile: mocks.downloadToFile,
 }));
 vi.mock("electron", () => ({
   webContents: { fromId: mocks.sender },
@@ -29,14 +29,6 @@ import {
   validateDownloadUrl,
 } from "./FileDownloads.ts";
 
-const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-beforeEach(() => {
-  vi.resetAllMocks();
-  Object.defineProperty(process, "platform", { ...platform, value: "linux" });
-});
-afterEach(() => {
-  Object.defineProperty(process, "platform", platform);
-});
 const url = "http://192.168.5.25:3773/api/assets/signed-token/file.exe";
 
 describe("file downloads", () => {
@@ -55,29 +47,39 @@ describe("file downloads", () => {
     expect(safeDownloadName("安装包.apk")).toBe("安装包.apk");
   });
 
-  it("submits structured arguments to IDM once without starting a second engine", async () => {
-    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
-    mocks.execFile.mockImplementation((_command, _args, _options, callback) => {
-      callback(null, "(Default) REG_SZ C:\\Custom IDM\\IDMan.exe\n");
+  it("uses the built-in downloader on Windows and allows only the initiating renderer to cancel", async () => {
+    vi.clearAllMocks();
+    const session = new NodeEvents.EventEmitter();
+    const events = new NodeEvents.EventEmitter();
+    const sender = {
+      id: 7,
+      isDestroyed: () => false,
+      session,
+      send: (_channel: string, event: { state: string }) => events.emit(event.state, event),
+      downloadURL: vi.fn(),
+    };
+    mocks.sender.mockReturnValue(sender);
+    mocks.dialog.mockResolvedValue({ canceled: false, filePath: "/downloads/安装包.exe" });
+    mocks.downloadToFile.mockImplementation(({ signal, onProgress }) => {
+      onProgress({ receivedBytes: 10, totalBytes: 20 });
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+      );
     });
-    mocks.access.mockResolvedValue(undefined);
-    const child = new NodeEvents.EventEmitter();
-    const unref = vi.fn();
-    Object.assign(child, { unref });
-    mocks.spawn.mockImplementation(() => {
-      queueMicrotask(() => child.emit("spawn"));
-      return child;
-    });
-    expect(await downloadFile({ url, fileName: "安装包.exe" }, 7, "win32")).toEqual({
-      method: "idm",
-    });
-    expect(mocks.spawn).toHaveBeenCalledTimes(1);
-    expect(mocks.spawn.mock.calls[0]?.[1]).toEqual(["/d", url, "/f", "安装包.exe"]);
-    expect(mocks.spawn.mock.calls[0]?.[2]).toMatchObject({ shell: false });
-    expect(mocks.dialog).not.toHaveBeenCalled();
+    const finished = new Promise((resolve) => events.once("cancelled", resolve));
+    const { method, id } = await downloadFile({ url, fileName: "安装包.exe" }, 7, "win32");
+    expect(method).toBe("builtin");
+    expect(id).toBeDefined();
+    expect(sender.downloadURL).not.toHaveBeenCalled();
+    expect(session.listenerCount("will-download")).toBe(0);
+    cancelFileDownload(id!, 8);
+    expect(mocks.downloadToFile.mock.calls[0]?.[0].signal.aborted).toBe(false);
+    cancelFileDownload(id!, 7);
+    expect(await finished).toMatchObject({ receivedBytes: 10, totalBytes: 20 });
   });
 
   it("cancelling the save picker leaves no download listener or network request", async () => {
+    vi.clearAllMocks();
     const session = new NodeEvents.EventEmitter();
     const downloadURL = vi.fn();
     mocks.sender.mockReturnValue({ id: 7, isDestroyed: () => false, session, downloadURL });
@@ -90,6 +92,7 @@ describe("file downloads", () => {
   });
 
   it("routes progress, cancellation and completion to the initiating window", async () => {
+    vi.clearAllMocks();
     const session = new NodeEvents.EventEmitter();
     const item = Object.assign(new NodeEvents.EventEmitter(), {
       getURLChain: () => [url],

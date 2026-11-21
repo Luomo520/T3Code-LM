@@ -722,7 +722,8 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         version: 1,
         kind: "attachment",
         attachmentId: input.resource.attachmentId,
-        ...(isGenericFile && !isVideo && inlinePreviewMimeType === undefined
+        ...(input.resource.disposition === "attachment" ||
+        (isGenericFile && !isVideo && inlinePreviewMimeType === undefined)
           ? { download: true }
           : {}),
         ...(input.resource.fileName !== undefined ? { fileName: input.resource.fileName } : {}),
@@ -966,16 +967,25 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       ),
       Effect.orElseSucceed(() => Option.none()),
     );
-    return Option.isSome(info) && info.value.type === "File"
-      ? ({
-          kind: "file",
-          path: attachmentPath,
-          ...(claims.download ? { download: true } : {}),
-          ...(claims.fileName !== undefined ? { fileName: claims.fileName } : {}),
-          ...(claims.mimeType !== undefined ? { mimeType: claims.mimeType } : {}),
-          ...(claims.renderIntent === "mcp-app" ? { renderIntent: "mcp-app" as const } : {}),
-        } satisfies ResolvedAsset)
+    if (Option.isNone(info) || info.value.type !== "File") return null;
+    const path = yield* Path.Path;
+    const file = claims.download
+      ? yield* fileSystem.realPath(config.attachmentsDir).pipe(
+          Effect.flatMap((directory) =>
+            openMediaFile(path.join(directory, path.basename(attachmentPath))),
+          ),
+          Effect.orElseSucceed(() => null),
+        )
       : null;
+    return {
+      kind: "file",
+      path: attachmentPath,
+      ...(claims.download ? { download: true } : {}),
+      ...(file ? { file } : {}),
+      ...(claims.fileName !== undefined ? { fileName: claims.fileName } : {}),
+      ...(claims.mimeType !== undefined ? { mimeType: claims.mimeType } : {}),
+      ...(claims.renderIntent === "mcp-app" ? { renderIntent: "mcp-app" as const } : {}),
+    } satisfies ResolvedAsset;
   }
 
   if (claims.kind === "project-favicon") {

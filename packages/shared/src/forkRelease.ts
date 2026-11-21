@@ -1,5 +1,25 @@
+import { compareSemverVersions } from "./semver.ts";
 import { FORK_RELEASE_MANIFEST_FILE, FORK_RELEASE_REPOSITORY } from "./forkRelease.generated.ts";
 export * from "./forkRelease.generated.ts";
+/** Fork publication tags encode the build as a numeric suffix. */
+export function isForkBuildVersion(version: string): boolean {
+  return /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[1-9]\d*$/.test(version);
+}
+
+/** The release was already selected by the host for its own platform and architecture. */
+export function resolveForkUpdateTarget(
+  currentVersion: string,
+  releaseVersion: string | null,
+): { readonly targetVersion: string | null; readonly manualCheckRequired: boolean } {
+  if (releaseVersion === null) return { targetVersion: null, manualCheckRequired: false };
+  if (!isForkBuildVersion(releaseVersion))
+    return { targetVersion: null, manualCheckRequired: true };
+  const newer =
+    !isForkBuildVersion(currentVersion) ||
+    compareSemverVersions(releaseVersion, currentVersion) > 0;
+  return { targetVersion: newer ? releaseVersion : null, manualCheckRequired: false };
+}
+
 export interface ForkReleaseAsset {
   readonly platform: "windows" | "linux" | "android";
   readonly arch: "x64" | "arm64" | "universal";

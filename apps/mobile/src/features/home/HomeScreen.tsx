@@ -447,6 +447,7 @@ export function HomeScreen(props: HomeScreenProps) {
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
+    pinnedBeforeSettled: homeView === "time" && !hasSearchQuery,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     pinReorderEnvironmentIds,
@@ -477,7 +478,13 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     onSelectThread(thread);
   };
-  const projectScopeKeyByProjectKey = new Map(projectScopes.flatMap((scope) => scope.projectRefs.map((ref) => [scopedProjectKey(ref.environmentId, ref.projectId), scope.key] as const)));
+  const projectScopeKeyByProjectKey = new Map(
+    projectScopes.flatMap((scope) =>
+      scope.projectRefs.map(
+        (ref) => [scopedProjectKey(ref.environmentId, ref.projectId), scope.key] as const,
+      ),
+    ),
+  );
   const effectiveCollapsedProjects = hasSearchQuery
     ? new Set<string>()
     : new Set(collapsedProjects);
@@ -512,12 +519,15 @@ export function HomeScreen(props: HomeScreenProps) {
         projectKey: projectScopeKeyByProjectKey.get(key) ?? key,
         title: v2ProjectTitleByProjectKey.get(key) ?? projectByKey.get(key)?.title ?? "未命名项目",
         timestamp: homeConversationTimestamp(thread),
-        pinned: row.item.pinned,
+        pinned: !hasSearchQuery && row.item.pinned,
       };
     },
   });
 
-  useThreadJumpShortcuts(displayedItems.filter((item) => item.type !== "home-project"), selectThread);
+  useThreadJumpShortcuts(
+    displayedItems.filter((item) => item.type !== "home-project"),
+    selectThread,
+  );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the list's visible range after commit to enable swipe gestures on those rows
   useEffect(() => {
     if (swipeEnabled) activateVisibleRows(threadListV2Items);
@@ -688,7 +698,6 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     );
   };
-  const v2KeyExtractor = (item: ThreadListV2ListItem) => item.key;
 
   // extraData changes invalidate every visible row; put the minute clock on items to limit updates.
   const v2ExtraData = {
@@ -864,30 +873,47 @@ export function HomeScreen(props: HomeScreenProps) {
                 renderItem={renderV2Item}
                 keyExtractor={(item) => item.key}
                 getItemType={(item) => item.type}
-                itemsAreEqual={(a, b) => a.type === "home-project" || b.type === "home-project" ? a === b : threadListV2ListItemsAreEqual(a, b)}
+                itemsAreEqual={(a, b) =>
+                  a.type === "home-project" || b.type === "home-project"
+                    ? a === b
+                    : threadListV2ListItemsAreEqual(a, b)
+                }
                 estimatedItemSize={ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT}
                 drawDistance={THREAD_LIST_V2_DRAW_DISTANCE}
                 recycleItems
                 extraData={v2ExtraData}
-                ListHeaderComponent={<>      <View className="min-h-11 flex-row items-center justify-end px-4 py-1">
-        <ListFilterMenu
-          label={homeView === "projects" ? "按项目" : "按时间"}
-          accessibilityLabel="会话排列方式"
-          actions={[
-            { id: "projects", title: "按项目", state: homeView === "projects" ? "on" : "off" },
-            { id: "time", title: "按时间", state: homeView === "time" ? "on" : "off" },
-          ]}
-          onSelect={(id) => {
-            if ((id === "projects" || id === "time") && id !== homeView) {
-              openSwipeableRef.current?.close();
-              saveHomePreferences({ homeThreadView: id });
-              workspace?.recordScrollOffset("threads", 0);
-              listRef.current?.scrollToOffset({ offset: 0, animated: false });
-            }
-          }}
-        />
-      </View>
-{v2ListHeader}</>}
+                ListHeaderComponent={
+                  <>
+                    {" "}
+                    <View className="min-h-11 flex-row items-center justify-end px-4 py-1">
+                      <ListFilterMenu
+                        label={homeView === "projects" ? "按项目" : "按时间"}
+                        accessibilityLabel="会话排列方式"
+                        actions={[
+                          {
+                            id: "projects",
+                            title: "按项目",
+                            state: homeView === "projects" ? "on" : "off",
+                          },
+                          {
+                            id: "time",
+                            title: "按时间",
+                            state: homeView === "time" ? "on" : "off",
+                          },
+                        ]}
+                        onSelect={(id) => {
+                          if ((id === "projects" || id === "time") && id !== homeView) {
+                            openSwipeableRef.current?.close();
+                            saveHomePreferences({ homeThreadView: id });
+                            workspace?.recordScrollOffset("threads", 0);
+                            listRef.current?.scrollToOffset({ offset: 0, animated: false });
+                          }
+                        }}
+                      />
+                    </View>
+                    {v2ListHeader}
+                  </>
+                }
                 // Lifted above the rows so an iOS filter menu's dismissal morph is not covered.
                 ListHeaderComponentStyle={{ zIndex: 1 }}
                 ListFooterComponent={

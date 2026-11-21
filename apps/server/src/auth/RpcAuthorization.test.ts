@@ -75,6 +75,20 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("allows read-only release discovery and reserves update and restart for maintainers", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetNpmRelease)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    for (const method of [
+      WS_METHODS.serverUpdateServer,
+      WS_METHODS.serverUpdateServerWithProgress,
+      WS_METHODS.serverCommitDesktopUpdate,
+      WS_METHODS.serverRestart,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthEnvironmentMaintainScope);
+    }
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

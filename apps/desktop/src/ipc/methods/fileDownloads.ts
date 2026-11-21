@@ -7,18 +7,23 @@ import {
   cancelFileDownload as cancel,
 } from "../../downloads/FileDownloads.ts";
 
-class FileDownloadError extends Schema.TaggedError<FileDownloadError>()("FileDownloadError", { cause: Schema.Unknown }) {}
+class FileDownloadError extends Schema.TaggedError<FileDownloadError>()("FileDownloadError", {
+  cause: Schema.Unknown,
+}) {}
 
 export const downloadFile = DesktopIpc.makeIpcMethod({
   channel: "desktop:download-file",
   payload: Schema.Struct({ url: Schema.String, fileName: Schema.String }),
   result: Schema.Struct({
-    method: Schema.Literals(["idm", "electron", "cancelled"]),
+    method: Schema.Literals(["builtin", "electron", "cancelled"]),
     id: Schema.optionalKey(Schema.String),
   }),
   handler: Effect.fn("desktop.ipc.fileDownloads.start")(function* (input, event) {
     const platform = yield* HostProcess.Platform;
-    return yield* Effect.tryPromise({ try: () => start(input, event?.sender.id, platform), catch: (cause) => new FileDownloadError({ cause }) });
+    return yield* Effect.tryPromise({
+      try: () => start(input, event?.sender.id, platform),
+      catch: (cause) => new FileDownloadError({ cause }),
+    });
   }),
 });
 export const cancelFileDownload = DesktopIpc.makeIpcMethod({

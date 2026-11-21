@@ -1597,21 +1597,36 @@ describe("AssetAccess", () => {
       yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
       yield* fileSystem.writeFile(attachmentPath, new Uint8Array([1, 2, 3]));
 
-      const result = yield* issueAssetUrl({
-        resource: {
-          _tag: "attachment",
-          attachmentId,
-          fileName: "archive.7z",
-          mimeType: "text/html",
-          disposition: "inline",
-        },
-      });
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const separatorIndex = suffix.indexOf("/");
-
-      expect(
-        yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
-      ).toMatchObject({ kind: "file", path: attachmentPath, download: true });
+      for (const [disposition, mimeType] of [
+        ["inline", "text/html"],
+        ["attachment", "video/mp4"],
+      ] as const) {
+        const result = yield* issueAssetUrl({
+          resource: {
+            _tag: "attachment",
+            attachmentId,
+            fileName: "archive.7z",
+            mimeType,
+            disposition,
+          },
+        });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const [token, name] = suffix.split("/");
+        const asset = yield* resolveAsset(token!, name!);
+        expect(asset).toMatchObject({ kind: "file", path: attachmentPath, download: true });
+        if (asset?.kind !== "file") throw new Error("Expected attachment file");
+        const header = yield* assetFileResponse(asset, undefined, undefined, "HEAD");
+        const tag = HttpServerResponse.toWeb(header).headers.get("etag");
+        expect(tag).toMatch(/^"[^"]+"$/);
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse(asset, "bytes=1-2", tag ?? undefined),
+        );
+        expect(response.status).toBe(206);
+        expect(response.headers.get("content-range")).toBe("bytes 1-2/3");
+        expect(new Uint8Array(yield* Effect.promise(() => response.arrayBuffer()))).toEqual(
+          new Uint8Array([2, 3]),
+        );
+      }
     }).pipe(Effect.provide(layerTest)),
   );
   it.effect("issues project favicon capabilities with a signed fallback", () =>

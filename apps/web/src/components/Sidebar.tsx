@@ -367,6 +367,7 @@ interface SidebarThreadPartitionInput {
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
+  readonly pinnedBeforeSettled: boolean;
   /** Boring mode: folders list active threads by the user's latest message. */
   readonly sortActiveBySend: boolean;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
@@ -506,6 +507,7 @@ function useSidebarThreads(input: {
     connectedEnvironmentIds,
     optimisticDrop,
     workingShelfEnabled,
+    pinnedBeforeSettled: input.taskView === "recent",
     sortActiveBySend: folderGroups !== null,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
@@ -586,13 +588,15 @@ function useSidebarThreads(input: {
   ];
   const orderedThreads =
     input.taskView === "recent"
-      ? sortSidebarTasks([
+      ? [
           ...pinnedThreads,
-          ...activeThreads,
-          ...workingThreads,
-          ...snoozedThreads,
-          ...visibleSettledThreads,
-        ])
+          ...sortSidebarTasks([
+            ...activeThreads,
+            ...workingThreads,
+            ...snoozedThreads,
+            ...visibleSettledThreads,
+          ]),
+        ]
       : sectionOrderedThreads;
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const [list, section] of [
@@ -703,10 +707,15 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
           : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil },
       );
     } else {
+      const isPinned = thread.pinnedAt != null;
       const section = resolveSidebarThreadSection({
         snoozed: configLoaded && effectiveSnoozed(thread, { now: preciseNow }),
-        settled: configLoaded && thread.settledOverride === "settled",
-        pinned: thread.pinnedAt != null,
+        // Imported threads can retain their pin even when they are already settled.
+        settled:
+          configLoaded &&
+          thread.settledOverride === "settled" &&
+          !(input.pinnedBeforeSettled && isPinned),
+        pinned: isPinned,
       });
       (section === "snoozed"
         ? snoozed

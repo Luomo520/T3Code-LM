@@ -9,15 +9,15 @@ describe("mobile foreground wakeups", () => {
     expect(next("active", 500)).toBe("application-active-probe");
     expect(next("active", 600)).toBeNull();
   });
-  it("immediately reconnects after long suspension through inactive", () => {
+  it("requests a long-resume connection probe after suspension through inactive", () => {
     const next = makeMobileAppStateWakeups("active", 0);
     next("background", 200);
     next("inactive", 20_000);
-    expect(next("active", 20_001)).toBe("application-active-reconnect");
+    expect(next("active", 20_001)).toBe("application-active-long");
     expect(next("active", 20_002)).toBeNull();
   });
   it("tracks an app initialized in the background", () => {
     const next = makeMobileAppStateWakeups("background", 100);
-    expect(next("active", 10_100)).toBe("application-active-reconnect");
+    expect(next("active", 10_100)).toBe("application-active-long");
   });
 });

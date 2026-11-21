@@ -1,4 +1,6 @@
-import { HOSTED_APP_CHANNEL } from "../../branding";
+import { useAtomValue } from "@effect/atom-react";
+import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
+import { hostEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { AttachmentLimitSettingsRow } from "./AttachmentLimitSettingsRow";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
@@ -70,7 +72,11 @@ import {
 import { useTextGenerationTargets } from "../../textGenerators";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import { useEnvironmentProviders, usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  useEnvironmentProviders,
+  useEnvironments,
+  usePrimaryEnvironmentId,
+} from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
@@ -110,7 +116,8 @@ import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
 import { StorageCleanupSections } from "./StorageSettings";
 import { BackendRestartSection } from "./BackendRestartSection";
-import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
+import { UpdateDownloadProgress } from "../ServerUpdateAction";
+import { ServerVersionUpdateRow } from "./ServerVersionUpdate";
 import { downloadLocalUpdate } from "../sidebar/SidebarUpdatePill";
 
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
@@ -151,7 +158,6 @@ const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
-  const checkProviderUpdates = useCheckProviderUpdates();
 
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
   // The desktop updates this machine, whose policy the primary environment reports.
@@ -210,7 +216,6 @@ function AboutVersionSection() {
     }
 
     if (typeof bridge.checkForUpdate !== "function") return;
-    void checkProviderUpdates();
     void bridge
       .checkForUpdate()
       .then((result) => {
@@ -245,19 +250,21 @@ function AboutVersionSection() {
       ? !canCheckForUpdate(updateState)
       : isDesktopUpdateButtonDisabled(updateState);
 
-  const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
+  const actionLabel: Record<string, string> = { download: "更新 PC 客户端", install: "安装并重启" };
   const statusLabel: Record<string, string> = {
-    checking: "Checking…",
-    downloading: "Downloading…",
-    "up-to-date": "Up to Date",
+    checking: "正在检查…",
+    downloading: "正在下载…",
+    "up-to-date": "重新检查更新",
   };
   const buttonLabel =
-    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
+    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "检查 PC 客户端更新";
   const description =
     action === "download" || action === "install"
-      ? "Update available."
+      ? `可更新至 ${updateState?.downloadedVersion ?? updateState?.availableVersion ?? "新版"}，包含内置后端。`
       : (getDesktopUpdateDisabledReason(updateState, updatesDenial) ??
-        "Current version of the application.");
+        (updateState?.status === "up-to-date"
+          ? "PC 客户端已是最新版本。"
+          : "PC 客户端及内置后端。"));
 
   return (
     <>
@@ -265,6 +272,15 @@ function AboutVersionSection() {
         id={searchableSetting("app-version").id}
         title={<AboutVersionTitle />}
         description={description}
+        status={
+          updateState?.status === "downloading" ? (
+            <UpdateDownloadProgress
+              label="PC 客户端更新下载进度"
+              detail="正在下载 PC 客户端…"
+              percent={updateState.downloadPercent ?? undefined}
+            />
+          ) : null
+        }
         managed={updatesDenial}
         control={
           <Tooltip>
@@ -2150,6 +2166,33 @@ export function MaintenanceSettingsPanel() {
   );
 }
 
+function AboutServerUpdates() {
+  const { environments } = useEnvironments();
+  const primaryId = usePrimaryEnvironmentId();
+  const hostId = useAtomValue(hostEnvironmentIdAtom);
+  const targets = isElectron
+    ? environments.filter(
+        (environment) =>
+          environment.entry.enabled &&
+          environment.environmentId !== primaryId &&
+          environment.environmentId !== hostId &&
+          !isDesktopLocalConnectionTarget(environment.entry.target),
+      )
+    : environments.filter((environment) => environment.environmentId === primaryId);
+  if (targets.length === 0) return null;
+  return (
+    <SettingsSection id="about-server-updates" title="服务端">
+      {targets.map(({ environmentId }) => (
+        <ServerVersionUpdateRow
+          key={environmentId}
+          environmentId={environmentId}
+          servesWeb={!isElectron}
+        />
+      ))}
+    </SettingsSection>
+  );
+}
+
 export function AboutSettingsPanel() {
   const primaryPolicy = usePrimaryManagedPolicy();
   // The Welcome page sets up this computer, so it needs one.
@@ -2177,7 +2220,7 @@ export function AboutSettingsPanel() {
             }
           />
         ) : null}
-        {isElectron || HOSTED_APP_CHANNEL ? (
+        {isElectron ? (
           <AboutVersionSection />
         ) : (
           <>
@@ -2202,6 +2245,7 @@ export function AboutSettingsPanel() {
         )}
       </SettingsSection>
 
+      <AboutServerUpdates />
       <SettingsSection id="legal" title="Legal">
         <SettingsRow
           {...searchableSetting("privacy-policy")}

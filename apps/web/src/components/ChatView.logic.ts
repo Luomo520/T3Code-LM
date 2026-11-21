@@ -603,6 +603,7 @@ export async function resolveFileAttachmentUrl(input: {
   attachment: ChatFileAttachment;
   environmentId: EnvironmentId;
   httpBaseUrl: string;
+  download?: boolean;
   createAssetUrl: (input: {
     environmentId: EnvironmentId;
     input: AssetCreateUrlInput;
@@ -617,6 +618,7 @@ export async function resolveFileAttachmentUrl(input: {
         attachmentId: attachment.id,
         fileName: attachment.name,
         mimeType: videoMimeType(attachment) ?? attachment.mimeType,
+        ...(input.download ? { disposition: "attachment" as const } : {}),
       },
     },
   });

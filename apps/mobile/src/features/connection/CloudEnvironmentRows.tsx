@@ -14,7 +14,7 @@ import {
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Pressable, type TextLayoutEvent, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -34,6 +34,7 @@ import { type RelayEnvironmentView, useConnectionController } from "./useConnect
 
 interface CloudEnvironmentRowsProps {
   readonly connectedCloudEnvironments: ReadonlyArray<ConnectedEnvironmentSummary>;
+  readonly renderBelow?: (environment: ConnectedEnvironmentSummary) => ReactNode;
   readonly onOpenEnvironment?: (environmentId: EnvironmentId) => void;
   readonly onSetEnvironmentEnabled: (environmentId: EnvironmentId, enabled: boolean) => void;
   readonly onRemoveEnvironment: (environmentId: EnvironmentId) => void;
@@ -109,6 +110,7 @@ function CloudEnvironmentRowsContent(
               key={environment.environmentId}
               environment={environment}
               descriptor={discoveredDescriptors.get(environment.environmentId)}
+              below={props.renderBelow?.(environment)}
               onSetEnabled={(enabled) =>
                 props.onSetEnvironmentEnabled(environment.environmentId, enabled)
               }
@@ -136,11 +138,15 @@ function CloudEnvironmentRowsContent(
       ) : controller.relayDiscovery.isRefreshing ? (
         <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-grouped-card p-6">
           <AppActivityIndicator colorClassName={"accent-icon"} />
-          <Text className="text-center text-sm leading-normal text-foreground-muted">{"正在加载已关联的云端环境。"}</Text>
+          <Text className="text-center text-sm leading-normal text-foreground-muted">
+            {"正在加载已关联的云端环境。"}
+          </Text>
         </View>
       ) : controller.relayDiscovery.error ? null : (
         <View collapsable={false} className="rounded-[24px] bg-grouped-card p-5">
-          <Text className="text-sm leading-normal text-foreground-muted">{"没有其他已关联的云端环境。"}</Text>
+          <Text className="text-sm leading-normal text-foreground-muted">
+            {"没有其他已关联的云端环境。"}
+          </Text>
         </View>
       )}
 
@@ -148,7 +154,9 @@ function CloudEnvironmentRowsContent(
       controller.relayDiscovery.error &&
       !controller.relayDiscovery.isRefreshing ? (
         <View collapsable={false} className="gap-3 rounded-[24px] bg-grouped-card p-5">
-          <Text className="text-base font-t3-bold text-foreground">{"无法加载 T3 Connect 环境"}</Text>
+          <Text className="text-base font-t3-bold text-foreground">
+            {"无法加载 T3 Connect 环境"}
+          </Text>
           <Text className="text-sm text-foreground-muted">{controller.relayDiscovery.error}</Text>
           {controller.relayDiscovery.errorTraceId ? (
             <CopyTraceIdButton traceId={controller.relayDiscovery.errorTraceId} />
@@ -169,6 +177,7 @@ function CloudEnvironmentRowsContent(
 function ConnectedCloudEnvironmentRow(props: {
   readonly environment: ConnectedEnvironmentSummary;
   readonly descriptor: ExecutionEnvironmentDescriptor | undefined;
+  readonly below?: ReactNode;
   readonly errorExpanded: boolean;
   readonly onSetEnabled: (enabled: boolean) => void;
   readonly onRemove: () => void;
@@ -189,7 +198,7 @@ function ConnectedCloudEnvironmentRow(props: {
   if (props.descriptor !== undefined && props.descriptor !== lastDescriptor) {
     setLastDescriptor(props.descriptor);
   }
-  return (
+  const row = (
     <CloudEnvironmentRowShell
       opensDetails={props.onOpen !== undefined}
       onOpen={props.onOpen}
@@ -213,6 +222,14 @@ function ConnectedCloudEnvironmentRow(props: {
         : { statusText: "Off" })}
       value={enabled}
     />
+  );
+  return props.below ? (
+    <View>
+      {row}
+      {props.below}
+    </View>
+  ) : (
+    row
   );
 }
 

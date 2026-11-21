@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.RemoteMessage
 import expo.modules.notifications.service.ExpoFirebaseMessagingService
 
@@ -43,6 +44,7 @@ class AgentActivityExpiryReceiver : BroadcastReceiver() {
 /** Handles data pushes natively so delivery does not depend on a running JS bridge. */
 object AgentNotifications {
   private const val STORE = "t3-agent-notifications"
+  private const val LOCAL_STORE = "t3-task-completion"
   private const val ACTIVITY_CHANNEL = "agent-activity"
   private const val ALERT_CHANNEL = "agent-alerts"
   private const val ACTIVITY_TAG = "t3-agent-activity"
@@ -92,9 +94,57 @@ object AgentNotifications {
   }
 
   @Volatile private var threadOnScreen: String? = null
+  @Volatile private var activityForeground: Boolean? = null
 
   fun setThreadOnScreen(path: String?) {
     threadOnScreen = path
+  }
+
+  fun setActivityForeground(foreground: Boolean) {
+    activityForeground = foreground
+  }
+
+  fun supportsLocalTaskCompletion(context: Context): Boolean =
+    FirebaseApp.getApps(context).none { it.name == FirebaseApp.DEFAULT_APP_NAME }
+
+  fun canPostAlerts(context: Context): Boolean {
+    if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+    return Build.VERSION.SDK_INT < 26 ||
+      manager(context).getNotificationChannel(ALERT_CHANNEL)?.importance !=
+      NotificationManager.IMPORTANCE_NONE
+  }
+
+  @Synchronized
+  fun postTaskCompletion(
+    context: Context,
+    scheme: String,
+    path: String,
+    runId: String,
+    title: String,
+    failed: Boolean
+  ) {
+    if (!canPostAlerts(context)) return
+    val prefs = context.getSharedPreferences(LOCAL_STORE, Context.MODE_PRIVATE)
+    val alertId = "$path\t$runId"
+    val seen = prefs.getString("seen", null)?.split('\n').orEmpty()
+    if (alertId in seen) return
+    channels(context)
+    try {
+      postAlert(
+        context,
+        scheme,
+        mapOf(
+          "alert_title" to if (failed) "任务失败" else "任务已完成",
+          "alert_body" to title,
+          "alert_path" to path,
+          "alert_group" to path
+        ),
+        alertId
+      )
+    } catch (_: SecurityException) {
+      return
+    }
+    prefs.edit().putString("seen", (seen.takeLast(255) + alertId).joinToString("\n")).apply()
   }
 
   @Synchronized
@@ -145,7 +195,7 @@ object AgentNotifications {
       ?: prefs.getStringSet("seenAlerts", emptySet()).orEmpty().toList()
     if (alertId != null && alertId !in seen) {
       // Consume suppressed alerts so retries cannot resurface them later.
-      val resumed = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
+      val resumed = activityForeground ?: ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
         Lifecycle.State.RESUMED
       )
       val visibleThread = threadOnScreen

@@ -66,7 +66,7 @@ function enrichedStyle(
     const fontSize = style.headingFontSizes?.[level - 1] ?? style.fontSize * (1.6 - level * 0.1);
     return {
       ...body,
-      color: style.strongColor,
+      color: (level <= 2 ? style.documentAccentColor : undefined) ?? style.strongColor,
       fontFamily: style.headingFontFamily,
       fontSize,
       lineHeight: fontSize * 1.35,
@@ -144,7 +144,7 @@ function enrichedStyle(
     list: {
       ...body,
       bulletColor: style.mutedColor,
-      markerColor: style.mutedColor,
+      markerColor: style.documentAccentColor ?? style.mutedColor,
       // The bullet is centred on the gap's edge and scales with the system text size; the gap must too.
       gapWidth: 12 * fontScale,
     },

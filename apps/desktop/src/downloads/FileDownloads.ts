@@ -1,14 +1,15 @@
-// @effect-diagnostics nodeBuiltinImport:off - Native IDM spawn events and Electron downloads use Node APIs.
+// @effect-diagnostics nodeBuiltinImport:off - Electron downloads use native paths and save dialogs.
 // @effect-diagnostics globalTimers:off - Bounded Electron event registration timeout; no idle timer.
 // Native downloads run only after an explicit renderer request.
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
 import * as Electron from "electron";
 import type { DesktopFileDownloadEvent } from "@t3tools/contracts";
+import { downloadKey, downloadToFile } from "./ResumableDownload.ts";
 
-const active = new Map<string, { item: Electron.DownloadItem; senderId: number }>();
+const active = new Map<string, { cancel: () => void; senderId: number }>();
+const builtinDestinations = new Set<string>();
 let starting: Promise<unknown> = Promise.resolve();
 let lastDirectory: string | undefined;
 async function downloadDirectory(): Promise<string> {
@@ -47,7 +48,7 @@ export function validateDownloadUrl(raw: string): string {
 
 export function safeDownloadName(raw: string): string {
   const name = raw
-    // eslint-disable-next-line no-control-regex -- Windows filenames cannot contain control bytes.
+    // Windows filenames cannot contain control bytes.
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
     .replace(/[. ]+$/, "")
     .slice(0, 180);
@@ -56,44 +57,67 @@ export function safeDownloadName(raw: string): string {
     : name;
 }
 
-async function findIdm(platform: string): Promise<string | null> {
-  if (platform !== "win32") return null;
-  const candidates: string[] = [];
-  for (const hive of ["HKCU", "HKLM"]) {
-    for (const view of ["/reg:64", "/reg:32"]) {
-      const output = await new Promise<string>((resolve) =>
-        NodeChildProcess.execFile(
-          "reg.exe",
-          [
-            "query",
-            `${hive}\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\IDMan.exe`,
-            "/ve",
-            view,
-          ],
-          { windowsHide: true },
-          (error, stdout) => resolve(error ? "" : stdout),
-        ),
-      );
-      const match = /REG_SZ\s+(.+)$/im.exec(output);
-      if (match?.[1]) candidates.push(match[1].trim().replace(/^"|"$/g, ""));
-    }
+function startBuiltinDownload(
+  sender: Electron.WebContents,
+  id: string,
+  url: string,
+  fileName: string,
+  path: string,
+) {
+  const destinationKey = NodePath.resolve(path).toLowerCase();
+  if (builtinDestinations.has(destinationKey)) {
+    throw new Error("已有文件正在下载到此位置。");
   }
-  for (const root of [
-    process.env["ProgramFiles(x86)"],
-    process.env.ProgramFiles,
-    process.env.LOCALAPPDATA,
-  ]) {
-    if (root) candidates.push(NodePath.join(root, "Internet Download Manager", "IDMan.exe"));
-  }
-  for (const candidate of candidates) {
-    try {
-      await NodeFSP.access(candidate);
-      return candidate;
-    } catch {
-      /* Try the next installed location. */
-    }
-  }
-  return null;
+  const controller = new AbortController();
+  builtinDestinations.add(destinationKey);
+  active.set(id, { cancel: () => controller.abort(), senderId: sender.id });
+  let receivedBytes = 0;
+  let totalBytes = 0;
+  let previousProgress = -1;
+  const send = (state: DesktopFileDownloadEvent["state"]) => {
+    if (!sender.isDestroyed())
+      sender.send("desktop:file-download-event", {
+        id,
+        fileName,
+        state,
+        receivedBytes,
+        totalBytes,
+      } satisfies DesktopFileDownloadEvent);
+  };
+  const source = new URL(url);
+  // Asset URLs rotate per request. The strong ETag identifies the file version within its origin.
+  send("progressing");
+  void downloadToFile({
+    fetch: (input, options) => sender.session.fetch(input, options),
+    url,
+    destination: path,
+    stagingDirectory: NodePath.join(
+      NodePath.dirname(path),
+      `.t3-download-${downloadKey(destinationKey).slice(0, 32)}`,
+    ),
+    source: source.origin,
+    signal: controller.signal,
+    onProgress: (progress) => {
+      receivedBytes = progress.receivedBytes;
+      totalBytes = progress.totalBytes;
+      const current =
+        totalBytes > 0
+          ? Math.floor((100 * receivedBytes) / totalBytes)
+          : Math.floor(receivedBytes / 1048576);
+      if (current === previousProgress) return;
+      previousProgress = current;
+      send("progressing");
+    },
+  })
+    .then(
+      () => send("completed"),
+      () => send(controller.signal.aborted ? "cancelled" : "interrupted"),
+    )
+    .finally(() => {
+      builtinDestinations.delete(destinationKey);
+      active.delete(id);
+    });
+  return { method: "builtin" as const, id };
 }
 
 export function downloadFile(
@@ -113,23 +137,6 @@ async function performDownload(
 ) {
   const url = validateDownloadUrl(input.url);
   const fileName = safeDownloadName(input.fileName);
-  const idm = await findIdm(platform);
-  if (idm) {
-    const started = await new Promise<boolean>((resolve) => {
-      const child = NodeChildProcess.spawn(idm, ["/d", url, "/f", fileName], {
-        shell: false,
-        detached: true,
-        windowsHide: false,
-        stdio: "ignore",
-      });
-      child.once("error", () => resolve(false));
-      child.once("spawn", () => {
-        child.unref();
-        resolve(true);
-      });
-    });
-    if (started) return { method: "idm" as const };
-  }
   const sender = senderId === undefined ? undefined : Electron.webContents.fromId(senderId);
   if (!sender || sender.isDestroyed()) throw new Error("下载窗口已关闭，请重试。");
   const owner = Electron.BrowserWindow.fromWebContents(sender);
@@ -152,6 +159,7 @@ async function performDownload(
   } catch {
     /* The selection remains available for this app session. */
   }
+  if (platform === "win32") return startBuiltinDownload(sender, id, url, fileName, path);
   await new Promise<void>((resolve, reject) => {
     const session = sender.session;
     const timer = setTimeout(() => {
@@ -170,7 +178,7 @@ async function performDownload(
       if (source?.id !== senderId || item.getURLChain()[0] !== url) return;
       cleanup();
       item.setSavePath(path);
-      active.set(id, { item, senderId: sender.id });
+      active.set(id, { cancel: () => item.cancel(), senderId: sender.id });
       let previousProgress = -1;
       const send = (state: DesktopFileDownloadEvent["state"]) => {
         if (!sender.isDestroyed())
@@ -211,5 +219,5 @@ async function performDownload(
 
 export function cancelFileDownload(id: string, senderId?: number): void {
   const task = active.get(id);
-  if (task && task.senderId === senderId) task.item.cancel();
+  if (task && task.senderId === senderId) task.cancel();
 }

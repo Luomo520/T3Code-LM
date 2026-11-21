@@ -17,6 +17,7 @@ import {
   type DesktopWslState,
   EnvironmentId,
   managedCapabilityDenial,
+  managedUpdatesDenial,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import {
@@ -25,6 +26,9 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
+import { resolveForkUpdateTarget } from "@t3tools/shared/forkRelease";
+import { ServerVersionUpdateRow } from "./ServerVersionUpdate";
 
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import {
@@ -93,6 +97,7 @@ import {
   readEnvironmentScope,
   useEnvironmentScope,
   useEnvironmentSessionState,
+  useEnvironmentsWithScope,
 } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
 import {
@@ -110,7 +115,7 @@ import {
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useUpdateEnvironmentSettings } from "~/hooks/useSettings";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { environmentIdsKey } from "~/state/environmentAtomList";
+import { environmentAtomList, environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentUpdateStatesAtom, serverEnvironment } from "~/state/server";
 import {
   ServerUpdateAction,
@@ -151,6 +156,9 @@ import {
 const CLOUD_CONNECT_SESSION_SUBJECT = "cloud-connect";
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
+const serverReleasesAtom = environmentAtomList("settings:server-releases", (environmentId) =>
+  serverEnvironment.npmRelease({ environmentId, input: { spec: "latest" } }),
+);
 
 // Colons are invalid in distro names, keeping picker sentinels collision-free.
 const BACKEND_VALUE_DEFAULT_WSL = "backend:default-wsl";
@@ -277,39 +285,55 @@ function ConnectionsSettingsContent({
   const listedEnvironments = savedEnvironments.filter(
     (environment) => !isDesktopLocalConnectionTarget(environment.entry.target),
   );
-  const savedUpdateStates = useAtomValue(
-    environmentUpdateStatesAtom(
-      environmentIdsKey(savedEnvironments.map(({ environmentId }) => environmentId)),
-    ),
+  const maintainableIds = useEnvironmentsWithScope(
+    listedEnvironments,
+    AuthEnvironmentMaintainScope,
   );
-  const savedServerUpdateStates = savedEnvironments.map((environment, index) => ({
-    environment,
-    updateStatus: savedUpdateStates[index]!.status,
-  }));
-  const savedServerUpdateTargets = savedServerUpdateStates.flatMap(
-    ({ environment, updateStatus }): ServerUpdateTarget[] => {
-      const mismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
-      const selfUpdate = resolveServerSelfUpdateCapability(environment.serverConfig);
-      const desktopAppUpdate = supportsDesktopAppUpdate(environment.serverConfig);
+  const updateCandidates =
+    view === "environments"
+      ? listedEnvironments.filter(
+          (environment) =>
+            maintainableIds.has(environment.environmentId) &&
+            environment.entry.enabled &&
+            environment.connection.phase === "connected" &&
+            environment.serverConfig?.environment.capabilities.npmReleaseLookup === true &&
+            managedUpdatesDenial(environment.serverConfig.managedPolicy) === undefined,
+        )
+      : [];
+  const candidateKey = environmentIdsKey(
+    updateCandidates.map(({ environmentId }) => environmentId),
+  );
+  const savedUpdateStates = useAtomValue(environmentUpdateStatesAtom(candidateKey));
+  const latestReleases = useAtomValue(serverReleasesAtom(candidateKey));
+  const savedServerUpdateTargets = updateCandidates.flatMap(
+    (environment, index): ServerUpdateTarget[] => {
+      const release = latestReleases[index];
+      const config = environment.serverConfig;
+      const selfUpdate = resolveServerSelfUpdateCapability(config);
+      const desktopAppUpdate = supportsDesktopAppUpdate(config);
       if (
-        !mismatch ||
-        updateStatus === "running" ||
-        !environment.entry.enabled ||
-        environment.connection.phase !== "connected" ||
-        isDesktopLocalConnectionTarget(environment.entry.target) ||
+        !config ||
+        !release ||
+        !AsyncResult.isSuccess(release) ||
+        savedUpdateStates[index]?.status === "running" ||
         selfUpdate === null ||
         (selfUpdate === "desktop-managed" && !desktopAppUpdate)
       ) {
         return [];
       }
+      const { targetVersion } = resolveForkUpdateTarget(
+        config.environment.serverVersion,
+        release.value?.version ?? null,
+      );
+      if (targetVersion === null) return [];
       return [
         {
           environmentId: environment.environmentId,
           serverLabel: environment.label,
           selfUpdate,
-          installation: environment.serverConfig?.environment.capabilities.serverInstallation,
+          installation: config.environment.capabilities.serverInstallation,
           desktopAppUpdate,
-          targetVersion: mismatch.clientVersion,
+          targetVersion,
         },
       ];
     },
@@ -1698,6 +1722,9 @@ function ConnectionsSettingsContent({
           </div>
         }
       >
+        {!desktopBridge && primaryEnvironmentId !== null ? (
+          <ServerVersionUpdateRow environmentId={primaryEnvironmentId} servesWeb />
+        ) : null}
         {listedEnvironments.map((environment) => (
           <SavedBackendListRow
             key={environment.environmentId}

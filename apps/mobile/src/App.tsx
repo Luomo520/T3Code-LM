@@ -38,6 +38,7 @@ import {
   installAgentNotificationNavigation,
   setAgentNotificationPathname,
 } from "./features/agent-awareness/notificationNavigation";
+import { installAndroidTaskCompletion } from "./features/agent-awareness/androidTaskCompletion";
 import {
   installAppShortcuts,
   recordAppShortcutNavigationState,
@@ -211,6 +212,7 @@ const appServiceDisposers = [
   installComposerAttachmentUploads(),
   startIncomingShareInbox(),
   installAgentNotificationNavigation(linkToAppPath),
+  installAndroidTaskCompletion(),
   installAppShortcuts(linkToAppPath),
   installAppUpdateChecks(),
   installShowcaseCapture(rootPathnameFromState),

@@ -51,7 +51,7 @@ function makeThread(
 }
 
 describe("home project scopes", () => {
-  it("includes all unarchived history across collapsed shelves and sorts both views by conversation time", () => {
+  it("includes unarchived history in both views and keeps pins first in the time view", () => {
     const environmentId = EnvironmentId.make("local");
     const projects = ["one", "two"].map((id) =>
       makeProject({ environmentId, id: ProjectId.make(id), title: id }),
@@ -89,7 +89,13 @@ describe("home project scopes", () => {
     });
     expect(
       arrangeHomeList({ rows, describe, mode: "time", collapsed: new Set() }).map((row) => row.key),
-    ).toEqual(threads.toReversed().map((thread) => thread.id));
+    ).toEqual([
+      threads[13]!.id,
+      ...threads
+        .toReversed()
+        .filter((thread) => thread.pinnedAt === null)
+        .map((thread) => thread.id),
+    ]);
     const grouped = arrangeHomeList({ rows, describe, mode: "projects", collapsed: new Set() });
     expect(grouped.map((row) => row.key)).toEqual([
       "home-project:0:two",
@@ -111,6 +117,85 @@ describe("home project scopes", () => {
     });
     expect(search.items.map((item) => item.thread.id)).toEqual([threads[15]!.id]);
   });
+  it("keeps scoped pins above active and settled rows as older history pages load", () => {
+    const environmentId = EnvironmentId.make("local");
+    const projectId = ProjectId.make("scoped");
+    const now = "2026-07-01T00:00:00.000Z";
+    const thread = (id: string, overrides: Partial<EnvironmentThreadShell> = {}) =>
+      makeThread({ environmentId, projectId, id: ThreadId.make(id), title: id, ...overrides });
+    const first = thread("first", {
+      pinnedAt: now,
+      pinOrderKey: "a",
+      settledOverride: "settled",
+      settledAt: "2026-06-01T00:00:00.000Z",
+      latestUserMessageAt: "2026-06-01T00:00:00.000Z",
+    });
+    const second = thread("second", {
+      pinnedAt: now,
+      pinOrderKey: "b",
+      latestUserMessageAt: "2026-06-02T00:00:00.000Z",
+    });
+    const active = thread("active", { latestUserMessageAt: "2026-06-05T00:00:00.000Z" });
+    const newSettled = thread("new-settled", {
+      settledOverride: "settled",
+      settledAt: "2026-06-07T00:00:00.000Z",
+      latestUserMessageAt: "2026-06-06T00:00:00.000Z",
+    });
+    const olderSettled = thread("older-settled", {
+      settledOverride: "settled",
+      settledAt: "2026-06-04T00:00:00.000Z",
+      latestUserMessageAt: "2026-06-03T00:00:00.000Z",
+    });
+    const other = thread("other", {
+      projectId: ProjectId.make("other"),
+      pinnedAt: now,
+      pinOrderKey: "0",
+    });
+    const snoozedPin = thread("snoozed", {
+      pinnedAt: now,
+      pinOrderKey: "0",
+      snoozedUntil: "2099-01-01T00:00:00.000Z",
+    });
+    const recentKeys = (rows: readonly EnvironmentThreadShell[], settledLimit: number) => {
+      const layout = buildThreadListV2Items({
+        threads: rows,
+        projectRefs: [{ environmentId, projectId }],
+        environmentId,
+        searchQuery: "",
+        pinnedBeforeSettled: true,
+        now,
+        settledLimit,
+        settledShelfExpanded: true,
+      });
+      return arrangeHomeList({
+        rows: layout.items.map((item) => ({ ...item, key: item.thread.id })),
+        mode: "time",
+        collapsed: new Set(),
+        describe: ({ thread, pinned }) => ({
+          projectKey: thread.projectId,
+          title: thread.title,
+          timestamp: homeConversationTimestamp(thread),
+          pinned,
+        }),
+      }).map((row) => row.key);
+    };
+    const threads = [second, newSettled, other, active, first, olderSettled, snoozedPin];
+    expect(recentKeys(threads, 1)).toEqual(["first", "second", "new-settled", "active"]);
+    expect(recentKeys(threads, 2)).toEqual([
+      "first",
+      "second",
+      "new-settled",
+      "active",
+      "older-settled",
+    ]);
+    expect(
+      recentKeys(
+        threads.map((row) => (row === first ? { ...row, pinnedAt: null, pinOrderKey: null } : row)),
+        3,
+      ),
+    ).toEqual(["second", "new-settled", "active", "older-settled", "first"]);
+  });
+
   it("derives the catalog from existing unarchived conversations and keeps environments separate", () => {
     const local = EnvironmentId.make("local");
     const remote = EnvironmentId.make("remote");

@@ -2,6 +2,7 @@ import {
   ServerSelfUpdateError,
   type DesktopUpdateState,
   type DesktopUpdateStatusReport,
+  type ServerSelfUpdateDownloadProgress,
   type ServerSelfUpdateProgressStage,
   type ServerSelfUpdateResult,
 } from "@t3tools/contracts";
@@ -43,6 +44,7 @@ export class DesktopAppUpdate extends Context.Service<
     readonly run: (
       reportProgress: (
         stage: ServerSelfUpdateProgressStage,
+        download?: ServerSelfUpdateDownloadProgress,
       ) => Effect.Effect<void, ServerSelfUpdateError>,
       trackSwitch?: DesktopTelemetryReceiver.DesktopTrackSwitch,
     ) => Effect.Effect<ServerSelfUpdateResult, ServerSelfUpdateError>;
@@ -71,20 +73,32 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
     changes: Stream.Stream<DesktopUpdateStatusReport>,
     reportProgress: (
       stage: ServerSelfUpdateProgressStage,
+      download?: ServerSelfUpdateDownloadProgress,
     ) => Effect.Effect<void, ServerSelfUpdateError>,
     trackSwitch: boolean,
   ) {
-    const lastStage = yield* Ref.make<ServerSelfUpdateProgressStage | null>(null);
+    const lastProgress = yield* Ref.make<{
+      stage: ServerSelfUpdateProgressStage;
+      downloadPercent: number | null;
+    } | null>(null);
     const emitStage = (
       stage: ServerSelfUpdateProgressStage | null,
+      downloadPercent: number | null = null,
     ): Effect.Effect<void, ServerSelfUpdateError> =>
       stage === null
         ? Effect.void
-        : Ref.get(lastStage).pipe(
+        : Ref.get(lastProgress).pipe(
             Effect.flatMap((previous) =>
-              previous === stage
+              previous?.stage === stage && previous.downloadPercent === downloadPercent
                 ? Effect.void
-                : Ref.set(lastStage, stage).pipe(Effect.andThen(reportProgress(stage))),
+                : Ref.set(lastProgress, { stage, downloadPercent }).pipe(
+                    Effect.andThen(
+                      reportProgress(
+                        stage,
+                        downloadPercent === null ? undefined : { downloadPercent },
+                      ),
+                    ),
+                  ),
             ),
           );
 
@@ -93,9 +107,10 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
       Stream.mapEffect(
         (report): Effect.Effect<Option.Option<DesktopUpdateStatusReport>, ServerSelfUpdateError> =>
           report.outcome === undefined
-            ? emitStage(desktopUpdateProgressStage(report.state)).pipe(
-                Effect.as(Option.none<DesktopUpdateStatusReport>()),
-              )
+            ? emitStage(
+                desktopUpdateProgressStage(report.state),
+                report.state.status === "downloading" ? report.state.downloadPercent : null,
+              ).pipe(Effect.as(Option.none<DesktopUpdateStatusReport>()))
             : Effect.succeedSome(report),
       ),
       Stream.filterMap(

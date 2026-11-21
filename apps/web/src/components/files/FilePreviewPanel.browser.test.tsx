@@ -117,7 +117,7 @@ function setup() {
   const keys = ["t3code.fileExplorerOpen", "t3code.renderMarkdown"];
   const previous = keys.map((key) => localStorage.getItem(key));
   localStorage.setItem(keys[0]!, "false");
-  localStorage.setItem(keys[1]!, "true");
+  localStorage.removeItem(keys[1]!);
   state.file = null;
   state.optimistic = null;
   state.assetUrl = { _tag: "Loading" };

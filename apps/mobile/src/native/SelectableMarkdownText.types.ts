@@ -3,6 +3,7 @@ export interface NativeMarkdownTextStyle {
   readonly selectionHandleColor?: string;
   readonly color: string;
   readonly strongColor: string;
+  readonly documentAccentColor?: string;
   readonly mutedColor: string;
   readonly linkColor: string;
   readonly inlineCodeColor: string;

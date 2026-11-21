@@ -1,4 +1,6 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
+import { serverUpdateDownloadPercent } from "@t3tools/client-runtime/state/server";
+import { Progress } from "../../components/ui/Progress";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
@@ -39,6 +41,7 @@ export function OutdatedServerUpdateSection({
   const [checkErrorDismissed, setCheckErrorDismissed] = useState(false);
   const error = checkErrorDismissed ? null : releaseCheckError(checkResult);
   const busy = checking || state.status === "running";
+  const percent = state.status === "running" ? serverUpdateDownloadPercent(state) : undefined;
 
   function check() {
     if (busy) return;
@@ -87,7 +90,7 @@ export function OutdatedServerUpdateSection({
               ? "Restarting and reconnecting…"
               : state.stage === "installing"
                 ? "Installing update…"
-                : "Downloading update…"
+                : `正在下载服务端更新…${percent === undefined ? "" : ` ${Math.floor(percent)}%`}`
             : release
               ? release.targetVersion
                 ? `Version ${release.targetVersion} is available.`
@@ -96,6 +99,12 @@ export function OutdatedServerUpdateSection({
                   : "未发现适用于此环境的更新。"
               : "此环境使用旧协议。可查看对应平台发布包，由你决定是否更新。"}
         </Text>
+        {state.status === "running" && state.stage === "downloading" ? (
+          <Progress
+            label="服务端更新下载进度"
+            {...(percent === undefined ? {} : { value: percent / 100 })}
+          />
+        ) : null}
         {error || state.status === "failed" ? (
           <Text selectable accessibilityRole="alert" className="text-sm text-danger-foreground">
             {error ?? (state.status === "failed" ? state.message : null)}
