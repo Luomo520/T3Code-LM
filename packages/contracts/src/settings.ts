@@ -1443,7 +1443,13 @@ export const AttachmentMaxFileSizeMiB = Schema.Int.check(
   Schema.isLessThanOrEqualTo(MAX_ATTACHMENT_FILE_SIZE_MIB),
 );
 
+const ReasoningEffortDefaults = Schema.Record(
+  ProviderInstanceId,
+  Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
+);
+
 export const ServerSettings = Schema.Struct({
+  reasoningEffortDefaults: Schema.optionalKey(ReasoningEffortDefaults),
   attachmentMaxFileSizeMiB: AttachmentMaxFileSizeMiB.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ATTACHMENT_MAX_FILE_SIZE_MIB)),
   ),
@@ -1881,6 +1887,13 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  setReasoningEffortDefault: Schema.optionalKey(
+    Schema.Struct({
+      instanceId: ProviderInstanceId,
+      model: TrimmedNonEmptyString,
+      effort: Schema.NullOr(TrimmedNonEmptyString),
+    }),
+  ),
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),

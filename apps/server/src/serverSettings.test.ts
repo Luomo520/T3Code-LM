@@ -169,6 +169,40 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       assert.deepEqual(settings.providerModelPreferences?.[provider]?.modelOrder, ["luna", "sol"]);
     }).pipe(Effect.provide(layerServerSettings())),
   );
+  it.effect("persists concurrent reasoning defaults and clears only the selected model", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const fs = yield* FileSystem.FileSystem;
+      const { settingsPath } = yield* ServerConfig.ServerConfig;
+      const codex = ProviderInstanceId.make("codex");
+      const work = ProviderInstanceId.make("codex_work");
+      const original = yield* service.getSettings;
+      assert.deepEqual(original.reasoningEffortDefaults, {});
+      assert.isUndefined((yield* decodeServerSettings({})).reasoningEffortDefaults);
+      yield* Effect.all(
+        [
+          service.updateSettings({
+            setReasoningEffortDefault: { instanceId: codex, model: "sol", effort: "high" },
+          }),
+          service.updateSettings({
+            setReasoningEffortDefault: { instanceId: codex, model: "luna", effort: "low" },
+          }),
+          service.updateSettings({
+            setReasoningEffortDefault: { instanceId: work, model: "sol", effort: "medium" },
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const next = yield* service.updateSettings({
+        setReasoningEffortDefault: { instanceId: codex, model: "sol", effort: null },
+      });
+      const expected = { [codex]: { luna: "low" }, [work]: { sol: "medium" } };
+      assert.deepEqual(next.reasoningEffortDefaults, expected);
+      assert.deepEqual(next.defaultModelSelection, original.defaultModelSelection);
+      const persisted = yield* decodeServerSettingsJson(yield* fs.readFileString(settingsPath));
+      assert.deepEqual(persisted.reasoningEffortDefaults, expected);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
   it.effect("persists and broadcasts model preferences to other connected clients", () =>
     Effect.scoped(
       Effect.gen(function* () {

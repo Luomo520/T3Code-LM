@@ -8,10 +8,18 @@ import {
 import type { ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { getProviderOptionCurrentLabel } from "@t3tools/shared/model";
-import { CheckIcon, ChevronRightIcon, ChevronUpIcon, WorkflowIcon, RotateCcwIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  WorkflowIcon,
+  RotateCcwIcon,
+} from "lucide-react";
 import { type CSSProperties, type ReactNode, use, useRef, useState } from "react";
 
+import { DefaultEffortMenu, type EditableEffortDefault } from "./ComposerDefaultEffort";
 import { cn } from "~/lib/utils";
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import {
   Menu,
   MenuPopup,
@@ -30,7 +38,6 @@ import { DockedPickerContext } from "./ProviderModelPicker";
 import {
   getTraitsSectionVisibility,
   type TraitsSelectionInput,
-  ULTRATHINK_IN_BODY_NOTE,
   useTraitsSelection,
 } from "./TraitsPicker";
 
@@ -92,7 +99,11 @@ export function describeComposerEffort(
   if (!visibility.hasAnyControls) return { suffix: null, detail: null };
   const modelSelection =
     traits.instanceId && traits.model
-      ? { instanceId: traits.instanceId, model: traits.model, options: traits.modelOptions ?? [] }
+      ? {
+          instanceId: traits.instanceId,
+          model: traits.model,
+          options: visibility.modelOptionsForDisplay ?? [],
+        }
       : null;
   const primary = visibility.primarySelectDescriptor;
   const display = buildTraitsTriggerDisplay({
@@ -107,15 +118,13 @@ export function describeComposerEffort(
     columnControls(visibility.selectDescriptors, visibility.booleanDescriptors).effort
       ?.descriptor ?? null;
   const ultrathink = visibility.ultrathinkPromptControlled && reasoning === primary;
-  const glyph =
+  const reasoningValue =
     reasoning?.type === "select"
-      ? resolveEffortGlyph(
-          reasoning,
-          ultrathink
-            ? "ultrathink"
-            : getDescriptorStringValue(reasoning, modelSelection, traits.reportedModelSelection),
-        )
+      ? ultrathink
+        ? "ultrathink"
+        : getDescriptorStringValue(reasoning, modelSelection, traits.reportedModelSelection)
       : null;
+  const glyph = reasoning?.type === "select" ? resolveEffortGlyph(reasoning, reasoningValue) : null;
   // Workflow levels such as Ultracode always show their name; the setting names every level.
   const word = glyph
     ? (glyph.special ?? (effortDisplay === "label" ? glyph.label : null))
@@ -152,8 +161,8 @@ export function describeComposerEffort(
         )}
       >
         {word ? (
-          <span data-composer-control-label className="max-w-24 truncate">
-            {word}
+          <span data-composer-control-label translate="no" className="max-w-24 truncate">
+            {reasoningValue ? reasoningLevelLabel(reasoningValue, word) : word}
           </span>
         ) : glyph ? (
           <EffortGlyph count={glyph.count} filled={glyph.filled} size={size} />
@@ -229,7 +238,10 @@ function ColumnRow(props: {
   );
 }
 
-function EffortLevels(props: { traits: TraitsSelectionInput }) {
+function EffortLevels(props: {
+  traits: TraitsSelectionInput;
+  defaultEffort?: EditableEffortDefault | undefined;
+}) {
   const traits = useTraitsSelection(props.traits);
   const { effort, others } = columnControls(traits.selectDescriptors, traits.booleanDescriptors);
   if (traits.modelIsUnavailable) {
@@ -253,7 +265,15 @@ function EffortLevels(props: { traits: TraitsSelectionInput }) {
     effort?.descriptor.id === traits.primarySelectDescriptor?.id && traits.ultrathinkInBodyText;
   return (
     <>
-      {effort ? <EffortRows control={effort} traits={traits} locked={locked} /> : null}
+      {effort ? (
+        <EffortRows
+          key={JSON.stringify([props.traits.instanceId, props.traits.model, effort.descriptor.id])}
+          control={effort}
+          traits={traits}
+          locked={locked}
+          defaultEffort={props.defaultEffort}
+        />
+      ) : null}
       {others.length > 0 ? (
         <div
           className={cn("flex flex-col gap-0.5", effort && "mt-1 border-t border-border/70 pt-1")}
@@ -283,14 +303,30 @@ function EffortLevels(props: { traits: TraitsSelectionInput }) {
 
 type TraitsSelection = ReturnType<typeof useTraitsSelection>;
 
+// t3zh-skip: model reasoning levels use their English names in every locale.
 const REASONING_LEVEL_LABELS: Readonly<Record<string, string>> = {
-  low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+  ultra: "Ultra",
+  ultrathink: "Ultrathink",
+  ultracode: "Ultracode",
 };
 export function reasoningLevelLabel(id: string, fallback: string): string {
-  return REASONING_LEVEL_LABELS[id] ?? fallback;
+  return Object.hasOwn(REASONING_LEVEL_LABELS, id) ? REASONING_LEVEL_LABELS[id]! : fallback;
 }
 
-function EffortRows(props: { control: ColumnControl; traits: TraitsSelection; locked: boolean }) {
+const REASONING_THUMB_SIZE = 42;
+const REASONING_RAIL_LEAD = 8;
+
+function EffortRows(props: {
+  control: ColumnControl;
+  traits: TraitsSelection;
+  locked: boolean;
+  defaultEffort?: EditableEffortDefault | undefined;
+}) {
   const { control, traits } = props;
   const { descriptor } = control;
   const picker = use(DockedPickerContext);
@@ -313,34 +349,72 @@ function EffortRows(props: { control: ColumnControl; traits: TraitsSelection; lo
   const value = traits.selectValue(control.descriptor);
   const choices = selectableProviderOptionChoices(control.descriptor);
   const index = choices.findIndex((option) => option.id === value);
-  const defaultChoice = choices.find((option) => option.isDefault);
+  const defaultChoice =
+    choices.find((option) => option.id === props.defaultEffort?.saved) ??
+    choices.find((option) => option.isDefault);
+  const defaultLabel = defaultChoice
+    ? reasoningLevelLabel(defaultChoice.id, defaultChoice.label)
+    : "自动";
   const selected = index >= 0 ? choices[index] : undefined;
-  const label = selected ? reasoningLevelLabel(selected.id, selected.label) : (value || "未设置");
+  const label = reasoningLevelLabel(value, selected?.label ?? (value || "未设置"));
   const disabled = locked || traits.modelIsUnavailable || choices.length < 2;
+  const animateSweep = !disabled && index >= 0;
   return (
-    <div className="reasoning-slider-control">
-      <div className="reasoning-slider-heading">
-        <div className="reasoning-slider-value" aria-live="polite">{label}</div>
-        <div className="reasoning-slider-model">{picker.modelLabel}</div>
+    <div data-reasoning-slider-part="control">
+      <div data-reasoning-slider-part="heading">
+        <div data-reasoning-slider-part="value" aria-live="polite" translate="no">
+          {label}
+        </div>
+        <div data-reasoning-slider-part="model">{picker.modelLabel}</div>
         {defaultChoice ? (
-          <button type="button" className="reasoning-slider-reset"
-            aria-label={`恢复默认：${reasoningLevelLabel(defaultChoice.id, defaultChoice.label)}`}
+          <button
+            type="button"
+            data-reasoning-slider-part="reset"
+            aria-label={`恢复默认：${defaultLabel}`}
             disabled={locked || traits.modelIsUnavailable}
-            onClick={() => traits.changeSelect(control.descriptor, defaultChoice.id)}>
+            onClick={() => traits.changeSelect(control.descriptor, defaultChoice.id)}
+          >
             <RotateCcwIcon aria-hidden="true" className="size-5" />
           </button>
         ) : null}
       </div>
       {choices.length ? (
-        <div className="reasoning-slider-track" data-current-known={index >= 0}
-          style={{ "--reasoning-fraction": choices.length > 1 && index >= 0 ? index / (choices.length - 1) : 0 } as CSSProperties}>
-          <div className="reasoning-slider-rail" aria-hidden="true" />
-          <div className="reasoning-slider-stops" aria-hidden="true">
-            {choices.map((option, stop) => <i key={option.id} data-passed={index >= 0 && stop <= index} />)}
+        <div
+          data-reasoning-slider-part="track"
+          data-current-known={index >= 0}
+          data-reasoning-sweep={animateSweep || undefined}
+          style={
+            {
+              "--reasoning-thumb-size": `${REASONING_THUMB_SIZE}px`,
+              "--reasoning-rail-lead": `${REASONING_RAIL_LEAD}px`,
+              "--reasoning-fraction":
+                choices.length > 1 && index >= 0 ? index / (choices.length - 1) : 0,
+            } as CSSProperties
+          }
+        >
+          <div data-reasoning-slider-part="rail" aria-hidden="true">
+            <div
+              data-reasoning-slider-part="fill"
+              ref={animateSweep ? observeVisibleAnimation : undefined}
+            />
           </div>
-          <input type="range" min={0} max={Math.max(0, choices.length - 1)} step={1}
-            value={Math.max(0, index)} disabled={disabled} data-effort-row data-effort-level
-            aria-label="思考强度" aria-valuetext={label}
+          <div data-reasoning-slider-part="stops" aria-hidden="true">
+            {choices.map((option, stop) => (
+              <i key={option.id} data-passed={index >= 0 && stop <= index} />
+            ))}
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, choices.length - 1)}
+            step={1}
+            value={Math.max(0, index)}
+            disabled={disabled}
+            data-effort-row
+            data-effort-level
+            aria-label="思考强度"
+            aria-valuetext={label}
+            translate="no"
             onKeyDown={(event) => {
               if (index < 0 && !disabled && (event.key === "Home" || event.key === "ArrowLeft")) {
                 event.preventDefault();
@@ -351,18 +425,47 @@ function EffortRows(props: { control: ColumnControl; traits: TraitsSelection; lo
             onPointerUp={(event) => {
               if (index >= 0 || disabled) return;
               const rect = event.currentTarget.getBoundingClientRect();
-              const fraction = Math.max(0, Math.min(1, (event.clientX - rect.left - 21) / Math.max(1, rect.width - 42)));
+              const firstCenter = REASONING_RAIL_LEAD + REASONING_THUMB_SIZE / 2;
+              const travel = rect.width - REASONING_RAIL_LEAD - REASONING_THUMB_SIZE;
+              const fraction = Math.max(
+                0,
+                Math.min(1, (event.clientX - rect.left - firstCenter) / Math.max(1, travel)),
+              );
               const next = choices[Math.round(fraction * (choices.length - 1))];
               if (next) traits.changeSelect(control.descriptor, next.id);
             }}
             onChange={(event) => {
               const next = choices[Number(event.currentTarget.value)];
               if (next && !disabled) traits.changeSelect(control.descriptor, next.id);
-            }} />
+            }}
+          />
         </div>
-      ) : <p className="px-2 py-2 text-xs text-muted-foreground">此模型没有可调等级</p>}
-      {defaultChoice ? <div className="reasoning-slider-default">默认：{reasoningLevelLabel(defaultChoice.id, defaultChoice.label)}</div> : null}
-      {locked ? <p className="px-2 py-1 text-xs text-muted-foreground">{"思考强度由提示词中的 ultrathink 控制，请先移除该提示词再调整。"}</p> : null}
+      ) : (
+        <p className="px-2 py-2 text-xs text-muted-foreground">此模型没有可调等级</p>
+      )}
+      {defaultChoice || (props.defaultEffort && choices.length > 1) ? (
+        <div data-reasoning-slider-part="default">
+          {props.defaultEffort && choices.length > 1 ? (
+            <DefaultEffortMenu
+              setting={props.defaultEffort}
+              valueLabel={defaultLabel}
+              choices={choices.map((choice) => ({
+                id: choice.id,
+                label: reasoningLevelLabel(choice.id, choice.label),
+              }))}
+            />
+          ) : (
+            <span>
+              默认：<span translate="no">{defaultLabel}</span>
+            </span>
+          )}
+        </div>
+      ) : null}
+      {locked ? (
+        <p className="px-2 py-1 text-xs text-muted-foreground">
+          {"思考强度由提示词中的 ultrathink 控制，请先移除该提示词再调整。"}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -512,10 +615,17 @@ function NoEffortRow() {
 }
 
 /** The model picker's effort column: the selected model's levels and its other options. */
-export function ComposerEffortColumn(props: { traits: TraitsSelectionInput | null }) {
+export function ComposerEffortColumn(props: {
+  traits: TraitsSelectionInput | null;
+  defaultEffort?: EditableEffortDefault | undefined;
+}) {
   return (
     <div className="flex min-h-0 flex-col gap-1 overflow-y-auto overscroll-contain px-3 pb-2">
-      {props.traits ? <EffortLevels traits={props.traits} /> : <NoEffortRow />}
+      {props.traits ? (
+        <EffortLevels traits={props.traits} defaultEffort={props.defaultEffort} />
+      ) : (
+        <NoEffortRow />
+      )}
     </div>
   );
 }
@@ -542,7 +652,16 @@ function SpeedSegment(props: {
       {props.label === "Fast" || props.label === "Ultrafast" ? (
         <FastBolt ultra={props.label === "Ultrafast"} />
       ) : null}
-      {({ Standard: "标准", Normal: "标准", Default: "默认", Fast: "快速", Ultrafast: "极速", Priority: "优先" } as Record<string, string>)[props.label] ?? props.label}
+      {(
+        {
+          Standard: "标准",
+          Normal: "标准",
+          Default: "默认",
+          Fast: "快速",
+          Ultrafast: "极速",
+          Priority: "优先",
+        } as Record<string, string>
+      )[props.label] ?? props.label}
     </>
   );
   if (!props.description) return <button {...buttonProps}>{content}</button>;
@@ -554,67 +673,74 @@ function SpeedSegment(props: {
   );
 }
 
-function SpeedControl(props: { traits: TraitsSelectionInput }) {
-  const traits = useTraitsSelection(props.traits);
-  const { speedSelect, fastToggle } = splitSpeed(
-    traits.selectDescriptors,
-    traits.booleanDescriptors,
-  );
-  if (traits.modelIsUnavailable || (!speedSelect && !fastToggle)) return null;
+function SpeedControl({
+  traits,
+  speedSelect,
+  fastToggle,
+}: {
+  traits: TraitsSelection;
+  speedSelect: SelectDescriptor | null;
+  fastToggle: BooleanDescriptor | null;
+}) {
   return (
-    <div className="flex w-full min-w-0 items-center justify-between gap-2"><span className="text-xs">响应模式</span>
-    <div
-      role="radiogroup"
-      aria-label="响应模式"
-      className="model-picker-speed-segment ms-auto flex rounded-lg bg-input/40 p-0.5"
-    >
-      {speedSelect
-        ? selectableProviderOptionChoices(speedSelect).map((option) => (
-            <SpeedSegment
-              key={option.id}
-              checked={option.id === traits.selectValue(speedSelect)}
-              label={option.label}
-              description={option.description}
-              onPick={() => traits.changeSelect(speedSelect, option.id)}
-            />
-          ))
-        : fastToggle
-          ? ([false, true] as const).map((value) => (
+    <div className="flex w-full min-w-0 items-center justify-between gap-2">
+      <span className="text-xs">响应模式</span>
+      <div
+        role="radiogroup"
+        aria-label="响应模式"
+        data-model-picker-speed-segment
+        className="ms-auto flex rounded-lg bg-input/40 p-0.5"
+      >
+        {speedSelect
+          ? selectableProviderOptionChoices(speedSelect).map((option) => (
               <SpeedSegment
-                key={String(value)}
-                checked={(fastToggle.currentValue === true) === value}
-                label={value ? "Fast" : "Standard"}
-                onPick={() => traits.changeBoolean(fastToggle.id, value)}
+                key={option.id}
+                checked={option.id === traits.selectValue(speedSelect)}
+                label={option.label}
+                description={option.description}
+                onPick={() => traits.changeSelect(speedSelect, option.id)}
               />
             ))
-          : null}
-    </div></div>
+          : fastToggle
+            ? ([false, true] as const).map((value) => (
+                <SpeedSegment
+                  key={String(value)}
+                  checked={(fastToggle.currentValue === true) === value}
+                  label={value ? "Fast" : "Standard"}
+                  onPick={() => traits.changeBoolean(fastToggle.id, value)}
+                />
+              ))
+            : null}
+      </div>
+    </div>
   );
 }
 
-function UltracodeControl(props: { traits: TraitsSelectionInput }) {
-  const traits = useTraitsSelection(props.traits);
-  const { ultracodeToggle } = splitSpeed(traits.selectDescriptors, traits.booleanDescriptors);
-  if (traits.modelIsUnavailable || !ultracodeToggle) return null;
-  const on = ultracodeToggle.currentValue === true;
+function UltracodeControl({
+  traits,
+  descriptor,
+}: {
+  traits: TraitsSelection;
+  descriptor: BooleanDescriptor;
+}) {
+  const on = descriptor.currentValue === true;
   return (
-    <div className="model-picker-speed-segment flex rounded-lg bg-input/40 p-0.5">
+    <div data-model-picker-speed-segment className="flex rounded-lg bg-input/40 p-0.5">
       <button
         type="button"
         aria-pressed={on}
         data-checked={on || undefined}
         className={FOOTER_SEGMENT}
-        onClick={() => traits.changeBoolean(ultracodeToggle.id, !on)}
+        onClick={() => traits.changeBoolean(descriptor.id, !on)}
       >
         <WorkflowIcon aria-hidden="true" className="size-3" />
-        {ultracodeToggle.label}
+        {descriptor.label}
       </button>
     </div>
   );
 }
 
-/** Permissions change rarely, so the footer names the mode and nests the choice in a menu. */
-function PermissionsMenu(props: {
+export function ComposerPickerPermissionsMenu(props: {
   runtimeMode: RuntimeMode;
   options: ReadonlyArray<RuntimeModeOption>;
   onChange: (mode: RuntimeMode) => void;
@@ -636,15 +762,20 @@ function PermissionsMenu(props: {
             type="button"
             data-composer-permissions-trigger
             aria-label={`Permissions: ${current.label}`}
-            className="ms-auto flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-muted-foreground text-xs outline-none hover:bg-foreground/[0.09] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset data-popup-open:bg-foreground/[0.09] data-popup-open:text-foreground"
+            className="flex h-8 min-w-0 max-w-1/2 cursor-pointer items-center gap-1.5 rounded-md bg-foreground/[0.05] px-2 text-muted-foreground text-xs outline-none hover:bg-foreground/[0.09] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset data-popup-open:bg-foreground/[0.09] data-popup-open:text-foreground pointer-coarse:h-10"
           />
         }
       >
-        <CurrentIcon aria-hidden="true" className="size-3.5" />
-        {current.label}
-        <ChevronUpIcon aria-hidden="true" className="size-3" />
+        <CurrentIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="truncate">{current.label}</span>
+        <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0" />
       </MenuTrigger>
-      <MenuPopup side="top" align="end" {...composerFloatingLayerProps}>
+      <MenuPopup
+        side="bottom"
+        align="end"
+        data-model-picker-option-menu
+        {...composerFloatingLayerProps}
+      >
         <ComposerPermissionsSection
           runtimeMode={props.runtimeMode}
           runtimeModeOptions={props.options}
@@ -655,22 +786,30 @@ function PermissionsMenu(props: {
   );
 }
 
-/** The model picker's footer: speed stays one click away, permissions sit one menu deeper. */
-export function ComposerPickerFooter(props: {
-  traits: TraitsSelectionInput | null;
-  runtimeMode: RuntimeMode;
-  runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
-  onRuntimeModeChange: (mode: RuntimeMode) => void;
-}) {
+function PickerSpeedControls({ input }: { input: TraitsSelectionInput }) {
+  const traits = useTraitsSelection(input);
+  const { speedSelect, fastToggle, ultracodeToggle } = splitSpeed(
+    traits.selectDescriptors,
+    traits.booleanDescriptors,
+  );
+  const selectableTier =
+    speedSelect && selectableProviderOptionChoices(speedSelect).length > 0 ? speedSelect : null;
+  if (traits.modelIsUnavailable || (!selectableTier && !fastToggle && !ultracodeToggle)) {
+    return null;
+  }
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border/70 px-3 py-2">
-      {props.traits ? <SpeedControl traits={props.traits} /> : null}
-      {props.traits ? <UltracodeControl traits={props.traits} /> : null}
-      <PermissionsMenu
-        runtimeMode={props.runtimeMode}
-        options={props.runtimeModeOptions}
-        onChange={props.onRuntimeModeChange}
-      />
+    <div
+      data-model-picker-footer
+      className="flex flex-wrap items-center gap-2 border-t border-border/70 px-3 py-2"
+    >
+      {selectableTier || fastToggle ? (
+        <SpeedControl traits={traits} speedSelect={selectableTier} fastToggle={fastToggle} />
+      ) : null}
+      {ultracodeToggle ? <UltracodeControl traits={traits} descriptor={ultracodeToggle} /> : null}
     </div>
   );
+}
+
+export function ComposerPickerFooter({ traits }: { traits: TraitsSelectionInput | null }) {
+  return traits ? <PickerSpeedControls input={traits} /> : null;
 }

@@ -36,8 +36,11 @@ type OverlayFrame = {
 
 export type AndroidAnchoredMenuProps = {
   readonly actions: readonly MenuAction[];
+  readonly accessibilityLabel?: string | undefined;
   readonly title?: string;
   readonly onPressAction?: MenuComponentProps["onPressAction"];
+  readonly onOpenMenu?: MenuComponentProps["onOpenMenu"];
+  readonly onCloseMenu?: MenuComponentProps["onCloseMenu"];
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
   readonly children: ReactNode | ((open: () => void) => ReactNode);
@@ -60,11 +63,13 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
     setAnchor(null);
     setPath([]);
     setOverlay(null);
+    props.onCloseMenu?.();
   };
 
   const open = () => {
     anchorNode?.measureInWindow((x, y, width, height) => {
       setAnchor({ x, y, width, height, keyboardWasVisible: keyboardVisible });
+      props.onOpenMenu?.();
     });
   };
 
@@ -151,6 +156,7 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
       ) : (
         <Pressable
           ref={setAnchorNode}
+          accessibilityLabel={props.accessibilityLabel}
           accessibilityRole="button"
           className={props.className}
           collapsable={false}

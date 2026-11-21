@@ -187,6 +187,23 @@ NodeTest.test("preserves source maps as original source content", () => {
   NodeAssert.deepEqual(result.output?.map.sourcesContent, [source]);
 });
 
+NodeTest.test("preserves the model picker's English reasoning levels in a Chinese build", () => {
+  const file = "apps/web/src/components/chat/ComposerModelEffort.tsx";
+  const source = NodeFS.readFileSync(
+    new URL("../../src/components/chat/ComposerModelEffort.tsx", import.meta.url),
+    "utf8",
+  );
+  const result = transform(source, file);
+  for (const level of ["Low", "Medium", "High", "Extra High", "Max", "Ultra"]) {
+    NodeAssert.ok(
+      result.candidates.some(
+        (candidate) => candidate.key === level && candidate.reason === "skip-comment",
+      ),
+      level,
+    );
+  }
+});
+
 NodeTest.test("keeps brand suffixes after the T3 wordmark unchanged", () => {
   const source = "export const view = <div><T3Wordmark /> Code</div>;";
   const result = transform(source);

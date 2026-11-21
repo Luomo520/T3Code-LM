@@ -159,7 +159,9 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
 
   await using screen = await render(<Picker />);
   await screen.getByRole("button", { name: "Choose model" }).click();
-  const search = page.getByPlaceholder("Search models...");
+  await page.getByRole("button", { name: "全部", exact: true }).click();
+  await page.getByRole("button", { name: "搜索模型" }).click();
+  const search = page.getByPlaceholder("查找模型");
   await expect.element(search).toHaveFocus();
   await userEvent.keyboard("{ArrowRight}");
   await expect.element(page.getByRole("radio", { name: "High" })).toHaveFocus();
@@ -176,7 +178,7 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
   await expect.element(search).not.toBeInTheDocument();
 });
 
-it("opens on the active provider when every favorite belongs to a disabled provider", async () => {
+it("can browse the active provider when every favorite belongs to a disabled provider", async () => {
   const entries = deriveProviderInstanceEntries(
     ["Codex", "Claude"].map((name) => ({
       instanceId: ProviderInstanceId.make(name.toLowerCase()),
@@ -216,5 +218,11 @@ it("opens on the active provider when every favorite belongs to a disabled provi
     />,
   );
   await screen.getByRole("button", { name: "Choose model" }).click();
+  await expect
+    .element(page.getByRole("button", { name: "收藏", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Codex", exact: true }).click();
   await expect.element(page.getByRole("option", { name: /Codex model/ })).toBeVisible();
+  await page.getByRole("button", { name: "关闭模型面板" }).click();
+  await expect.element(page.getByRole("option", { name: /Codex model/ })).not.toBeInTheDocument();
 });

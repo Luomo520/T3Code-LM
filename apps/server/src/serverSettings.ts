@@ -121,6 +121,12 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
   };
 };
 
+function withReasoningEffortDefaults(settings: ServerSettings): ServerSettings {
+  return settings.reasoningEffortDefaults === undefined
+    ? { ...settings, reasoningEffortDefaults: {} }
+    : settings;
+}
+
 const normalizeServerSettings = (
   settings: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
@@ -305,7 +311,10 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   });
   const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
   const writeSemaphore = yield* Semaphore.make(1);
-  const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
+  const getSettings = Ref.get(currentSettingsRef).pipe(
+    Effect.map(resolveTextGenerationProvider),
+    Effect.map(withReasoningEffortDefaults),
+  );
 
   const updateTestSettings = (
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
@@ -316,6 +325,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
         Effect.flatMap(normalizeServerSettings),
         Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
         Effect.map(resolveTextGenerationProvider),
+        Effect.map(withReasoningEffortDefaults),
       ),
     );
 
@@ -680,9 +690,11 @@ const make = Effect.gen(function* () {
   } = yield* ManagedPolicy.ManagedPolicy;
   // Locks are laid over every settings value that leaves this service, never persisted.
   const toEffective = (settings: ServerSettings) =>
-    resolveTextGenerationProvider(
-      managedProviders.applyLimits(managed.applyLocks(settings)),
-      managedProviders.isDriverAllowed,
+    withReasoningEffortDefaults(
+      resolveTextGenerationProvider(
+        managedProviders.applyLimits(managed.applyLocks(settings)),
+        managedProviders.isDriverAllowed,
+      ),
     );
   const writeSemaphore = yield* Semaphore.make(1);
   const cacheKey = "settings" as const;

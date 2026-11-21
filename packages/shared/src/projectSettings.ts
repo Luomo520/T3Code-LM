@@ -6,6 +6,8 @@ import {
   type ProjectId,
   type ProjectScopedServerSettingKey,
   type ProjectSettingsOverrides,
+  type ProviderOptionDescriptor,
+  type ProviderOptionSelection,
   resolveProjectProviderInstanceEnabled,
   resolveTextGenerationSelectionEnabled,
   type ResolvedServerSettings,
@@ -14,7 +16,11 @@ import {
   type ThreadEnvMode,
   type WorktreeCleanupRules,
 } from "@t3tools/contracts";
-import { readCustomModelEntries } from "./model.ts";
+import {
+  isReasoningOptionId,
+  readCustomModelEntries,
+  resolveReasoningEffortDefault,
+} from "./model.ts";
 import { normalizeProjectPathForComparison } from "./path.ts";
 import { fallbackTextGenerationModelSelection } from "./serverSettings.ts";
 
@@ -71,6 +77,44 @@ export function resolveProjectSettings(
 ): ResolvedProjectSettings {
   const resolved = resolveProjectOverrides(settings, projectId, project);
   return projectFile === undefined ? resolved : applyProjectFile(resolved, projectFile);
+}
+
+export function resolveModelReasoningOptionDefault(input: {
+  settings: ServerSettings;
+  projectId: ProjectId | null;
+  selection: ModelSelection;
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined;
+  project?: LegacyProjectSettingsFields | null | undefined;
+}): ProviderOptionSelection | undefined {
+  const { settings, projectId, selection, descriptors, project } = input;
+  if (selection.options?.some(({ id }) => isReasoningOptionId(id, descriptors))) return undefined;
+
+  if (
+    projectId !== null &&
+    (settings.projectSettingsOverrides[projectId]?.defaultModelSelection != null ||
+      (!settings.projectSettingsFolded && project?.defaultModelSelection != null))
+  ) {
+    const resolved = resolveProjectSettings(settings, projectId, project);
+    const projectSelection = resolved.settings.defaultModelSelection;
+    if (
+      resolved.sources.defaultModelSelection === "project" &&
+      projectSelection?.instanceId === selection.instanceId &&
+      projectSelection.model === selection.model
+    ) {
+      const projectOption = projectSelection.options?.find(({ id }) =>
+        isReasoningOptionId(id, descriptors),
+      );
+      if (projectOption !== undefined) return projectOption;
+    }
+  }
+
+  const saved = settings.reasoningEffortDefaults;
+  const models =
+    saved && Object.hasOwn(saved, selection.instanceId) ? saved[selection.instanceId] : undefined;
+  const configured =
+    models && Object.hasOwn(models, selection.model) ? models[selection.model] : undefined;
+  const effort = resolveReasoningEffortDefault(descriptors, configured);
+  return effort === undefined ? undefined : { id: effort.descriptor.id, value: effort.value };
 }
 
 function applyProjectFile(

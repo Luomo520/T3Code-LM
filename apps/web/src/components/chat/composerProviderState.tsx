@@ -30,6 +30,7 @@ type ComposerProviderStateInput = {
   models: ReadonlyArray<ServerProviderModel>;
   promptInjectionState?: ComposerPromptInjectionState;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+  reasoningOptionDefault?: ProviderOptionSelection | undefined;
   includePlanAgent?: boolean | undefined;
 };
 
@@ -53,6 +54,7 @@ type ComposerTraitsTarget = {
   model: string;
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
+  reasoningOptionDefault?: ProviderOptionSelection | undefined;
   reportedModelSelection?: ModelSelection | null | undefined;
   promptUltrathink: PromptUltrathink;
   onPromptEdit: (edit: (prompt: string) => string) => void;
@@ -83,6 +85,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     model,
     models,
     modelOptions,
+    reasoningOptionDefault,
     promptInjectionState = "none",
     includePlanAgent,
   } = input;
@@ -113,7 +116,12 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     (descriptor): descriptor is Extract<(typeof descriptors)[number], { type: "select" }> =>
       descriptor.type === "select",
   );
-  const primaryValue = getProviderOptionCurrentValue(primarySelectDescriptor ?? null);
+  const primaryValue =
+    reasoningOptionDefault &&
+    primarySelectDescriptor?.id === reasoningOptionDefault.id &&
+    !selections?.some(({ id }) => id === reasoningOptionDefault.id)
+      ? reasoningOptionDefault.value
+      : getProviderOptionCurrentValue(primarySelectDescriptor ?? null);
   const promptEffort = typeof primaryValue === "string" ? primaryValue : null;
   const ultrathinkActive =
     (primarySelectDescriptor?.promptInjectedValues?.length ?? 0) > 0 &&
@@ -143,6 +151,7 @@ export function getComposerReasoningStep(input: {
   model: string;
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+  reasoningOptionDefault?: ProviderOptionSelection | undefined;
   reportedModelSelection?: ModelSelection | null | undefined;
   prompt: string;
   cursor: number;
@@ -167,6 +176,7 @@ export function getComposerReasoningStep(input: {
     model: input.model,
     models: input.models,
     modelOptions: selections,
+    reasoningOptionDefault: input.reasoningOptionDefault,
     reportedModelSelection: input.reportedModelSelection,
     prompt,
     includePlanAgent: input.includePlanAgent,

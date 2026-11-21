@@ -1,10 +1,19 @@
-import type { ModelSelection, ProviderDriverKind } from "@t3tools/contracts";
+import type {
+  ModelSelection,
+  ProjectId,
+  ProviderDriverKind,
+  ServerSettings,
+} from "@t3tools/contracts";
 import {
   buildTraitsTriggerDisplay,
   getPromptControlledTraits,
 } from "@t3tools/client-runtime/model-traits";
+import type { LegacyProjectSettingsFields } from "@t3tools/shared/projectSettings";
 import type { ModelOption } from "../lib/modelOptions";
-import { resolveProviderOptionDescriptors } from "../lib/providerOptions";
+import {
+  providerOptionsForDisplay,
+  resolveProviderOptionDescriptors,
+} from "../lib/providerOptions";
 import { AppText as Text } from "./ui/AppText";
 import { ComposerInlineControl } from "./ComposerToolbar";
 import { ProviderIcon, ProviderInstanceIcon, providerInstanceNameLabel } from "./ProviderIcon";
@@ -12,6 +21,9 @@ import { ProviderIcon, ProviderInstanceIcon, providerInstanceNameLabel } from ".
 export function ComposerModelControl(props: {
   readonly modelOption: ModelOption | null;
   readonly selection: ModelSelection | null;
+  readonly settings: ServerSettings | undefined;
+  readonly projectId: ProjectId;
+  readonly project: LegacyProjectSettingsFields | null;
   readonly provider: ProviderDriverKind | undefined;
   readonly reportedSelection?: ModelSelection | null | undefined;
   readonly prompt: string;
@@ -21,9 +33,15 @@ export function ComposerModelControl(props: {
   readonly iconOnly?: boolean;
   readonly onPress: () => void;
 }) {
-  const descriptors = resolveProviderOptionDescriptors({
-    capabilities: props.modelOption?.capabilities,
-    selections: props.selection?.options,
+  const { descriptors, selection } = providerOptionsForDisplay({
+    descriptors: resolveProviderOptionDescriptors({
+      capabilities: props.modelOption?.capabilities,
+      selections: props.selection?.options,
+    }),
+    selection: props.selection,
+    settings: props.settings,
+    projectId: props.projectId,
+    project: props.project,
   });
   const promptTraits = getPromptControlledTraits(descriptors, props.prompt);
   const summary = props.provider
@@ -31,7 +49,7 @@ export function ComposerModelControl(props: {
         descriptors,
         primarySelectDescriptorId: promptTraits.primarySelectDescriptor?.id ?? null,
         ultrathinkPromptControlled: promptTraits.ultrathinkPromptControlled,
-        modelSelection: props.selection,
+        modelSelection: selection,
         reportedModelSelection: props.reportedSelection,
       }).label
     : "";

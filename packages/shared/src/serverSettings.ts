@@ -394,6 +394,7 @@ export function applyServerSettingsPatch(
     setModelFavorites,
     setModelsHidden,
     setProviderModelOrder,
+    setReasoningEffortDefault,
     providerModelPreferences,
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
@@ -501,11 +502,22 @@ export function applyServerSettingsPatch(
       },
     };
   }
+  let reasoningEffortDefaults = current.reasoningEffortDefaults;
+  if (setReasoningEffortDefault) {
+    const { instanceId, model, effort } = setReasoningEffortDefault;
+    const saved = reasoningEffortDefaults ?? {};
+    const instance = (Object.hasOwn(saved, instanceId) ? saved[instanceId] : undefined) ?? {};
+    const models = mergeSettingsEntries(instance, { [model]: effort });
+    reasoningEffortDefaults = mergeSettingsEntries(saved, {
+      [instanceId]: Object.keys(models).length === 0 ? null : models,
+    });
+  }
   const next = deepMerge(current, patchForMerge);
   const nextWithReplacementsBase = {
     ...next,
     favorites,
     providerModelPreferences: nextModelPreferences,
+    ...(reasoningEffortDefaults === undefined ? {} : { reasoningEffortDefaults }),
     ...(worktreeCleanupPatch === undefined
       ? {}
       : {

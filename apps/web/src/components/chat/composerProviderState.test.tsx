@@ -7,7 +7,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { getComposerProviderState, getComposerReasoningStep } from "./composerProviderState";
-import { readPromptUltrathink } from "./TraitsPicker";
+import { getTraitsSectionVisibility, readPromptUltrathink } from "./TraitsPicker";
 
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
@@ -75,6 +75,35 @@ describe("getComposerProviderState", () => {
       promptEffort: "high",
       modelOptionsForDispatch: undefined,
     });
+  });
+
+  it("uses the effective reasoning default for display and sends only explicit options", () => {
+    const model = {
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([
+        selectDescriptor("variant", [
+          { id: "low", label: "Low", isDefault: true },
+          { id: "high", label: "High" },
+        ]),
+        booleanDescriptor("fastMode"),
+      ]),
+      reasoningOptionDefault: { id: "variant", value: "high" },
+    };
+    const modelOptions = selections(["fastMode", false]);
+    const inherited = getComposerProviderState({ ...model, modelOptions });
+    expect(inherited.promptEffort).toBe("high");
+    expect(inherited.modelOptionsForDispatch).toEqual(modelOptions);
+    const display = getTraitsSectionVisibility({ ...model, modelOptions });
+    expect(display.effort).toBe("high");
+    expect(display.modelOptionsForDisplay).toEqual(
+      selections(["fastMode", false], ["variant", "high"]),
+    );
+    const explicit = selections(["variant", "low"]);
+    expect(getComposerProviderState({ ...model, modelOptions: explicit }).promptEffort).toBe("low");
+    expect(
+      getTraitsSectionVisibility({ ...model, modelOptions: explicit }).modelOptionsForDisplay,
+    ).toBe(explicit);
   });
 
   it("preserves selections that match defaults so deepMerge can overwrite prior state", () => {
@@ -349,8 +378,15 @@ describe("getComposerReasoningStep", () => {
       model: MODEL,
       options: selections(["reasoningEffort", "high"]),
     };
-    for (const { label, modelOptions, reportedModelSelection, to } of [
+    for (const { label, modelOptions, reportedModelSelection, reasoningOptionDefault, to } of [
       { label: "reported", modelOptions: undefined, reportedModelSelection: reported, to: "low" },
+      {
+        label: "inherited default",
+        modelOptions: undefined,
+        reportedModelSelection: reported,
+        reasoningOptionDefault: { id: "reasoningEffort", value: "low" },
+        to: "medium",
+      },
       {
         label: "other instance",
         modelOptions: undefined,
@@ -380,9 +416,10 @@ describe("getComposerReasoningStep", () => {
         to: "high",
       },
     ]) {
-      expect(step({ modelOptions, reportedModelSelection })?.modelOptions, label).toStrictEqual(
-        selections(["reasoningEffort", to]),
-      );
+      expect(
+        step({ modelOptions, reportedModelSelection, reasoningOptionDefault })?.modelOptions,
+        label,
+      ).toStrictEqual(selections(["reasoningEffort", to]));
     }
   });
 });

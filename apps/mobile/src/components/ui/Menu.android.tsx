@@ -13,6 +13,8 @@ export function Menu(props: MenuProps) {
         title={props.title}
         style={props.style}
         onPressAction={props.onPressAction}
+        onOpenMenu={props.onOpenMenu}
+        onCloseMenu={props.onCloseMenu}
       >
         {(open) =>
           cloneElement(child, {
@@ -28,10 +30,13 @@ export function Menu(props: MenuProps) {
   return (
     <AndroidAnchoredMenu
       actions={props.actions}
+      accessibilityLabel={props.accessibilityLabel}
       className={props.className}
       title={props.title}
       style={props.style}
       onPressAction={props.onPressAction}
+      onOpenMenu={props.onOpenMenu}
+      onCloseMenu={props.onCloseMenu}
     >
       {props.children}
     </AndroidAnchoredMenu>

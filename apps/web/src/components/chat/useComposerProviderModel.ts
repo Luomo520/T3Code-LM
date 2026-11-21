@@ -17,6 +17,12 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { type UnifiedSettings } from "@t3tools/contracts/settings";
+import { createModelSelection } from "@t3tools/shared/model";
+import {
+  type LegacyProjectSettingsFields,
+  resolveModelReasoningOptionDefault,
+} from "@t3tools/shared/projectSettings";
+import { getProviderModelCapabilities } from "../../providerModels";
 import { getComposerPromptInjectionState, getComposerProviderState } from "./composerProviderState";
 import { resolveComposerProviderSelection } from "../ChatView.logic";
 
@@ -35,6 +41,7 @@ export function useComposerProviderModel(
     readonly threadRef: ScopedThreadRef | DraftId;
     readonly threadModelSelection: ModelSelection | null | undefined;
     readonly projectModelSelection: ModelSelection | null | undefined;
+    readonly legacyProjectSettings?: LegacyProjectSettingsFields | null | undefined;
     readonly promptInjectionState: ReturnType<typeof getComposerPromptInjectionState>;
     readonly threadStarted: boolean;
   },
@@ -46,6 +53,7 @@ export function useComposerProviderModel(
     threadRef,
     threadModelSelection,
     projectModelSelection,
+    legacyProjectSettings,
     promptInjectionState,
     candidateInstanceIds,
     lockedProvider,
@@ -85,12 +93,25 @@ export function useComposerProviderModel(
     settings,
   });
   const selectedProviderModels = selection.selectedProviderEntry?.models ?? NO_PROVIDER_MODELS;
+  const modelOptions = modelState.modelOptions?.[selectedInstanceId];
+  const reasoningOptionDefault = resolveModelReasoningOptionDefault({
+    settings,
+    projectId: activeProjectId,
+    project: legacyProjectSettings,
+    selection: createModelSelection(selectedInstanceId, modelState.selectedModel, modelOptions),
+    descriptors: getProviderModelCapabilities(
+      selectedProviderModels,
+      modelState.selectedModel,
+      selectedProvider,
+    ).optionDescriptors,
+  });
   const composerProviderState = getComposerProviderState({
     provider: selectedProvider,
     model: modelState.selectedModel,
     models: selectedProviderModels,
     promptInjectionState,
-    modelOptions: modelState.modelOptions?.[selectedInstanceId],
+    modelOptions,
+    reasoningOptionDefault,
   });
   return {
     providerInstanceEntries,
@@ -100,6 +121,7 @@ export function useComposerProviderModel(
     selectedProviderModels,
     composerModelOptions: modelState.modelOptions,
     selectedModel: modelState.selectedModel,
+    reasoningOptionDefault,
     composerProviderState,
   };
 }

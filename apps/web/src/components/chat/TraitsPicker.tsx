@@ -20,6 +20,7 @@ import {
   getProviderOptionCurrentLabel,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
+  isReasoningOptionId,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import { memo } from "react";
@@ -42,6 +43,16 @@ import { ComposerControl, ComposerControlIcon, type ComposerControlSize } from "
 import { useComposerMenuState } from "./useComposerMenuState";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
+
+function getComposerModelOptionsForDisplay(
+  modelOptions: ProviderOptions | null | undefined,
+  reasoningOptionDefault: ProviderOptionSelection | undefined,
+): ProviderOptions | null | undefined {
+  if (!reasoningOptionDefault || modelOptions?.some(({ id }) => id === reasoningOptionDefault.id)) {
+    return modelOptions;
+  }
+  return [...(modelOptions ?? []), reasoningOptionDefault];
+}
 
 /**
  * All the picker reads from the prompt while rendering. Passing this instead of
@@ -195,15 +206,20 @@ export function getTraitsSectionVisibility(input: {
   model: string | null | undefined;
   promptUltrathink?: PromptUltrathink | undefined;
   modelOptions?: ProviderOptions | null | undefined;
+  reasoningOptionDefault?: ProviderOptionSelection | undefined;
   allowPromptInjectedEffort?: boolean;
   includePlanAgent?: boolean | undefined;
 }) {
+  const modelOptionsForDisplay = getComposerModelOptionsForDisplay(
+    input.modelOptions,
+    input.reasoningOptionDefault,
+  );
   const selected = getSelectedTraits(
     input.provider,
     input.models,
     input.model,
     input.promptUltrathink ?? "none",
-    input.modelOptions,
+    modelOptionsForDisplay,
     input.allowPromptInjectedEffort ?? true,
     input.includePlanAgent,
   );
@@ -216,6 +232,7 @@ export function getTraitsSectionVisibility(input: {
 
   return {
     ...selected,
+    modelOptionsForDisplay,
     showEffort,
     showThinking,
     showFastMode,
@@ -231,6 +248,21 @@ export function getTraitsSectionVisibility(input: {
   };
 }
 
+function keepExplicitReasoningOptions(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+  modelOptions: ProviderOptions | null | undefined,
+  nextOptions: ProviderOptions | undefined,
+  changedId: string,
+): ProviderOptions | undefined {
+  const explicitOptions = nextOptions?.filter(
+    ({ id }) =>
+      id === changedId ||
+      !isReasoningOptionId(id, descriptors) ||
+      modelOptions?.some((option) => option.id === id),
+  );
+  return explicitOptions?.length ? explicitOptions : undefined;
+}
+
 /**
  * `modelOptions` must already carry the composer's implicit defaults (see
  * `withImplicitFastModeDefault`) so the persisted selection matches what the
@@ -242,20 +274,16 @@ export function getReasoningTraitStep(input: {
   model: string;
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ProviderOptions | undefined;
+  reasoningOptionDefault?: ProviderOptionSelection | undefined;
   reportedModelSelection: ModelSelection | null | undefined;
   prompt: string;
   includePlanAgent?: boolean | undefined;
   direction: 1 | -1;
 }) {
-  const selected = getSelectedTraits(
-    input.provider,
-    input.models,
-    input.model,
-    readPromptUltrathink(input.prompt),
-    input.modelOptions,
-    true,
-    input.includePlanAgent,
-  );
+  const selected = getTraitsSectionVisibility({
+    ...input,
+    promptUltrathink: readPromptUltrathink(input.prompt),
+  });
   if (selected.modelIsUnavailable || selected.ultrathinkInBodyText) return null;
   const descriptor = selected.selectDescriptors.find(isReasoningSelect);
   const choices = descriptor ? selectableProviderOptionChoices(descriptor) : [];
@@ -266,7 +294,11 @@ export function getReasoningTraitStep(input: {
       ? "ultrathink"
       : getDescriptorStringValue(
           descriptor,
-          { instanceId: input.instanceId, model: input.model, options: input.modelOptions ?? [] },
+          {
+            instanceId: input.instanceId,
+            model: input.model,
+            options: selected.modelOptionsForDisplay ?? [],
+          },
           input.reportedModelSelection,
         );
   // Walk the full catalog order so a typed Ultrathink keeps its place, then land on a pickable level.
@@ -279,7 +311,14 @@ export function getReasoningTraitStep(input: {
     (option) => choices.includes(option),
   );
   const change = next && getTraitSelectChange(selected, descriptor, input.prompt, next.id);
-  return change?.modelOptions ? { prompt: change.prompt, modelOptions: change.modelOptions } : null;
+  if (!change) return null;
+  const modelOptions = keepExplicitReasoningOptions(
+    selected.descriptors,
+    input.modelOptions,
+    change.modelOptions,
+    descriptor.id,
+  );
+  return modelOptions ? { prompt: change.prompt, modelOptions } : null;
 }
 
 export interface TraitsMenuContentProps {
@@ -291,6 +330,7 @@ export interface TraitsMenuContentProps {
   /** Receives an edit of the live prompt; the picker never holds the prompt text itself. */
   onPromptEdit?: (edit: (prompt: string) => string) => void;
   modelOptions?: ProviderOptions | null | undefined;
+  reasoningOptionDefault?: ProviderOptionSelection | undefined;
   reportedModelSelection?: ModelSelection | null | undefined;
   allowPromptInjectedEffort?: boolean;
   includePlanAgent?: boolean | undefined;
@@ -308,14 +348,13 @@ export function useTraitsSelection({
   promptUltrathink,
   onPromptEdit,
   modelOptions,
+  reasoningOptionDefault,
   reportedModelSelection,
   allowPromptInjectedEffort = true,
   includePlanAgent,
   triggerClassName: _triggerClassName,
   ...persistence
 }: TraitsSelectionInput) {
-  const modelSelection =
-    instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null;
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   const updateModelOptions = (nextOptions: ProviderOptions | undefined) => {
     if ("onModelOptionsChange" in persistence) {
@@ -339,9 +378,14 @@ export function useTraitsSelection({
     model,
     promptUltrathink,
     modelOptions,
+    reasoningOptionDefault,
     allowPromptInjectedEffort,
     includePlanAgent,
   });
+  const modelSelection =
+    instanceId && model
+      ? { instanceId, model, options: selected.modelOptionsForDisplay ?? [] }
+      : null;
   return {
     ...selected,
     /** The option a select shows, where an Ultrathink prompt owns the primary select. */
@@ -361,13 +405,21 @@ export function useTraitsSelection({
       onPromptEdit?.(
         (prompt) => getTraitSelectChange(selected, descriptor, prompt, value)?.prompt ?? prompt,
       );
-      updateModelOptions(change.modelOptions);
+      updateModelOptions(
+        keepExplicitReasoningOptions(
+          selected.descriptors,
+          modelOptions,
+          change.modelOptions,
+          descriptor.id,
+        ),
+      );
     },
     changeBoolean: (descriptorId: string, value: boolean) => {
+      const nextOptions = buildProviderOptionSelectionsFromDescriptors(
+        replaceDescriptorCurrentValue(selected.descriptors, descriptorId, value),
+      );
       updateModelOptions(
-        buildProviderOptionSelectionsFromDescriptors(
-          replaceDescriptorCurrentValue(selected.descriptors, descriptorId, value),
-        ),
+        keepExplicitReasoningOptions(selected.descriptors, modelOptions, nextOptions, descriptorId),
       );
     },
   };
@@ -504,7 +556,11 @@ export const TraitsPicker = memo(function TraitsPicker({
     ultrathinkPromptControlled: traits.ultrathinkPromptControlled,
     modelSelection:
       props.instanceId && props.model
-        ? { instanceId: props.instanceId, model: props.model, options: props.modelOptions ?? [] }
+        ? {
+            instanceId: props.instanceId,
+            model: props.model,
+            options: traits.modelOptionsForDisplay ?? [],
+          }
         : null,
     reportedModelSelection: props.reportedModelSelection,
   });

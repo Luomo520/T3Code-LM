@@ -57,6 +57,7 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -460,6 +461,9 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly backgroundTasksEndWithProcess?: boolean;
     readonly hangSessionScopeClose?: boolean;
     readonly startTurn?: Effect.Effect<void>;
+    readonly onStartTurn?: (
+      input: ProviderAdapter.ProviderAdapterV2TurnInput,
+    ) => Effect.Effect<void>;
     readonly interruptTurn?: Effect.Effect<void>;
     readonly beforeUnload?: Effect.Effect<void>;
     readonly unloads?: Queue.Queue<string>;
@@ -576,7 +580,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
               ...current,
               resumeCount: current.resumeCount + 1,
             })).pipe(Effect.as(threadInput.providerThread)),
-          startTurn: () => options.startTurn ?? Effect.void,
+          startTurn: (turn) => options.onStartTurn?.(turn) ?? options.startTurn ?? Effect.void,
           steerTurn: () => Effect.void,
           interruptTurn: () =>
             Ref.update(state, (current) => ({
@@ -642,6 +646,7 @@ function layerTest(input: {
   readonly backgroundTasksEndWithProcess?: boolean;
   readonly hangSessionScopeClose?: boolean;
   readonly startTurn?: Effect.Effect<void>;
+  readonly onStartTurn?: (input: ProviderAdapter.ProviderAdapterV2TurnInput) => Effect.Effect<void>;
   readonly interruptTurn?: Effect.Effect<void>;
   readonly beforeUnload?: Effect.Effect<void>;
   readonly unloads?: Queue.Queue<string>;
@@ -650,6 +655,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly providerRegistryLayer?: Layer.Layer<ProviderRegistry.ProviderRegistry>;
   readonly installationGateLayer?: Layer.Layer<ProviderInstallationGate.ProviderInstallationGate>;
 }) {
   const layerConfiguredEventSink =
@@ -690,6 +696,7 @@ function layerTest(input: {
         ? {}
         : { hangSessionScopeClose: input.hangSessionScopeClose }),
       ...(input.startTurn === undefined ? {} : { startTurn: input.startTurn }),
+      ...(input.onStartTurn === undefined ? {} : { onStartTurn: input.onStartTurn }),
       ...(input.interruptTurn === undefined ? {} : { interruptTurn: input.interruptTurn }),
       ...(input.beforeUnload === undefined ? {} : { beforeUnload: input.beforeUnload }),
       ...(input.unloads === undefined ? {} : { unloads: input.unloads }),
@@ -723,6 +730,7 @@ function layerTest(input: {
   return Layer.mergeAll(
     layerTestStores,
     layerConfiguredEventSink,
+    ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
     IdAllocator.layer,
     layerConfiguredMcpRegistry,
     McpProviderSessions.layer,
@@ -744,6 +752,7 @@ function layerTest(input: {
           input.installationGateLayer ?? ProviderInstallationGate.layer,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
+          ...(input.providerRegistryLayer === undefined ? [] : [input.providerRegistryLayer]),
         ),
       ),
     ),
@@ -1622,6 +1631,152 @@ it.effect("ProviderSessionManagerV2 gives up on a provider that never confirms a
       assert.equal((yield* Fiber.join(stopping))._tag, "ProviderAdapterInterruptTimeoutError");
     }).pipe(
       Effect.provide(layerTest({ state, idleTimeoutMs: 60_000, interruptTurn: Effect.never })),
+    );
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 applies live reasoning defaults to adapter turns", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const selections: Array<ModelSelection> = [];
+    let catalogReads = 0;
+    const projectId = ProjectId.make("project-reasoning-default");
+    const threadId = ThreadId.make("thread-reasoning-default");
+    const { instanceId, model } = modelSelection;
+    const effortId = "reasoningEffort";
+    const explicit = (value: string) => ({ id: effortId, value });
+    const providerRegistryLayer = Layer.mock(ProviderRegistry.ProviderRegistry)({
+      getProviders: Effect.sync(() => {
+        catalogReads++;
+        return [
+          {
+            instanceId,
+            driver: CODEX_DRIVER,
+            enabled: true,
+            installed: true,
+            version: null,
+            status: "ready",
+            auth: { status: "authenticated" },
+            checkedAt: "2026-11-21T00:00:00.000Z",
+            slashCommands: [],
+            skills: [],
+            models: [
+              {
+                slug: model,
+                name: model,
+                isCustom: false,
+                capabilities: {
+                  optionDescriptors: [
+                    {
+                      id: effortId,
+                      type: "select",
+                      label: "Effort",
+                      options: ["low", "medium", "high"].map((id) => ({
+                        id,
+                        label: id,
+                        isDefault: id === "medium",
+                      })),
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ];
+      }),
+    });
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const now = yield* DateTime.now;
+      const providerSessionId = idAllocator.derive.providerSession({
+        providerInstanceId: instanceId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, projectId, threadId, now })],
+      });
+      const runtime = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = makeProviderThread({ idAllocator, threadId, providerSessionId, now });
+      const appThread = yield* projectionStore.getThread(threadId);
+      const startTurn = Effect.fnUntraced(function* (
+        runOrdinal: number,
+        selection: ModelSelection,
+      ) {
+        const runId = idAllocator.derive.run({ threadId, ordinal: runOrdinal });
+        yield* runtime.startTurn({
+          threadId,
+          appThread,
+          runId,
+          runOrdinal,
+          providerTurnOrdinal: runOrdinal,
+          attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+          rootNodeId: idAllocator.derive.rootNode({ runId }),
+          providerThread,
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: yield* idAllocator.allocate.message({ threadId, ordinal: runOrdinal }),
+            text: "turn",
+            attachments: [],
+          },
+          modelSelection: selection,
+          runtimePolicy,
+        });
+      });
+      yield* startTurn(1, modelSelection);
+      assert.equal(catalogReads, 0);
+      yield* serverSettings.updateSettings({
+        setReasoningEffortDefault: { instanceId, model, effort: "high" },
+      });
+      yield* startTurn(2, modelSelection);
+      yield* serverSettings.updateSettings({
+        projectSettingsOverrides: {
+          [projectId]: {
+            defaultModelSelection: {
+              ...modelSelection,
+              options: [explicit("medium")],
+            },
+          },
+        },
+      });
+      yield* startTurn(3, modelSelection);
+      yield* startTurn(4, { ...modelSelection, options: [explicit("low")] });
+      yield* serverSettings.updateSettings({
+        projectSettingsOverrides: { [projectId]: null },
+        setReasoningEffortDefault: { instanceId, model, effort: null },
+      });
+      yield* startTurn(5, modelSelection);
+      assert.deepEqual(selections, [
+        modelSelection,
+        { ...modelSelection, options: [explicit("high")] },
+        { ...modelSelection, options: [explicit("medium")] },
+        { ...modelSelection, options: [explicit("low")] },
+        { ...modelSelection, options: [explicit("medium")] },
+      ]);
+      assert.deepEqual((yield* projectionStore.getThread(threadId)).modelSelection, modelSelection);
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          idleTimeoutMs: 60_000,
+          providerRegistryLayer,
+          serverSettingsLayer: ServerSettings.layerTest({
+            projectSettingsFolded: true,
+          }),
+          onStartTurn: (input) =>
+            Effect.sync(() => {
+              selections.push(input.modelSelection);
+            }),
+        }),
+      ),
     );
   }),
 );

@@ -3,12 +3,14 @@ import {
   getTraitSelectChange,
   isReasoningControl,
 } from "@t3tools/client-runtime/model-traits";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { useModelPopupColors, ReasoningSlider } from "./ReasoningSlider";
+import { reasoningLevelLabel } from "./reasoning-slider-state";
 import * as Dialog from "../../components/ui/Dialog";
 import { DockGlassBackdrop } from "../../components/ui/DockGlass";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { useSheetStackOptions } from "../layout/nested-stacks";
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
 import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
@@ -27,10 +29,12 @@ import type { LegendListRenderItemProps } from "@legendapp/list/react-native";
 import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import {
+  findReasoningOptionDescriptor,
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
 } from "@t3tools/shared/model";
 import {
+  useIsFocused,
   useNavigation,
   useRoute,
   type RouteProp,
@@ -49,6 +53,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  AppState,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -72,10 +77,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AppBar } from "../../components/ui/AppBar";
+import { Menu } from "../../components/ui/Menu";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { cn } from "../../lib/cn";
-import { useReduceMotionEnabled } from "../../lib/appState";
+import { useAppActive, useReduceMotionEnabled } from "../../lib/appState";
 import {
   buildModelOptions,
   groupByProvider,
@@ -83,8 +89,12 @@ import {
   type ModelOption,
   type ProviderGroup,
 } from "../../lib/modelOptions";
-import { applyProviderOptionSelection } from "../../lib/providerOptions";
-import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
+import {
+  applyProviderOptionSelection,
+  preserveInheritedReasoningEffort,
+  providerOptionsForDisplay,
+  resolveProviderOptionDescriptors,
+} from "../../lib/providerOptions";
 import {
   rememberModelOptions,
   withRememberedModelOptions,
@@ -93,7 +103,7 @@ import { ChatGptSharingStatus } from "./ChatGptSharingStatus";
 import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentQuery } from "../../state/query";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { useThreadReportedModelSelection } from "../../state/entities";
+import { useProject, useThreadReportedModelSelection } from "../../state/entities";
 import {
   setComposerDraftText,
   updateComposerDraftSettings,
@@ -108,6 +118,7 @@ import { useSelectedThreadWorktree } from "../../state/use-selected-thread-workt
 import { providerWorkspaceSnapshotRefresh } from "../../state/provider-workspace-snapshot-refresh";
 import { threadAllowsProviderSwitch } from "../../state/thread-provider-switching";
 import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
+import { useEnvironmentScope } from "../../state/session";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useNewTaskFlow } from "./new-task-flow-provider";
@@ -327,7 +338,7 @@ type ThreadSettingsSessionValue = {
   readonly commitPendingModel: () => boolean;
   readonly isApplied: (option: ModelOption) => boolean;
   readonly isDisplayed: (option: ModelOption) => boolean;
-  readonly pressModel: (option: ModelOption) => void;
+  readonly pressModel: (option: ModelOption, applyImmediately?: boolean) => void;
   readonly setProviderFilter: (providerKey: string | null) => void;
   readonly setSearchQuery: (query: string) => void;
   readonly setShowLegacy: (showLegacy: boolean) => void;
@@ -346,6 +357,11 @@ function ThreadSettingsSessionProvider(
   const configs = useAtomValue(environmentServerConfigsAtom);
   const config = props.environmentId ? configs.get(props.environmentId) : undefined;
   const settings = config?.settings;
+  const project = useProject(
+    props.environmentId && props.projectId
+      ? scopeProjectRef(props.environmentId, props.projectId)
+      : null,
+  );
   const connection = useEnvironmentQuery(
     props.environmentId ? environmentCatalog.stateAtom(props.environmentId) : null,
   ).data;
@@ -513,6 +529,14 @@ function ThreadSettingsSessionProvider(
         selections: pendingModel.selection.options,
       })
     : props.optionDescriptors;
+  const displayedModelSelection = pendingModel?.selection ?? props.selectedModel;
+  const providerOptionsDisplay = providerOptionsForDisplay({
+    descriptors: displayedDescriptors,
+    selection: displayedModelSelection,
+    settings,
+    projectId: props.projectId,
+    project,
+  });
   const promptTraits = getPromptControlledTraits(displayedDescriptors, displayedPrompt);
   const displayedModel =
     pendingModel ??
@@ -530,20 +554,24 @@ function ThreadSettingsSessionProvider(
   const hasLegacyModels = props.providerGroups.some((group) =>
     group.models.some((model) => model.isLegacy),
   );
+  const commitModel = (model: ModelOption) => {
+    if (!canCommitPendingModel(model, props.providerGroups)) {
+      Dialog.alert(
+        "Model unavailable",
+        "Set up this provider on web or desktop, or select another model.",
+      );
+      return false;
+    }
+    void Haptics.selectionAsync();
+    props.onSelectModel(model);
+    return true;
+  };
+
   const commitPendingModel = () => {
-    if (pendingModel) {
-      if (!canCommitPendingModel(pendingModel, props.providerGroups)) {
-        Dialog.alert(
-          "Model unavailable",
-          "Set up this provider on web or desktop, or select another model.",
-        );
-        return false;
-      }
-      void Haptics.selectionAsync();
-      props.onSelectModel(pendingModel);
-      if (pendingPrompt !== null && pendingPrompt !== props.prompt) {
-        props.onPromptChange(pendingPrompt);
-      }
+    if (!pendingModel) return true;
+    if (!commitModel(pendingModel)) return false;
+    if (pendingPrompt !== null && pendingPrompt !== props.prompt) {
+      props.onPromptChange(pendingPrompt);
     }
     return true;
   };
@@ -569,12 +597,18 @@ function ThreadSettingsSessionProvider(
         }
       }
     }
-    const next = change
+    const nextOptions = change
       ? (change.modelOptions ?? [])
       : applyProviderOptionSelection(displayedDescriptors, { id, value });
-    if (!next) {
+    if (!nextOptions) {
       return;
     }
+    const next = preserveInheritedReasoningEffort(
+      nextOptions,
+      displayedDescriptors,
+      displayedModelSelection?.options,
+      id,
+    );
     if (pendingModel) {
       rememberModelOptions(pendingModel.selection.instanceId, pendingModel.selection.model, next);
       setPendingModel({
@@ -596,7 +630,17 @@ function ThreadSettingsSessionProvider(
     });
   };
 
-  const pressModel = (option: ModelOption) => {
+  const pressModel = (option: ModelOption, applyImmediately?: boolean) => {
+    if (applyImmediately) {
+      const next = pendingModelAfterPress({
+        current: null,
+        pressed: option,
+        pressedIsApplied: isApplied(option),
+        restoreSelection: props.restoreSelection,
+      });
+      if (next) commitModel(next);
+      return;
+    }
     void Haptics.selectionAsync();
     if (isApplied(option) || option.key !== pendingModel?.key) {
       setPendingPrompt(null);
@@ -631,9 +675,9 @@ function ThreadSettingsSessionProvider(
     runtimeMode: compatibleRuntimeMode,
     runtimeModeChoices,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
-    displayedDescriptors,
+    displayedDescriptors: providerOptionsDisplay.descriptors,
     promptTraits,
-    displayedModelSelection: pendingModel?.selection ?? props.selectedModel,
+    displayedModelSelection: providerOptionsDisplay.selection,
     reportedModelSelection: pendingModel ? null : (props.reportedModelSelection ?? null),
     favoriteKeys,
     favoritesLoaded,
@@ -735,7 +779,7 @@ function ThreadSettingsModelListRow(props: {
 }) {
   const colors = useModelPopupColors();
   const session = useThreadSettingsSession();
-  const onPress = () => session.pressModel(props.option);
+  const onPress = () => session.pressModel(props.option, props.compact);
   if (props.compact) {
     const option = props.option;
     const selected = session.isDisplayed(option);
@@ -1460,7 +1504,7 @@ function PopupChoice(props: {
       disabled={props.disabled}
       onPress={props.onPress}
       className={cn(
-        "min-h-11 flex-row items-center gap-2 rounded-md px-3 active:opacity-60",
+        "min-h-12 flex-row items-center gap-2 rounded-md px-3 active:opacity-60",
         props.disabled && "opacity-50",
       )}
       style={{ backgroundColor: props.selected ? colors.selected : "transparent" }}
@@ -1483,14 +1527,6 @@ function PopupChoice(props: {
   );
 }
 
-const POPUP_REASONING_LABELS: Readonly<Record<string, string>> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-  max: "Max",
-  ultra: "Ultra",
-};
 const POPUP_OPTION_LABELS: Readonly<Record<string, string>> = {
   Reasoning: "思考强度",
   "Reasoning effort": "思考强度",
@@ -1526,10 +1562,131 @@ function PopupSpeedSegments(props: {
   </View>;
 }
 
-function ThreadSettingsPopupOptions(props: { readonly onDraggingChange: (dragging: boolean) => void }) {
+function PopupReasoningControl(props: {
+  readonly choices: ReturnType<typeof selectableChoices>;
+  readonly current: string | null;
+  readonly modelLabel: string;
+  readonly disabled: boolean;
+  readonly defaultValue: string | null;
+  readonly onSetDefault?: (value: string | null) => Promise<boolean>;
+  readonly defaultEditError?: string;
+  readonly highlightEnabled: boolean;
+  readonly onChange: (value: string) => void;
+  readonly onDraggingChange: (dragging: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const pending = useRef(false);
+  const setDefault = async (value: string | null) => {
+    if (!props.onSetDefault || props.defaultEditError || pending.current) return;
+    if (value === props.defaultValue) {
+      setExpanded(false);
+      return;
+    }
+    pending.current = true;
+    setSaving(true);
+    try {
+      if (await props.onSetDefault(value)) {
+        setExpanded(false);
+        void Haptics.selectionAsync();
+      }
+    } finally {
+      pending.current = false;
+      setSaving(false);
+    }
+  };
+  const editorExpanded = expanded && !props.defaultEditError;
+
+  return (
+    <View>
+      <ReasoningSlider
+        choices={props.choices}
+        value={props.current}
+        modelLabel={props.modelLabel}
+        disabled={props.disabled}
+        defaultValue={props.defaultValue}
+        defaultEditorExpanded={editorExpanded}
+        defaultSaving={saving}
+        highlightEnabled={props.highlightEnabled}
+        defaultEditUnavailable={props.defaultEditError}
+        {...(props.onSetDefault && props.choices.length > 0 && !props.defaultEditError
+          ? { onEditDefault: () => setExpanded((value) => !value) }
+          : {})}
+        onChange={props.onChange}
+        onDraggingChange={props.onDraggingChange}
+      />
+      {editorExpanded ? (
+        <View accessibilityRole="radiogroup" accessibilityLabel="默认思考强度">
+          <PopupChoice
+            label="使用供应商默认"
+            selected={!props.choices.some((choice) => choice.id === props.defaultValue)}
+            disabled={saving}
+            onPress={() => void setDefault(null)}
+          />
+          {props.choices.map((choice) => (
+            <PopupChoice
+              key={choice.id}
+              label={reasoningLevelLabel(choice)}
+              description={choice.description}
+              selected={choice.id === props.defaultValue}
+              disabled={saving}
+              onPress={() => void setDefault(choice.id)}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function ThreadSettingsPopupOptions(props: {
+  readonly onDraggingChange: (dragging: boolean) => void;
+  readonly highlightEnabled: boolean;
+}) {
   const colors = useModelPopupColors();
   const session = useThreadSettingsSession();
   const [showMore, setShowMore] = useState(false);
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const saveSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "reasoning effort default update",
+    reportFailure: false,
+  });
+  const { environmentId, displayedModelSelection } = session;
+  const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const settings = environmentId ? configs.get(environmentId)?.settings : undefined;
+  const reasoningDescriptor = findReasoningOptionDescriptor(session.displayedDescriptors);
+  const savedDefault = displayedModelSelection
+    ? (settings?.reasoningEffortDefaults?.[displayedModelSelection.instanceId]?.[
+        displayedModelSelection.model
+      ] ?? null)
+    : null;
+  const defaultEditError = !settings
+    ? "请连接服务端后重试。"
+    : settings.reasoningEffortDefaults === undefined
+      ? "请将服务端更新到支持默认思考强度的版本。"
+      : !canWriteSettings
+        ? "当前连接需要服务端设置写入权限。"
+        : undefined;
+  const setDefault =
+    environmentId && displayedModelSelection
+      ? async (effort: string | null) => {
+          const { instanceId, model } = displayedModelSelection;
+          const result = await saveSettings({
+            environmentId,
+            input: { patch: { setReasoningEffortDefault: { instanceId, model, effort } } },
+          });
+          if (!AsyncResult.isSuccess(result)) {
+            Dialog.alert("无法保存默认思考强度", "请检查服务端连接和权限后重试。");
+            return false;
+          }
+          const savedDefaults = result.value.reasoningEffortDefaults;
+          if (!savedDefaults || (savedDefaults[instanceId]?.[model] ?? null) !== effort) {
+            Dialog.alert("无法保存默认思考强度", "服务端未确认此档位。请刷新设置后重试。");
+            return false;
+          }
+          return true;
+        }
+      : undefined;
   const modelLabel = session.providerGroups.flatMap((group) => group.models).find(session.isDisplayed)?.label
     ?? session.displayedModelSelection?.model ?? "";
   return (
@@ -1565,7 +1722,29 @@ function ThreadSettingsPopupOptions(props: { readonly onDraggingChange: (draggin
           session.applyOptionChange(descriptor.id, value);
         };
         if (reasoning) {
-          return <ReasoningSlider key={`${session.displayedModelSelection?.instanceId}:${session.displayedModelSelection?.model}:${descriptor.id}:${selectableChoices(descriptor).map((choice) => choice.id).join(",")}`} choices={selectableChoices(descriptor)} value={typeof current === "string" ? current : null} modelLabel={modelLabel} disabled={primary && session.promptTraits.ultrathinkInBodyText} onChange={applyChoice} onDraggingChange={props.onDraggingChange} />;
+          const choices = selectableChoices(descriptor);
+          const editableDefault = descriptor.id === reasoningDescriptor?.id;
+          return (
+            <PopupReasoningControl
+              key={JSON.stringify([
+                session.environmentId,
+                session.displayedModelSelection?.instanceId,
+                session.displayedModelSelection?.model,
+                descriptor.id,
+                choices.map((choice) => choice.id),
+              ])}
+              choices={choices}
+              current={typeof current === "string" ? current : null}
+              modelLabel={modelLabel}
+              disabled={primary && session.promptTraits.ultrathinkInBodyText}
+              defaultValue={editableDefault ? savedDefault : null}
+              highlightEnabled={props.highlightEnabled}
+              {...(setDefault && editableDefault ? { onSetDefault: setDefault } : {})}
+              {...(editableDefault && defaultEditError ? { defaultEditError } : {})}
+              onChange={applyChoice}
+              onDraggingChange={props.onDraggingChange}
+            />
+          );
         }
         if (descriptor.id === "serviceTier") {
           return <PopupSpeedSegments key={descriptor.id} choices={selectableChoices(descriptor).map((choice) => ({ id: choice.id, label: choice.id === "priority" || choice.id === "fast" ? "快速" : choice.id === "default" || choice.id === "standard" ? "标准" : popupLabel(choice.label) }))} current={typeof current === "string" ? current : null} onChange={applyChoice} />;
@@ -1576,16 +1755,12 @@ function ThreadSettingsPopupOptions(props: { readonly onDraggingChange: (draggin
               accessibilityRole="header"
               className="px-3 pb-1 pt-3 text-xs font-t3-medium text-foreground-muted"
             >
-              {reasoning ? "思考强度" : popupLabel(descriptor.label)}
+              {popupLabel(descriptor.label)}
             </Text>
             {selectableChoices(descriptor).map((choice) => (
               <PopupChoice
                 key={choice.id}
-                label={
-                  reasoning
-                    ? (POPUP_REASONING_LABELS[choice.id] ?? choice.label)
-                    : popupLabel(choice.label)
-                }
+                label={popupLabel(choice.label)}
                 isDefault={choice.isDefault}
                 description={choice.description}
                 selected={choice.id === current}
@@ -1620,32 +1795,6 @@ function ThreadSettingsPopupOptions(props: { readonly onDraggingChange: (draggin
       </Pressable>
       {showMore ? (
         <View>
-          <Text
-            accessibilityRole="header"
-            className="px-3 pb-1 text-xs font-t3-medium" style={{ color: colors.muted }}
-          >
-            权限
-          </Text>
-          {session.runtimeModeChoices.map((choice) => (
-            <PopupChoice
-              key={choice.mode}
-              label={choice.label}
-              selected={choice.mode === session.runtimeMode}
-              disabled={choice.disabledReason !== undefined}
-              description={choice.disabledReason ?? choice.description}
-              onPress={() => {
-                void Haptics.selectionAsync();
-                session.onUpdateRuntimeMode(choice.mode);
-              }}
-            />
-          ))}
-          {session.runtimeModeChoices
-            .filter((choice) => choice.disabledReason)
-            .map((choice) => (
-              <Text key={choice.mode} className="px-3 py-1 text-xs" style={{ color: colors.muted }}>
-                {choice.label}：{choice.disabledReason}
-              </Text>
-            ))}
           {session.hasLegacyModels ? (
             <View className="min-h-11 flex-row items-center justify-between px-3">
               <Text style={{ color: colors.text, fontSize: 13 }}>显示旧模型</Text>
@@ -1666,13 +1815,29 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
   const colors = useModelPopupColors();
   const session = useThreadSettingsSession();
   const { height, width, fontScale } = useWindowDimensions();
+  const focused = useIsFocused();
+  const active = useAppActive();
   const insets = useSafeAreaInsets();
   const keyboardVisible = useKeyboardState((keyboard) => keyboard.isVisible);
   const [availableHeight, setAvailableHeight] = useState(height - insets.top - insets.bottom - 24);
   const [headerContentHeight, setHeaderContentHeight] = useState(92);
   const [searchVisible, setSearchVisible] = useState(false);
   const [sliderDragging, setSliderDragging] = useState(false);
+  const [runtimeMenuOpen, setRuntimeMenuOpen] = useState(false);
+  const [windowFocused, setWindowFocused] = useState(true);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- stops the rail when Android loses window focus without going into the background
+  useEffect(() => {
+    const focus = AppState.addEventListener("focus", () => setWindowFocused(true));
+    const blur = AppState.addEventListener("blur", () => setWindowFocused(false));
+    return () => {
+      focus.remove();
+      blur.remove();
+    };
+  }, []);
   const inputRef = useRef<TextInputInstance>(null);
+  const runtimeLabel = session.runtimeModeChoices.find(
+    (choice) => choice.mode === session.runtimeMode,
+  )?.label;
   const panelLimit = Math.min(560, availableHeight * (keyboardVisible ? 0.98 : 0.9));
   const headerLimit = panelLimit * (searchVisible ? 0.48 : 0.36);
   const catalogItems = buildThreadSettingsCatalogItems(session).filter((item) => item.kind !== "provider");
@@ -1714,8 +1879,7 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
   return (
     <View className="flex-1">
       <Pressable
-        accessibilityLabel="关闭模型与参数"
-        accessibilityRole="button"
+        accessible={false}
         className="absolute inset-0 bg-backdrop"
         onPress={props.onClose}
       />
@@ -1753,7 +1917,7 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
               <View className="flex-row items-center gap-1 px-2">
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="取消模型选择"
+                  accessibilityLabel="关闭模型与参数"
                   onPress={props.onClose}
                   className="min-h-12 min-w-12 items-center justify-center active:opacity-60"
                 >
@@ -1762,6 +1926,7 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
                 <Text
                   accessibilityRole="header"
                   className="min-w-0 flex-1 text-sm font-t3-semibold"
+                  numberOfLines={2}
                   style={{ color: colors.text }}
                 >
                   模型与参数
@@ -1777,21 +1942,44 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
                     }
                     setSearchVisible(!searchVisible);
                   }}
-                  className="min-h-12 min-w-11 items-center justify-center active:opacity-60"
+                  className="min-h-12 min-w-12 items-center justify-center active:opacity-60"
                 >
                   <SymbolView name="magnifyingglass" size={17} tintColor={colors.text} />
                 </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => {
-                    if (session.commitPendingModel()) props.onClose();
+                <Menu
+                  accessibilityLabel={runtimeLabel ? `权限，当前${runtimeLabel}` : "权限"}
+                  title="权限"
+                  onOpenMenu={() => setRuntimeMenuOpen(true)}
+                  onCloseMenu={() => setRuntimeMenuOpen(false)}
+                  actions={session.runtimeModeChoices.map((choice) => ({
+                    id: choice.mode,
+                    title: choice.label,
+                    subtitle: choice.disabledReason ?? choice.description,
+                    state: choice.mode === session.runtimeMode ? "on" : "off",
+                    attributes: { disabled: choice.disabledReason !== undefined },
+                  }))}
+                  onPressAction={({ nativeEvent }) => {
+                    const choice = session.runtimeModeChoices.find(
+                      (candidate) => candidate.mode === nativeEvent.event,
+                    );
+                    if (!choice || choice.disabledReason !== undefined) return;
+                    void Haptics.selectionAsync();
+                    session.onUpdateRuntimeMode(choice.mode);
                   }}
-                  className="min-h-12 min-w-12 items-center justify-center px-2 active:opacity-60"
+                  className="min-h-12 min-w-12 max-w-[116px] justify-center rounded-lg px-2 active:opacity-60"
+                  style={{ backgroundColor: colors.rail }}
                 >
-                  <Text className="text-sm font-t3-medium" style={{ color: colors.text }}>
-                    {session.pendingModel ? "保存" : "完成"}
-                  </Text>
-                </Pressable>
+                  <View className="flex-row items-center justify-center gap-1">
+                    <Text
+                      className="min-w-0 shrink text-xs font-t3-medium"
+                      numberOfLines={1}
+                      style={{ color: colors.text }}
+                    >
+                      {runtimeLabel ?? "权限"}
+                    </Text>
+                    <SymbolView name="chevron.down" size={12} tintColor={colors.muted} />
+                  </View>
+                </Menu>
               </View>
               {searchVisible ? <View className="mx-3 flex-row">
                 <SearchField
@@ -1850,7 +2038,10 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator
             >
-              <ThreadSettingsPopupOptions onDraggingChange={setSliderDragging} />
+              <ThreadSettingsPopupOptions
+                highlightEnabled={focused && active && windowFocused && !runtimeMenuOpen}
+                onDraggingChange={setSliderDragging}
+              />
             </ScrollView>
           </View>
         </View>

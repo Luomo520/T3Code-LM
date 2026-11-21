@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
+  type SelectProviderOptionDescriptor,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -21,6 +22,60 @@ export function modelSelectionCommandType(
   return currentInstanceId === selection.instanceId
     ? ("thread.model-selection.set" as const)
     : ("provider.switch" as const);
+}
+
+export const REASONING_EFFORT_OPTION_IDS: ReadonlyArray<string> = [
+  "reasoningEffort",
+  "effort",
+  "reasoning",
+  "variant",
+  "reasoning_effort",
+  "thinking_level",
+];
+const REASONING_OPTION_IDS: ReadonlySet<string> = new Set([
+  ...REASONING_EFFORT_OPTION_IDS,
+  "thinking",
+]);
+
+export function isReasoningOptionDescriptor(descriptor: ProviderOptionDescriptor): boolean {
+  return (
+    REASONING_OPTION_IDS.has(descriptor.id) ||
+    (descriptor.type === "select" && descriptor.role === "reasoning")
+  );
+}
+
+export function findReasoningOptionDescriptor(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined,
+): SelectProviderOptionDescriptor | undefined {
+  return descriptors?.find(
+    (descriptor): descriptor is SelectProviderOptionDescriptor =>
+      descriptor.type === "select" && isReasoningOptionDescriptor(descriptor),
+  );
+}
+
+export function resolveReasoningEffortDefault(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined,
+  effort: string | null | undefined,
+): { descriptor: SelectProviderOptionDescriptor; value: string } | undefined {
+  const descriptor = findReasoningOptionDescriptor(descriptors);
+  return descriptor &&
+    effort != null &&
+    descriptor.options.some(({ id }) => id === effort) &&
+    !descriptor.promptInjectedValues?.includes(effort)
+    ? { descriptor, value: effort }
+    : undefined;
+}
+
+export function isReasoningOptionId(
+  id: string,
+  descriptors?: ReadonlyArray<ProviderOptionDescriptor>,
+): boolean {
+  return (
+    REASONING_OPTION_IDS.has(id) ||
+    descriptors?.some(
+      (descriptor) => descriptor.id === id && isReasoningOptionDescriptor(descriptor),
+    ) === true
+  );
 }
 
 export interface SelectableModelOption {

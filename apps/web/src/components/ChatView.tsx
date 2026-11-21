@@ -3719,6 +3719,7 @@ export default function ChatView(props: ChatViewProps) {
                                 activeProjectDefaultModelSelection={
                                   activeProjectDefaultModelSelection
                                 }
+                                legacyProjectSettings={activeProject}
                                 activeThreadModelSelection={activeThread?.modelSelection}
                                 activeProjectId={activeProject?.id ?? null}
                                 projectName={activeProject?.title}

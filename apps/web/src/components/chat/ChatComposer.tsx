@@ -56,6 +56,7 @@ import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { type FolderDropTarget, folderDropTarget, resolveDroppedFolderPath } from "./folderDrop";
 import { splitTransferredFiles } from "./workspaceFileDrop";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
+import type { LegacyProjectSettingsFields } from "@t3tools/shared/projectSettings";
 import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
 import {
   memo,
@@ -423,6 +424,7 @@ export interface ChatComposerProps {
   providerStatuses: ServerProvider[];
   providerCatalogKnown: boolean;
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
+  legacyProjectSettings?: LegacyProjectSettingsFields | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
   reportedModelSelection?: ModelSelection | null;
   activeProjectId: ProjectId | null;
@@ -542,6 +544,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerStatuses,
     providerCatalogKnown,
     activeProjectDefaultModelSelection,
+    legacyProjectSettings,
     activeThreadModelSelection,
     reportedModelSelection,
     activeProjectId,
@@ -880,6 +883,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderModels,
     composerModelOptions,
     selectedModel,
+    reasoningOptionDefault,
     composerProviderState,
   } = useComposerProviderModel({
     providerStatuses,
@@ -888,6 +892,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     threadRef: composerDraftTarget,
     threadModelSelection: activeThreadModelSelection,
     projectModelSelection: activeProjectDefaultModelSelection,
+    legacyProjectSettings,
     promptInjectionState: getComposerPromptInjectionState(prompt),
     threadStarted: threadHasStarted(activeThread),
     candidateInstanceIds: [
@@ -2441,6 +2446,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedModel={selectedModel}
       selectedProviderModels={selectedProviderModels}
       composerModelOptions={composerModelOptions}
+      reasoningOptionDefault={reasoningOptionDefault}
       reportedModelSelection={reportedModelSelection}
       promptUltrathink={promptUltrathink}
       onPromptEdit={editPromptFromTraitsStable}
@@ -3050,6 +3056,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           model: selectedModel,
           models: selectedProviderModels,
           modelOptions: composerModelOptions?.[selectedInstanceId],
+          reasoningOptionDefault,
           reportedModelSelection,
           prompt: promptRef.current,
           cursor: readComposerSnapshotStable().expandedCursor,
@@ -3253,6 +3260,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setComposerTrigger,
       selectedModel,
       selectedInstanceId,
+      reasoningOptionDefault,
       reportedModelSelection,
       selectedModelSelection,
       multipleModelSelections,

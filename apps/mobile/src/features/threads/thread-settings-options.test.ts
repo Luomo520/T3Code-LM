@@ -3,6 +3,7 @@ import {
   getTraitSelectChange,
 } from "@t3tools/client-runtime/model-traits";
 import {
+  DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
   type ManagedPolicySummary,
   type ProviderOptionDescriptor,
@@ -12,6 +13,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyProviderOptionSelection,
+  preserveInheritedReasoningEffort,
+  providerOptionsForDisplay,
   resolveProviderOptionDescriptors,
   withImplicitFastModeSelection,
 } from "../../lib/providerOptions";
@@ -105,6 +108,42 @@ describe("selectableChoices", () => {
       "high",
       "ultracode",
     ]);
+  });
+});
+
+describe("inherited reasoning", () => {
+  it("reflects the inherited level in the picker while leaving the underlying selection unset", () => {
+    const instanceId = ProviderInstanceId.make("codex");
+    const selection = { instanceId, model: "gpt-test" };
+    const descriptors = [effortDescriptor];
+    const display = providerOptionsForDisplay({
+      descriptors,
+      selection,
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        reasoningEffortDefaults: { [instanceId]: { [selection.model]: "low" } },
+      },
+      projectId: null,
+      project: null,
+    });
+
+    expect(display.selection?.options).toEqual([{ id: "effort", value: "low" }]);
+    expect(display.descriptors[0]?.currentValue).toBe("low");
+    expect(selection).not.toHaveProperty("options");
+    expect(effortDescriptor.currentValue).toBe("high");
+  });
+
+  it("keeps speed changes from pinning reasoning while preserving explicit choices", () => {
+    const descriptors = [effortDescriptor];
+    const speed = { id: "fastMode", value: true };
+    const effort = { id: "effort", value: "high" };
+    const next = [effort, speed];
+
+    expect(preserveInheritedReasoningEffort(next, descriptors, undefined, speed.id)).toEqual([
+      speed,
+    ]);
+    expect(preserveInheritedReasoningEffort(next, descriptors, [effort], speed.id)).toEqual(next);
+    expect(preserveInheritedReasoningEffort(next, descriptors, undefined, effort.id)).toEqual(next);
   });
 });
 

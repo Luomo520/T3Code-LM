@@ -347,6 +347,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   docked?: boolean;
   /** Right at the end of the search text moves into the popup's effort column. */
   onFocusEffort?: () => void;
+  headerAction?: ReactNode;
   /** Closes the list column, inside the popup's fixed height. */
   listFooter?: ReactNode;
 }) {
@@ -805,13 +806,34 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         style={{ height: Math.min(240, Math.max(112, filteredItemKeys.length * 34 + (searchExpanded ? 140 : 112))) }}
         data-model-picker-content="true"
       >
-        <div className="flex min-h-11 items-center gap-1 px-2">
-          <button type="button" className="flex size-10 items-center justify-center rounded-md hover:bg-foreground/10" aria-label="关闭模型面板" onClick={onRequestClose}><XIcon className="size-4" /></button>
-          <span className="min-w-0 flex-1 text-sm font-medium">模型与参数</span>
-          <button type="button" data-model-search-toggle aria-label="搜索模型" aria-expanded={searchExpanded}
-            className="flex size-10 items-center justify-center rounded-md hover:bg-foreground/10"
-            onClick={() => { if (searchExpanded) { setSearchExpanded(false); setSearchQuery(""); } else focusSearchInput(); }}><SearchIcon className="size-4" /></button>
-          <button type="button" className="min-h-10 px-2 text-xs" onClick={onRequestClose}>完成</button>
+        <div className="flex min-h-11 items-center gap-1 px-2" data-model-picker-header>
+          <button
+            type="button"
+            aria-label="关闭模型面板"
+            className="flex size-10 shrink-0 items-center justify-center rounded-md hover:bg-foreground/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+            onClick={onRequestClose}
+          >
+            <XIcon aria-hidden="true" className="size-4" />
+          </button>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">模型与参数</span>
+          <button
+            type="button"
+            data-model-search-toggle
+            aria-label="搜索模型"
+            aria-expanded={searchExpanded}
+            className="flex size-10 shrink-0 items-center justify-center rounded-md hover:bg-foreground/10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+            onClick={() => {
+              if (searchExpanded) {
+                setSearchExpanded(false);
+                setSearchQuery("");
+              } else {
+                focusSearchInput();
+              }
+            }}
+          >
+            <SearchIcon aria-hidden="true" className="size-4" />
+          </button>
+          {props.headerAction}
         </div>
         {showSidebar && (
           <ModelPickerSidebar

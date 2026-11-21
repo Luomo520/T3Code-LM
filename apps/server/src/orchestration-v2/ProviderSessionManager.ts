@@ -1,6 +1,15 @@
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import {
+  findReasoningOptionDescriptor,
+  isReasoningOptionId,
+  resolveReasoningEffortDefault,
+  resolveSelectableModel,
+} from "@t3tools/shared/model";
+import {
+  resolveModelReasoningOptionDefault,
+  resolveProjectSettings,
+} from "@t3tools/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
   ModelSelection,
@@ -12,6 +21,7 @@ import {
   type OrchestrationV2Run,
   OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
+  type ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
@@ -49,6 +59,7 @@ import {
 } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
@@ -434,6 +445,7 @@ export const layerWithOptions = (
       /** Unreadable settings must preserve explicit browser-access opt-outs. */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
       const projectService = yield* Effect.serviceOption(ProjectService.ProjectService);
+      const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
       const eventSink = yield* EventSink.EventSinkV2;
       const commandOutput = yield* CommandOutputHub.CommandOutputHub;
       const promptSuggestionStore = yield* SubscriptionRef.make<
@@ -490,6 +502,141 @@ export const layerWithOptions = (
           );
         },
       );
+      const resolveReasoningSelection = Effect.fn(
+        "ProviderSessionManagerV2.resolveReasoningSelection",
+      )(function* (
+        selection: ModelSelection,
+        threadId: ThreadId | null | undefined,
+        cwd: string | null | undefined,
+        knownProjectId: ProjectId | undefined,
+        appliedReasoningDefaults: Map<ThreadId, Set<string>>,
+      ) {
+        if (
+          Option.isNone(serverSettings) ||
+          selection.options?.some(({ id }) => isReasoningOptionId(id))
+        ) {
+          return selection;
+        }
+        const settings = yield* serverSettings.value.getSettings.pipe(
+          Effect.orElseSucceed(() => null),
+        );
+        if (settings === null) return selection;
+        const appliedModels =
+          threadId == null ? undefined : appliedReasoningDefaults.get(threadId);
+        const hadOverride = appliedModels?.has(selection.model) === true;
+        const couldUseProjectDefault =
+          !settings.projectSettingsFolded ||
+          (knownProjectId === undefined
+            ? Object.values(settings.projectSettingsOverrides)
+            : [settings.projectSettingsOverrides[knownProjectId]]
+          ).some(
+            (entry) =>
+              entry?.defaultModelSelection?.instanceId === selection.instanceId &&
+              (entry.defaultModelSelection.options?.length ?? 0) > 0,
+          );
+        if (
+          !hadOverride &&
+          !couldUseProjectDefault &&
+          !Object.hasOwn(settings.reasoningEffortDefaults ?? {}, selection.instanceId)
+        ) {
+          return selection;
+        }
+
+        const thread =
+          threadId == null ||
+          (cwd != null && (knownProjectId !== undefined || !couldUseProjectDefault))
+            ? null
+            : yield* projectionStore.getThread(threadId).pipe(Effect.orElseSucceed(() => null));
+        const projectId = knownProjectId ?? thread?.projectId ?? null;
+        const project =
+          projectId === null || settings.projectSettingsFolded || Option.isNone(projectService)
+            ? undefined
+            : yield* projectService.value.getById(projectId).pipe(
+                Effect.map(Option.getOrUndefined),
+                Effect.orElseSucceed(() => undefined),
+              );
+        const provider = Option.isNone(providerRegistry)
+          ? undefined
+          : (yield* providerRegistry.value.getProviders).find(
+              ({ instanceId }) => instanceId === selection.instanceId,
+            );
+        const workspacePath = cwd ?? thread?.worktreePath;
+        const workspace = provider?.workspaceSnapshots?.find(({ cwd }) => cwd === workspacePath);
+        const models = workspace?.models ?? provider?.models ?? [];
+        const modelSlug =
+          provider === undefined
+            ? null
+            : resolveSelectableModel(provider.driver, selection.model, models);
+        const modelDescriptors = models.find(({ slug }) => slug === modelSlug)?.capabilities
+          ?.optionDescriptors;
+        const descriptors =
+          findReasoningOptionDescriptor(modelDescriptors) === undefined
+            ? (workspace?.optionDescriptors ?? modelDescriptors)
+            : modelDescriptors;
+        if (selection.options?.some(({ id }) => isReasoningOptionId(id, descriptors))) {
+          return selection;
+        }
+        const defaults = { settings, projectId, descriptors, project };
+        const option =
+          resolveModelReasoningOptionDefault({ ...defaults, selection }) ??
+          (modelSlug !== null && modelSlug !== selection.model
+            ? resolveModelReasoningOptionDefault({
+                ...defaults,
+                selection: { ...selection, model: modelSlug },
+              })
+            : undefined);
+        if (option !== undefined) {
+          if (threadId != null && typeof option.value === "string") {
+            const models = appliedModels ?? new Set<string>();
+            models.add(selection.model);
+            appliedReasoningDefaults.set(threadId, models);
+          }
+          return { ...selection, options: [...(selection.options ?? []), option] };
+        }
+        // Some providers keep an effort override across turns when the next request omits it.
+        if (!hadOverride) return selection;
+        const native = findReasoningOptionDescriptor(descriptors);
+        const baseline = resolveReasoningEffortDefault(
+          descriptors,
+          native?.options.find(({ isDefault }) => isDefault)?.id ?? native?.currentValue,
+        );
+        return baseline === undefined
+          ? selection
+          : {
+              ...selection,
+              options: [
+                ...(selection.options ?? []),
+                { id: baseline.descriptor.id, value: baseline.value },
+              ],
+            };
+      });
+      const makeReasoningSelectionResolver = () => {
+        const appliedReasoningDefaults = new Map<ThreadId, Set<string>>();
+        return <
+          Input extends {
+            readonly modelSelection?: ModelSelection;
+            readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+          },
+        >(
+          input: Input,
+          threadId: ThreadId | null | undefined,
+          projectId?: ProjectId,
+        ) =>
+          input.modelSelection === undefined
+            ? Effect.succeed(input)
+            : resolveReasoningSelection(
+                input.modelSelection,
+                threadId,
+                input.runtimePolicy?.cwd,
+                projectId,
+                appliedReasoningDefaults,
+              ).pipe(
+                Effect.map((modelSelection) =>
+                  modelSelection === input.modelSelection ? input : { ...input, modelSelection },
+                ),
+              );
+      };
+
       const readLinkedEnvironments = Effect.gen(function* () {
         if (options.configureMcp === false || Option.isNone(serverSettings)) return undefined;
         return yield* serverSettings.value.getSettings.pipe(
@@ -2299,6 +2446,7 @@ export const layerWithOptions = (
         >,
       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
+        const withReasoningSelection = makeReasoningSelectionResolver();
         const assertNativeCodexChild = Effect.fn("ProviderSessionManager.assertNativeCodexChild")(
           function* (threadId: ThreadId) {
             if (runtime.driver !== "codex") return;
@@ -2344,6 +2492,7 @@ export const layerWithOptions = (
               modelFamily: normalizeModelMetricLabel(model),
             },
           });
+        const { resumeTurn, compactThread, applyModelSelection } = runtime;
         return {
           ...runtime,
           // Pi replaces its session snapshot as metadata changes.
@@ -2523,7 +2672,10 @@ export const layerWithOptions = (
                     ),
                   ),
                   () =>
-                    runtime.startTurn(input).pipe(turnMetrics("send", input.modelSelection.model)),
+                    withReasoningSelection(input, input.threadId, input.appThread.projectId).pipe(
+                      Effect.flatMap(runtime.startTurn),
+                      turnMetrics("send", input.modelSelection.model),
+                    ),
                   (_, exit) =>
                     Exit.isFailure(exit)
                       ? observeActivity(
@@ -2534,10 +2686,36 @@ export const layerWithOptions = (
                 ),
               ),
             ),
+          ...(resumeTurn === undefined
+            ? {}
+            : {
+                resumeTurn: (input: ProviderAdapter.ProviderAdapterV2ResumeTurnInput) =>
+                  withReasoningSelection(input, input.threadId, input.appThread.projectId).pipe(
+                    Effect.flatMap(resumeTurn),
+                  ),
+              }),
+          ...(compactThread === undefined
+            ? {}
+            : {
+                compactThread: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
+                  withReasoningSelection(input, input.threadId, input.appThread.projectId).pipe(
+                    Effect.flatMap(compactThread),
+                  ),
+              }),
           steerTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(runtime.steerTurn(input).pipe(turnMetrics("steer"))),
+              Effect.andThen(withReasoningSelection(input, input.threadId)),
+              Effect.flatMap(runtime.steerTurn),
+              turnMetrics("steer"),
             ),
+          ...(applyModelSelection === undefined
+            ? {}
+            : {
+                applyModelSelection: (input: Parameters<typeof applyModelSelection>[0]) =>
+                  withReasoningSelection(input, input.providerThread.appThreadId).pipe(
+                    Effect.flatMap(applyModelSelection),
+                  ),
+              }),
           // A provider starved of memory can stop answering, so no caller may wait on it unbounded.
           interruptTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(

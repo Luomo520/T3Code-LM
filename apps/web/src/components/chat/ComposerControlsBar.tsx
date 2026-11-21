@@ -2,6 +2,11 @@ import type { ChatComposerProps } from "./ChatComposer";
 import type { PromptUltrathink } from "./TraitsPicker";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
+import { useAtomValue } from "@effect/atom-react";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { serverEnvironment } from "~/state/server";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { useEnvironmentScope } from "~/state/session";
 import { CircleAlertIcon } from "lucide-react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl } from "./ComposerControl";
@@ -11,10 +16,12 @@ import {
   type RuntimeModeOption,
 } from "./ComposerFooterControls";
 import {
+  AuthSettingsWriteScope,
   type EnvironmentId,
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderOptionSelection,
   type RuntimeMode,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -26,6 +33,7 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   ComposerEffortColumn,
   ComposerPickerFooter,
+  ComposerPickerPermissionsMenu,
   describeComposerEffort,
 } from "./ComposerModelEffort";
 import type { useComposerProviderModel } from "./useComposerProviderModel";
@@ -48,6 +56,7 @@ export function ComposerControlsBar(props: {
   selectedProvider: ProviderDriverKind;
   selectedInstanceId: ProviderInstanceId;
   selectedModel: string;
+  reasoningOptionDefault?: ProviderOptionSelection | undefined;
   selectedProviderModels: ServerProvider["models"];
   composerModelOptions: ReturnType<typeof useComposerProviderModel>["composerModelOptions"];
   reportedModelSelection: ChatComposerProps["reportedModelSelection"];
@@ -147,7 +156,40 @@ export function ComposerControlsBar(props: {
   const controlSize = composerControlsCollapsed ? "xs" : "sm";
   const applyThreadModelPick = useApplyThreadModelPick();
   const applyRouteThreadModelPick = useStableCallback(() => applyThreadModelPick(routeThreadRef));
+  const savedEffort = useAtomValue(
+    serverEnvironment.settingsValueAtom(environmentId),
+    (settings) => settings?.reasoningEffortDefaults?.[selectedInstanceId]?.[selectedModel] ?? null,
+  );
+  const supportsEffortDefaults = useAtomValue(
+    serverEnvironment.settingsValueAtom(environmentId),
+    (settings) => settings?.reasoningEffortDefaults !== undefined,
+  );
+  const canSaveDefaults = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const saveDefaultEffort = async (effort: string | null) => {
+    const result = await updateSettings({
+      environmentId,
+      input: {
+        patch: {
+          setReasoningEffortDefault: {
+            instanceId: selectedInstanceId,
+            model: selectedModel,
+            effort,
+          },
+        },
+      },
+    });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+    const defaults = result.value.reasoningEffortDefaults;
+    if (
+      defaults === undefined ||
+      (defaults[selectedInstanceId]?.[selectedModel] ?? null) !== effort
+    ) {
+      throw new Error("服务端未保存默认思考强度。");
+    }
+  };
   const traitsInput = resolveComposerTraitsInput({
+    reasoningOptionDefault: props.reasoningOptionDefault,
     provider: selectedProvider,
     instanceId: selectedInstanceId,
     ...(routeKind === "server"
@@ -221,15 +263,28 @@ export function ComposerControlsBar(props: {
       triggerShortcuts={
         pickerOwnsModeShortcut ? "composer.effort composer.mode" : "composer.effort"
       }
-      effortColumn={<ComposerEffortColumn traits={traitsInput} />}
-      footer={
-        <ComposerPickerFooter
+      effortColumn={
+        <ComposerEffortColumn
           traits={traitsInput}
-          runtimeMode={compatibleRuntimeMode}
-          runtimeModeOptions={compatibleRuntimeModeOptions}
-          onRuntimeModeChange={handleRuntimeModeChange}
+          defaultEffort={{
+            saved: savedEffort,
+            save: saveDefaultEffort,
+            disabledReason: !supportsEffortDefaults
+              ? "更新当前连接的 T3 后端后即可修改默认思考强度"
+              : !canSaveDefaults
+                ? "当前连接没有修改设置的权限"
+                : undefined,
+          }}
         />
       }
+      headerAction={
+        <ComposerPickerPermissionsMenu
+          runtimeMode={compatibleRuntimeMode}
+          options={compatibleRuntimeModeOptions}
+          onChange={handleRuntimeModeChange}
+        />
+      }
+      footer={<ComposerPickerFooter traits={traitsInput} />}
       terminalOpen={terminalOpen}
       open={modelPickerOpen}
       instanceIndicatorBackground={

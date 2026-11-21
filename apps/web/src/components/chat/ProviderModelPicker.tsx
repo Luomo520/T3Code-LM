@@ -122,10 +122,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   /** Composer shortcuts this trigger answers besides the picker's own. */
   triggerShortcuts?: string;
   /**
-   * Docks an effort column beside the list and a footer under both. The popup then stays open
-   * until Escape or an outside press, and picking a model moves focus to its levels.
+   * Docks an effort section below the list. The popup stays open after a model pick and moves
+   * focus to its levels.
    */
   effortColumn?: ReactNode;
+  headerAction?: ReactNode;
   footer?: ReactNode;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
@@ -211,9 +212,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       focusEffort("any");
       return;
     }
-    popupRef.current
-      ?.querySelector<HTMLButtonElement>("[data-composer-permissions-trigger]")
-      ?.click();
+    const trigger = popupRef.current?.querySelector<HTMLButtonElement>(
+      "[data-composer-permissions-trigger]",
+    );
+    trigger?.scrollIntoView({ block: "nearest" });
+    trigger?.click();
   };
 
   const handleInstanceModelChange = (instanceId: ProviderInstanceId, model: string) => {
@@ -310,6 +313,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       {...(docked
         ? {
             docked,
+            ...(props.headerAction ? { headerAction: props.headerAction } : {}),
             onFocusEffort: () => void focusEffort("any"),
             // Inside the fixed height, so switching to or from a ChatGPT plan never resizes it.
             ...(props.selectedModels === undefined
@@ -454,28 +458,32 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         {...(docked
           ? { side: "top" as const, collisionAvoidance: { side: "flip", align: "shift" } as const }
           : {})}
-        className="model-picker-popup dark before:hidden"
+        data-model-picker-popup
+        className="dark before:hidden"
         padding="none"
         touchBackdrop
       >
         {props.effortColumn ? (
           <DockedPickerContext value={{ modelLabel: triggerTitle }}>
             <div className="flex max-h-(--available-height) flex-col overflow-y-auto overscroll-contain">
-              {/* One fixed height, so a model with more options never resizes the popup. Short
-                  windows shrink it and keep the footer. */}
               <div className="flex min-h-0 flex-col">
                 {picker}
                 <div
                   data-model-picker-effort
                   className="flex min-h-0 w-full flex-col border-t border-border/70"
                   onKeyDown={(event) => {
-                    if (event.target instanceof HTMLInputElement && event.target.type === "range") return;
+                    if (event.target instanceof HTMLInputElement && event.target.type === "range")
+                      return;
                     if (event.key !== "ArrowLeft" || event.altKey || event.ctrlKey || event.metaKey)
                       return;
                     event.preventDefault();
                     event.stopPropagation();
-                    if (searchInputRef.current?.offsetParent !== null) searchInputRef.current?.focus();
-                    else popupRef.current?.querySelector<HTMLButtonElement>("[data-model-search-toggle]")?.click();
+                    if (searchInputRef.current?.offsetParent !== null)
+                      searchInputRef.current?.focus();
+                    else
+                      popupRef.current
+                        ?.querySelector<HTMLButtonElement>("[data-model-search-toggle]")
+                        ?.click();
                   }}
                 >
                   {props.effortColumn}
