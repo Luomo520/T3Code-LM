@@ -1,8 +1,8 @@
 {
   "product": "T3Code-LM",
   "repository": "Luomo520/T3Code-LM",
-  "productVersion": "0.1.1",
+  "productVersion": "0.2.1",
   "build": 1,
-  "androidVersionCode": 37,
+  "androidVersionCode": 38,
   "channel": "release"
 }
