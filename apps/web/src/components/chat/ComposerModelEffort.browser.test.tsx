@@ -262,6 +262,10 @@ it("shows the reasoning sweep only inside the fill at every level in a narrow pi
   const fill = rail.querySelector('[data-reasoning-slider-part="fill"]')!;
   const stops = track.querySelectorAll('[data-reasoning-slider-part="stops"] i');
   const sweepStyle = () => getComputedStyle(fill, "::before");
+  const centerOfStop = (index: number) => {
+    const stop = stops[index]!.getBoundingClientRect();
+    return stop.left + stop.width / 2;
+  };
   const expectSweep = async (value: string) => {
     await expect.element(slider).toHaveAttribute("aria-valuetext", value);
     await expect.poll(() => sweepStyle().animationName).toBe("reasoning-effort-flow");
@@ -269,11 +273,16 @@ it("shows the reasoning sweep only inside the fill at every level in a narrow pi
     expect(getComputedStyle(rail).backgroundColor).toBe("rgb(62, 64, 82)");
     expect(getComputedStyle(rail, "::before").animationName).toBe("none");
     expect(getComputedStyle(rail, "::before").backgroundImage).toBe("none");
-    const stop = stops[Number(range.value)]!.getBoundingClientRect();
-    expect(fill.getBoundingClientRect().right).toBeCloseTo(stop.left + stop.width / 2, 0);
+    expect(fill.getBoundingClientRect().right).toBeCloseTo(centerOfStop(Number(range.value)), 0);
   };
 
   await expectSweep("Medium");
+  const railBounds = rail.getBoundingClientRect();
+  const thumbRadius =
+    Number.parseFloat(getComputedStyle(track).getPropertyValue("--reasoning-thumb-size")) / 2;
+  expect(centerOfStop(0) - railBounds.left).toBeCloseTo(thumbRadius, 0);
+  expect(railBounds.right - centerOfStop(stops.length - 1)).toBeCloseTo(thumbRadius, 0);
+  expect(centerOfStop(1)).toBeCloseTo(railBounds.left + railBounds.width / 2, 0);
   range.focus();
   await userEvent.keyboard("{Home}");
   await expectSweep("Low");
@@ -291,9 +300,7 @@ it("shows the reasoning sweep only inside the fill at every level in a narrow pi
   const pixelAt = (x: number) =>
     Array.from(pixels.getImageData(x, Math.floor(canvas.height / 2), 1, 1).data);
   const leadingPixel = pixelAt(Math.round((5 * canvas.width) / rail.getBoundingClientRect().width));
-  expect(leadingPixel[0]).toBeGreaterThan(150);
-  expect(leadingPixel[0]).toBeLessThan(235);
-  expect(leadingPixel[2]).toBeGreaterThan(220);
+  expect(leadingPixel).toEqual([255, 255, 255, 255]);
   expect(pixelAt(Math.floor(canvas.width * 0.75))).toEqual([62, 64, 82, 255]);
 
   {
@@ -322,9 +329,8 @@ it("shows the reasoning sweep only inside the fill at every level in a narrow pi
     await expect.poll(() => sweepStyle().animationPlayState).toBe("paused");
   }
   const rangeBounds = range.getBoundingClientRect();
-  const medium = stops[1]!.getBoundingClientRect();
   await slider.click({
-    position: { x: medium.left + medium.width / 2 - rangeBounds.left, y: rangeBounds.height / 2 },
+    position: { x: centerOfStop(1) - rangeBounds.left, y: rangeBounds.height / 2 },
   });
   await expectSweep("Medium");
   range.focus();

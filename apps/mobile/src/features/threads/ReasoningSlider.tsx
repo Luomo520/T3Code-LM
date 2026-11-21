@@ -8,7 +8,6 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useReduceMotionEnabled } from "../../lib/appState";
 import {
-  REASONING_RAIL_LEFT_EXTENSION,
   REASONING_THUMB_DIAMETER,
   reasoningLevelLabel,
   reasoningRailHighlightMode,
@@ -136,7 +135,7 @@ export function ReasoningSlider(props: {
     index,
     props.choices.length,
     Platform.OS === "android" &&
-      width > REASONING_THUMB_DIAMETER + REASONING_RAIL_LEFT_EXTENSION &&
+      width > REASONING_THUMB_DIAMETER &&
       props.highlightEnabled &&
       !props.disabled,
     reducedMotion,
@@ -205,7 +204,6 @@ export function ReasoningSlider(props: {
         onResponderTerminate={finish}
         style={{
           height: 52,
-          marginLeft: -REASONING_RAIL_LEFT_EXTENSION,
           justifyContent: "center",
           opacity: props.disabled ? 0.5 : 1,
         }}
@@ -227,7 +225,7 @@ export function ReasoningSlider(props: {
           style={{
             position: "absolute",
             top: 23,
-            left: tickInset + REASONING_RAIL_LEFT_EXTENSION,
+            left: tickInset,
             right: tickInset,
             flexDirection: "row",
             justifyContent: "space-between",

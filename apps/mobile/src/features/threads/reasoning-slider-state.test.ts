@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-  REASONING_RAIL_LEFT_EXTENSION,
   REASONING_THUMB_DIAMETER,
   reasoningLevelLabel,
   reasoningRailHighlightMode,
@@ -11,38 +10,37 @@ import {
 
 describe("reasoning slider touch snapping", () => {
   it("uses the thumb-centre travel and clamps touches beyond either rail end", () => {
-    expect(reasoningSliderIndex(-20, 350, 6)).toBe(0);
-    expect(reasoningSliderIndex(0, 350, 6)).toBe(0);
-    expect(reasoningSliderIndex(29, 350, 6)).toBe(0);
-    expect(reasoningSliderIndex(89, 350, 6)).toBe(1);
-    expect(reasoningSliderIndex(149, 350, 6)).toBe(2);
-    expect(reasoningSliderIndex(329, 350, 6)).toBe(5);
-    expect(reasoningSliderIndex(380, 350, 6)).toBe(5);
+    expect(reasoningSliderIndex(-20, 342, 6)).toBe(0);
+    expect(reasoningSliderIndex(0, 342, 6)).toBe(0);
+    expect(reasoningSliderIndex(21, 342, 6)).toBe(0);
+    expect(reasoningSliderIndex(81, 342, 6)).toBe(1);
+    expect(reasoningSliderIndex(141, 342, 6)).toBe(2);
+    expect(reasoningSliderIndex(321, 342, 6)).toBe(5);
+    expect(reasoningSliderIndex(380, 342, 6)).toBe(5);
   });
   it("snaps at the half-distance between adjacent available choices", () => {
-    expect(reasoningSliderIndex(118, 350, 6)).toBe(1);
-    expect(reasoningSliderIndex(120, 350, 6)).toBe(2);
-    expect(reasoningSliderIndex(179, 350, 3)).toBe(1);
+    expect(reasoningSliderIndex(110, 342, 6)).toBe(1);
+    expect(reasoningSliderIndex(112, 342, 6)).toBe(2);
+    expect(reasoningSliderIndex(171, 342, 3)).toBe(1);
   });
   it("handles unmeasured and single-choice rails without invalid indices", () => {
     expect(reasoningSliderIndex(80, 0, 6)).toBe(0);
-    expect(reasoningSliderIndex(80, 50, 6)).toBe(0);
-    expect(reasoningSliderIndex(80, 350, 1)).toBe(0);
-    expect(reasoningSliderIndex(80, 350, 0)).toBe(0);
+    expect(reasoningSliderIndex(80, 42, 6)).toBe(0);
+    expect(reasoningSliderIndex(80, 342, 1)).toBe(0);
+    expect(reasoningSliderIndex(80, 342, 0)).toBe(0);
   });
-  it("keeps the fill edge at each thumb centre and extends only the Low lead-in", () => {
-    const width = 350;
+  it("keeps the fill edge at each thumb centre with symmetric stops", () => {
+    const width = 342;
     const count = 6;
     const centres = Array.from({ length: count }, (_, index) =>
       reasoningSliderFillWidth(index, width, count),
     );
-    expect(centres.map((centre) => centre - REASONING_RAIL_LEFT_EXTENSION)).toEqual([
-      21, 81, 141, 201, 261, 321,
-    ]);
+    expect(centres).toEqual([21, 81, 141, 201, 261, 321]);
     expect(centres.map((centre) => reasoningSliderIndex(centre, width, count))).toEqual([
       0, 1, 2, 3, 4, 5,
     ]);
-    expect(centres[0]! - REASONING_THUMB_DIAMETER / 2).toBe(8);
+    expect(centres[0]).toBe(REASONING_THUMB_DIAMETER / 2);
+    expect(centres.at(-1)).toBe(width - REASONING_THUMB_DIAMETER / 2);
     expect(reasoningSliderFillWidth(-1, width, count)).toBe(0);
   });
   it("translates only known levels and retains provider-defined labels", () => {
@@ -54,21 +52,12 @@ describe("reasoning slider touch snapping", () => {
 
 describe("reasoning rail highlight", () => {
   it("scales the sweep width and its endpoint to the local fill length", () => {
-    const fillWidths = [0, 2, 5].map((index) => reasoningSliderFillWidth(index, 350, 6));
+    const fillWidths = [0, 2, 5].map((index) => reasoningSliderFillWidth(index, 342, 6));
     expect(fillWidths.map(reasoningRailSweep)).toEqual([
-      { width: 16, start: -16, end: 29 },
-      { width: 82, start: -82, end: 149 },
-      { width: 181, start: -181, end: 329 },
+      { width: 12, start: -12, end: 21 },
+      { width: 78, start: -78, end: 141 },
+      { width: 177, start: -177, end: 321 },
     ]);
-  });
-
-  it("sweeps across the exposed Low fill instead of remaining under the thumb", () => {
-    const filledWidth = reasoningSliderFillWidth(0, 350, 6);
-    const sweep = reasoningRailSweep(filledWidth);
-    const peak = sweep.start + (sweep.end - sweep.start) * 0.3 + 0.46 * sweep.width;
-
-    expect(peak).toBeGreaterThan(0);
-    expect(peak).toBeLessThan(filledWidth - REASONING_THUMB_DIAMETER / 2);
   });
 
   it("sweeps at every selected stop when multiple levels are available", () => {

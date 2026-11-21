@@ -319,7 +319,6 @@ export function reasoningLevelLabel(id: string, fallback: string): string {
 }
 
 const REASONING_THUMB_SIZE = 42;
-const REASONING_RAIL_LEAD = 8;
 
 function EffortRows(props: {
   control: ColumnControl;
@@ -386,7 +385,6 @@ function EffortRows(props: {
           style={
             {
               "--reasoning-thumb-size": `${REASONING_THUMB_SIZE}px`,
-              "--reasoning-rail-lead": `${REASONING_RAIL_LEAD}px`,
               "--reasoning-fraction":
                 choices.length > 1 && index >= 0 ? index / (choices.length - 1) : 0,
             } as CSSProperties
@@ -425,11 +423,11 @@ function EffortRows(props: {
             onPointerUp={(event) => {
               if (index >= 0 || disabled) return;
               const rect = event.currentTarget.getBoundingClientRect();
-              const firstCenter = REASONING_RAIL_LEAD + REASONING_THUMB_SIZE / 2;
-              const travel = rect.width - REASONING_RAIL_LEAD - REASONING_THUMB_SIZE;
+              const thumbRadius = REASONING_THUMB_SIZE / 2;
+              const travel = rect.width - REASONING_THUMB_SIZE;
               const fraction = Math.max(
                 0,
-                Math.min(1, (event.clientX - rect.left - firstCenter) / Math.max(1, travel)),
+                Math.min(1, (event.clientX - rect.left - thumbRadius) / Math.max(1, travel)),
               );
               const next = choices[Math.round(fraction * (choices.length - 1))];
               if (next) traits.changeSelect(control.descriptor, next.id);

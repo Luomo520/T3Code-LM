@@ -1,9 +1,8 @@
-export const REASONING_RAIL_LEFT_EXTENSION = 8;
 export const REASONING_THUMB_DIAMETER = 42;
-const FIRST_STOP = REASONING_RAIL_LEFT_EXTENSION + REASONING_THUMB_DIAMETER / 2;
+const FIRST_STOP = REASONING_THUMB_DIAMETER / 2;
 
 function reasoningSliderTravel(width: number): number {
-  return Math.max(0, width - REASONING_RAIL_LEFT_EXTENSION - REASONING_THUMB_DIAMETER);
+  return Math.max(0, width - REASONING_THUMB_DIAMETER);
 }
 
 /** The thumb's centre travels between the same stops as the touch target. */
@@ -18,7 +17,7 @@ export function reasoningSliderFillWidth(index: number, width: number, count: nu
   return FIRST_STOP + (reasoningSliderTravel(width) * index) / Math.max(1, count - 1);
 }
 
-/** Sweep length follows the filled portion so a Low highlight crosses the exposed start. */
+/** Sweep length follows the filled portion. */
 export function reasoningRailSweep(filledWidth: number) {
   const width = Math.round(filledWidth * 0.55);
   return { width, start: -width, end: filledWidth };
