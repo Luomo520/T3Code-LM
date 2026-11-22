@@ -213,6 +213,7 @@ export function aggregateConversationUsage(input: {
       turnRequests.length > 0
         ? turnRequests.reduce((sum, request) => sum + totalTokens(request.totals), 0)
         : null;
+    // 请求明细和账本可能覆盖同一批调用，取两者较大值可避免重复计数。
     const knownTokens =
       requestTokens !== null || projectedTokens !== null
         ? Math.max(requestTokens ?? 0, projectedTokens ?? 0)
@@ -282,6 +283,7 @@ export function aggregateConversationUsage(input: {
     costPartial ||= run.costPartial;
     turns.push({
       runId: RunId.make(runId),
+      // 此字段是截至这一轮的会话累计量；本轮缺少记录时保留 null，以免沿用上一轮的数字。
       cumulativeTokens: run.tokens === null ? null : tokens,
       tokensPerSecond: run.speed.seconds > 0 ? run.speed.tokens / run.speed.seconds : null,
       estimatedTokensPerSecond:

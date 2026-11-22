@@ -45,6 +45,7 @@ function costSegments(amount: number | null, categories: UsageCategoryCost | nul
   const known = categories
     ? categories.input + categories.output + categories.cacheRead + categories.cacheWrite
     : 0;
+  // 供应商可能只报告总价，已知分项以外的余额归入“分类未知”。
   return SESSION_COST_CATEGORIES.flatMap((category) => {
     const cost =
       category === "unallocated" ? Math.max(0, amount - known) : (categories?.[category] ?? 0);
@@ -66,6 +67,7 @@ export function sessionUsageDisplay(
   const recentCostPartial = recent?.costUsd != null && recent.costPartial;
   const used = contextWindow?.usedTokens;
   const limit = contextWindow?.maxTokens;
+  // 上下文窗口可随压缩或模型切换而变化，因此占比只使用当前窗口的用量和上限。
   const contextPercentage =
     used != null &&
     Number.isFinite(used) &&
