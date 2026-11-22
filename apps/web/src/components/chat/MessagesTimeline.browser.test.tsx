@@ -2,7 +2,7 @@ import { injectHtmlRenderBootstrap } from "@t3tools/shared/htmlRender";
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { flushSync } from "react-dom";
 import { AudioPreview } from "../files/AudioPreview";
-import { cdp, page, userEvent } from "vite-plus/test/browser";
+import { cdp, commands, page, userEvent } from "vite-plus/test/browser";
 import {
   ComposerContextId,
   EnvironmentId,
@@ -458,6 +458,43 @@ describe("MessagesTimeline work rows", () => {
 });
 
 describe("MessagesTimeline messages", () => {
+  it.each(["message", "assistant-meta"] as const)(
+    "reveals reply actions and usage together in a %s row",
+    async (kind) => {
+      const runId = RunId.make("hover-run");
+      const entries = [message("Hover this reply", { role: "assistant", runId })];
+      if (kind === "assistant-meta") {
+        entries.push({
+          id: "created-thread",
+          kind: "event",
+          createdAt: CREATED_AT,
+          projectedItem: v2Item("thread_created", { runId, targetThreadId: "new-thread" }),
+        });
+      }
+      await using screen = await renderTimeline(entries, { replyUsageTurns: [] });
+      const tokens = screen.container.querySelector('[data-reply-usage="tokens"]')!;
+      const speed = screen.container.querySelector('[data-reply-usage="speed"]')!;
+      const row = tokens.closest("[data-timeline-row-kind]")!;
+      expect(row.getAttribute("data-timeline-row-kind")).toBe(kind);
+      const button = row.querySelector<HTMLButtonElement>('button[aria-label="Copy message"]')!;
+      const visibility = () =>
+        [button, tokens, speed].map((element) =>
+          element.checkVisibility({ opacityProperty: true }),
+        );
+      await vi.waitFor(() => expect(visibility()).toEqual([false, false, false]));
+      await (
+        kind === "message"
+          ? page.getByText("Hover this reply", { exact: true })
+          : page.elementLocator(row)
+      ).hover();
+      await vi.waitFor(() => expect(visibility()).toEqual([true, true, true]));
+      await commands.resetPointer();
+      await vi.waitFor(() => expect(visibility()).toEqual([false, false, false]));
+      button.focus();
+      await vi.waitFor(() => expect(visibility()).toEqual([true, true, true]));
+    },
+  );
+
   it("keeps each historical reply's usage attached to its run as data arrives", async () => {
     const props = baseProps();
     const firstRunId = RunId.make("first-run");

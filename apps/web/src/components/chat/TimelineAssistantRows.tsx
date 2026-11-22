@@ -190,7 +190,6 @@ export function AssistantMetaTimelineRow({
         message={row.message}
         showCopyButton={row.showAssistantCopyButton}
         copyStreaming={row.assistantCopyStreaming}
-        alwaysVisible
       />
     </div>
   );
@@ -202,14 +201,12 @@ function AssistantMessageMeta({
   message,
   showCopyButton,
   copyStreaming,
-  alwaysVisible = false,
 }: {
   className?: string;
   projectedItem?: Extract<TimelineRow, { kind: "message" }>["projectedItem"];
   message: ChatMessage;
   showCopyButton: boolean;
   copyStreaming: boolean;
-  alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
   const usage =
@@ -218,24 +215,16 @@ function AssistantMessageMeta({
           message.runId === null ? undefined : ctx.replyUsageByRun.get(message.runId),
         )
       : null;
-  const revealOnInteraction = !alwaysVisible
-    ? "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100"
-    : undefined;
 
   return (
     <div
       className={cn(
         "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs tabular-nums transition-opacity duration-200",
-        !usage && revealOnInteraction,
+        "opacity-0 group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100 pointer-coarse:opacity-100 motion-reduce:transition-none",
         className,
       )}
     >
-      <div
-        className={cn(
-          "flex items-center gap-2 transition-opacity duration-200",
-          usage && revealOnInteraction,
-        )}
-      >
+      <div className="flex items-center gap-2">
         {projectedItem && projectedItem.item.status !== "completed" ? (
           <AssistantStatusBadge status={projectedItem.item.status} />
         ) : null}
