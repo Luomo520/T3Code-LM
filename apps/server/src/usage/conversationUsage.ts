@@ -48,7 +48,12 @@ export const readConversationUsageRows = Effect.fn("ConversationUsage.readRows")
 const decodeUsage = Schema.decodeUnknownOption(Schema.fromJsonString(TurnTokenUsage));
 const emptyCosts = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 const emptySpeed = () => ({ tokens: 0, seconds: 0 });
-const EMPTY_RATE_TABLE: RateTable = new Map();
+type EstimateSource = ConversationUsage["estimateSource"];
+
+function combineSource(current: EstimateSource, next: EstimateSource): EstimateSource {
+  if (next === undefined || current === next) return current;
+  return current === undefined ? next : "mixed";
+}
 const turnKey = (instance: string, session: string, turn: string) =>
   JSON.stringify([instance, session, turn]);
 
@@ -84,6 +89,7 @@ interface RunUsage {
   tokens: number | null;
   cost: number | null;
   costPartial: boolean;
+  estimateSource: EstimateSource;
   cacheInput: number;
   cacheRead: number;
   cacheIncomplete: boolean;
@@ -111,7 +117,8 @@ export function aggregateConversationUsage(input: {
   readonly refs: readonly HeaderTurnRef[];
   readonly claudeSessions?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly recordsByInstance: ReadonlyMap<string, readonly HeaderRequest[]>;
-  readonly rates: RateTable;
+  readonly catalog: RateTable;
+  readonly overrides: RateTable;
   readonly textTiming: (request: HeaderRequest) => HeaderStreamSample | null;
   readonly requestTiming: (request: HeaderRequest) => HeaderStreamSample | null;
 }): ConversationUsage {
@@ -180,6 +187,7 @@ export function aggregateConversationUsage(input: {
       tokens: null,
       cost: null,
       costPartial: false,
+      estimateSource: undefined,
       cacheInput: 0,
       cacheRead: 0,
       cacheIncomplete: false,
@@ -252,18 +260,19 @@ export function aggregateConversationUsage(input: {
         "headerCacheKnown" in request
           ? request.headerCacheKnown === true
           : ledger?.cachedInputTokens !== undefined;
-      const configuredRate = input.rates.get(request.model.trim());
-      const splitUnknown =
-        !cacheKnown &&
-        request.totals.uncachedInputTokens > 0 &&
-        configuredRate !== undefined &&
-        configuredRate.inputCostPerToken !== configuredRate.cacheReadCostPerToken;
-      const priced = priceUsage(EMPTY_RATE_TABLE, request, splitUnknown ? undefined : input.rates, {
+      const priced = priceUsage(input.catalog, request, input.overrides, {
         preferProviderReport: true,
+        unknownCacheSplit: !cacheKnown,
       });
       if (priced.costSource === "unpriced") {
         run.costPartial = true;
         continue;
+      }
+      if (priced.costSource === "modelPriced") {
+        run.estimateSource = combineSource(
+          run.estimateSource,
+          input.overrides.has(request.model.trim()) ? "custom" : "catalog",
+        );
       }
       run.cost = (run.cost ?? 0) + priced.costUsd;
       if (priced.categoryCostUsd !== null) {
@@ -276,11 +285,13 @@ export function aggregateConversationUsage(input: {
   let tokens: number | null = null;
   let costUsd: number | null = null;
   let costPartial = false;
+  let estimateSource: EstimateSource;
   const turns: ConversationUsageTurn[] = [];
   for (const [runId, run] of runs) {
     if (run.tokens !== null) tokens = (tokens ?? 0) + run.tokens;
     if (run.cost !== null) costUsd = (costUsd ?? 0) + run.cost;
     costPartial ||= run.costPartial;
+    estimateSource = combineSource(estimateSource, run.estimateSource);
     turns.push({
       runId: RunId.make(runId),
       turnTokens: run.tokens,
@@ -293,9 +304,16 @@ export function aggregateConversationUsage(input: {
           : null,
       costUsd: run.cost,
       costPartial: run.costPartial,
+      ...(run.estimateSource ? { estimateSource: run.estimateSource } : {}),
       cacheRate: run.cacheIncomplete || run.cacheInput <= 0 ? null : run.cacheRead / run.cacheInput,
     });
   }
 
-  return { costUsd, costPartial, categoryCostUsd: hasCategories ? categories : null, turns };
+  return {
+    costUsd,
+    costPartial,
+    ...(estimateSource ? { estimateSource } : {}),
+    categoryCostUsd: hasCategories ? categories : null,
+    turns,
+  };
 }

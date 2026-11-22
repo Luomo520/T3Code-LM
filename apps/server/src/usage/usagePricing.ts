@@ -356,7 +356,7 @@ export function priceUsage(
   table: RateTable,
   record: PricedRecord,
   overrides?: RateTable,
-  options?: { readonly preferProviderReport: boolean },
+  options?: { readonly preferProviderReport: boolean; readonly unknownCacheSplit?: boolean },
 ): PricedUsage {
   const { model, totals, reportedCostUsd } = record;
   const override = overrides?.get(model.trim());
@@ -377,7 +377,15 @@ export function priceUsage(
     return reported === null ? unsplit(0, "unpriced") : unsplit(reported, "providerReported");
   }
 
-  const listCost = costByCategory(record, ratesAt(rate, record.speed, totals));
+  const applied = ratesAt(rate, record.speed, totals);
+  if (
+    options?.unknownCacheSplit &&
+    totals.uncachedInputTokens > 0 &&
+    applied.inputCostPerToken !== applied.cacheReadCostPerToken
+  ) {
+    return reported === null ? unsplit(0, "unpriced") : unsplit(reported, "providerReported");
+  }
+  const listCost = costByCategory(record, applied);
   const listCostUsd = sumCategories(listCost);
   if (reported !== null && listCostUsd <= 0) return unsplit(reported, "providerReported");
   const premiumUsd =

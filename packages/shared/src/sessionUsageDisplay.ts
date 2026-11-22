@@ -1,10 +1,5 @@
 import type { ConversationUsage, UsageCategoryCost } from "@t3tools/contracts";
-import {
-  formatCount,
-  formatPercent,
-  formatUsd,
-  UNKNOWN_CONVERSATION_USAGE,
-} from "./usageFormat.ts";
+import { formatPercent, formatUsd, UNKNOWN_CONVERSATION_USAGE } from "./usageFormat.ts";
 
 const SESSION_COST_CATEGORIES = [
   "input",
@@ -37,17 +32,36 @@ export const SESSION_COST_COLORS = {
   unallocated: { light: "#6b7280", dark: "#9ca3af" },
 } satisfies Record<SessionCostCategory, { light: string; dark: string }>;
 
+const contextCount = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
 const preciseUsd = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 6,
 });
 
-function costLabel(amount: number | null | undefined, partial: boolean): string {
+const estimateNotes = {
+  catalog: "含按模型公开参考价估算的费用（LiteLLM 价格表）。",
+  custom: "含按自定义模型单价估算的费用。",
+  mixed: "含按公开参考价（LiteLLM）和自定义单价估算的费用。",
+};
+
+function costLabel(
+  amount: number | null | undefined,
+  partial: boolean,
+  source?: ConversationUsage["estimateSource"],
+): string {
   if (amount == null) return UNKNOWN_CONVERSATION_USAGE;
-  if (amount > 0 && amount < 0.000001) return partial ? "<$0.000001*" : "<$0.000001";
-  const formatted = amount > 0 && amount < 0.01 ? preciseUsd.format(amount) : formatUsd(amount);
-  return partial ? `${formatted}*` : formatted;
+  const formatted =
+    amount > 0 && amount < 0.000001
+      ? "<$0.000001"
+      : amount > 0 && amount < 0.01
+        ? preciseUsd.format(amount)
+        : formatUsd(amount);
+  return `${source ? "估 " : ""}${formatted}${partial ? "*" : ""}`;
 }
 
 function costSegments(amount: number | null, categories: UsageCategoryCost | null) {
@@ -82,17 +96,16 @@ export function sessionUsageDisplay(
   const contextShare = used !== null && limit !== null ? used / limit : null;
   const contextPercentageLabel =
     contextShare === null ? UNKNOWN_CONVERSATION_USAGE : formatPercent(contextShare);
-  const usedLabel = used === null ? UNKNOWN_CONVERSATION_USAGE : formatCount(used);
-  const limitLabel = limit === null ? UNKNOWN_CONVERSATION_USAGE : formatCount(limit);
+  const usedLabel = used === null ? UNKNOWN_CONVERSATION_USAGE : contextCount.format(used);
+  const limitLabel = limit === null ? UNKNOWN_CONVERSATION_USAGE : contextCount.format(limit);
   const contextTokensLabel =
-    used === null && limit === null
-      ? UNKNOWN_CONVERSATION_USAGE
-      : `${usedLabel} / ${limitLabel} Token`;
+    used === null && limit === null ? UNKNOWN_CONVERSATION_USAGE : `${usedLabel} / ${limitLabel}`;
   return {
-    costLabel: costLabel(usage?.costUsd, costPartial),
+    costLabel: costLabel(usage?.costUsd, costPartial, usage?.estimateSource),
+    estimateNote: usage?.estimateSource ? estimateNotes[usage.estimateSource] : null,
     costPartial,
     categorySegments: costSegments(usage?.costUsd ?? null, usage?.categoryCostUsd ?? null),
-    recentCostLabel: costLabel(recent?.costUsd, recentCostPartial),
+    recentCostLabel: costLabel(recent?.costUsd, recentCostPartial, recent?.estimateSource),
     recentCostPartial,
     cacheRateLabel:
       recent?.cacheRate == null ? UNKNOWN_CONVERSATION_USAGE : formatPercent(recent.cacheRate),

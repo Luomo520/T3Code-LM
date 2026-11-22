@@ -38,7 +38,7 @@ it("previews on hover, pins by click, and closes when clicked outside", async ()
   await userEvent.hover(trigger);
   await expect.element(popup.getByText("仅含已知费用", { exact: false })).toBeVisible();
   await expect.element(popup.getByText("34.0%", { exact: true })).toBeVisible();
-  await expect.element(popup.getByText("29,000 / 100,000 Token", { exact: true })).toBeVisible();
+  await expect.element(popup.getByText("29K / 100K", { exact: true })).toBeVisible();
   await expect.element(popup.getByText("分类未知", { exact: true })).toBeVisible();
   await userEvent.hover(outside);
   await expect.element(popup).not.toBeInTheDocument();
@@ -61,5 +61,5 @@ it("keeps a known context count when the limit and costs are unavailable", async
     />,
   );
   await screen.getByRole("button", { name: /会话费用 —，上下文占用未知/ }).click();
-  await expect.element(page.getByText("10 / — Token", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("10 / —", { exact: true })).toBeVisible();
 });

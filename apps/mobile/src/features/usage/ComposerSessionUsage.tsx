@@ -120,11 +120,11 @@ export function ComposerSessionUsage({ usage, contextWindow }: ComposerSessionUs
                 ) : null}
                 <UsageDetailRow label="最近一轮费用" value={display.recentCostLabel} />
                 <UsageDetailRow label="最近一轮缓存命中率" value={display.cacheRateLabel} />
-                <UsageDetailRow
-                  label="上下文（已用 / 有效上限）"
-                  value={display.contextTokensLabel}
-                />
+                <UsageDetailRow label="上下文" value={display.contextTokensLabel} />
                 <UsageDetailRow label="上下文占用" value={display.contextPercentageLabel} />
+                {display.estimateNote ? (
+                  <Text className="text-xs text-foreground-muted">{display.estimateNote}</Text>
+                ) : null}
                 {display.costPartial || display.recentCostPartial ? (
                   <Text className="text-xs text-foreground-muted">* {knownCostNote}</Text>
                 ) : null}

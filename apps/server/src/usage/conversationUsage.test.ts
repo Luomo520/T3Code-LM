@@ -68,7 +68,8 @@ it("keeps each run's own count and speed through a provider switch and a gap in 
       ["provider-a", [request(ref(first), { reportedCostUsd: 0.005 })]],
       ["provider-b", [request(ref(second)), request(ref(other))]],
     ]),
-    rates,
+    catalog: new Map(),
+    overrides: rates,
     textTiming: (sample) =>
       sample.headerTurnId === "turn-a" ? { tokens: 10, seconds: 1 } : { tokens: 20, seconds: 1 },
     requestTiming: () => null,
@@ -135,7 +136,8 @@ it("retains known provider fees and exposes missing prices and per-run timing in
       ],
       ["codex", [request(ref(second), { model: "unpriced-model", headerCacheKnown: false })]],
     ]),
-    rates,
+    catalog: new Map(),
+    overrides: rates,
     textTiming: () => null,
     requestTiming: () => ({ tokens: 20, seconds: 2 }),
   });
@@ -159,4 +161,43 @@ it("retains known provider fees and exposes missing prices and per-run timing in
       cacheRate: null,
     },
   ]);
+});
+
+it("uses catalog estimates, preserves reported zero, and prefers configured prices for the exact model", () => {
+  const models = ["relay", "custom", "relay", "unknown", "relay"];
+  const rows = models.map((_, i) => row(String(i), "codex", "session", String(i)));
+  const refs = rows.map((r) => ref(r));
+  const records = refs.map((r, i) =>
+    request(r, {
+      model: models[i]!,
+      reportedCostUsd: i === 2 ? 0 : null,
+      headerCacheKnown: i !== 4,
+    }),
+  );
+  const result = aggregateConversationUsage({
+    threadId: "thread",
+    rows,
+    refs,
+    recordsByInstance: new Map([["codex", records]]),
+    catalog: new Map([
+      ["relay", rates.get("relay")!],
+      ["custom", rates.get("relay")!],
+    ]),
+    overrides: createOverrideRateTable({
+      custom: { inputCostPerMillionTokens: 1, outputCostPerMillionTokens: 1 },
+    }),
+    textTiming: () => null,
+    requestTiming: () => null,
+  });
+  expect(result.turns.map((turn) => turn.estimateSource)).toEqual([
+    "catalog",
+    "custom",
+    undefined,
+    undefined,
+    undefined,
+  ]);
+  expect(result.turns[0]?.costUsd).toBeCloseTo(0.00033, 10);
+  expect(result.turns[1]?.costUsd).toBeCloseTo(0.00017, 10);
+  expect(result.turns.slice(2).map((turn) => turn.costUsd)).toEqual([0, null, null]);
+  expect(result).toMatchObject({ estimateSource: "mixed", costPartial: true });
 });

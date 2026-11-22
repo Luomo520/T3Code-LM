@@ -238,6 +238,8 @@ export const HeaderUsageCounters = Schema.Struct({
 });
 export type HeaderUsageCounters = typeof HeaderUsageCounters.Type;
 
+const CostEstimateSource = Schema.Literals(["catalog", "custom", "mixed"]);
+
 export const ConversationUsageTurn = Schema.Struct({
   runId: RunId,
   // 旧后端只提供累计值。保留字段缺失，客户端据此显示本轮用量未知。
@@ -247,6 +249,7 @@ export const ConversationUsageTurn = Schema.Struct({
   estimatedTokensPerSecond: Schema.NullOr(Schema.Finite),
   costUsd: Schema.NullOr(Schema.Finite),
   costPartial: Schema.Boolean,
+  estimateSource: Schema.optionalKey(CostEstimateSource),
   cacheRate: Schema.NullOr(Schema.Finite),
 });
 export type ConversationUsageTurn = typeof ConversationUsageTurn.Type;
@@ -254,6 +257,7 @@ export type ConversationUsageTurn = typeof ConversationUsageTurn.Type;
 export const ConversationUsage = Schema.Struct({
   costUsd: Schema.NullOr(Schema.Finite),
   costPartial: Schema.Boolean,
+  estimateSource: Schema.optionalKey(CostEstimateSource),
   categoryCostUsd: Schema.NullOr(UsageCategoryCost),
   turns: Schema.Array(ConversationUsageTurn),
 });

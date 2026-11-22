@@ -84,7 +84,7 @@ it("opens the details, reflects live changes in both views and closes with Andro
   expect(details.textContent).toContain("缓存读取$0.10");
   expect(details.textContent).toContain("分类未知$0.30");
   expect(details.textContent).toContain("仅含已知费用");
-  expect(details.textContent).toContain("20 / 100 Token");
+  expect(details.textContent).toContain("20 / 100");
   expect(details.textContent).toContain("上下文占用20.0%");
 
   render({ usage: null, contextWindow: null });

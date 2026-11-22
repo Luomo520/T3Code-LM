@@ -53,7 +53,7 @@ it.effect(
             }),
             id === "a" ? 1 : 0,
           );
-        const read = yield* makeHeaderUsage().pipe(
+        const read = yield* makeHeaderUsage(Effect.succeed(new Map())).pipe(
           Effect.provide(
             ServerSettings.layerTest({
               providerInstances: {
@@ -197,7 +197,7 @@ it.effect(
         }),
       );
       try {
-        const read = yield* makeHeaderUsage().pipe(
+        const read = yield* makeHeaderUsage(Effect.succeed(new Map())).pipe(
           Effect.provide(
             ServerSettings.layerTest({
               usagePriceOverrides: {

@@ -1516,7 +1516,7 @@ export const layerWsRpc = (
               Effect.orElseSucceed(() => null),
             );
       const usage = yield* UsageService.UsageService;
-      const readHeaderUsage = headerUsage ?? (yield* makeHeaderUsage());
+      const readHeaderUsage = headerUsage ?? (yield* makeHeaderUsage(usage.readModelRates));
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -3581,7 +3581,8 @@ export const WS_RPC_SERVER_OPTIONS = {
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
-    const headerUsage = yield* makeHeaderUsage();
+    const usage = yield* UsageService.UsageService;
+    const headerUsage = yield* makeHeaderUsage(usage.readModelRates);
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const npmRelease = yield* NpmRelease.NpmRelease;

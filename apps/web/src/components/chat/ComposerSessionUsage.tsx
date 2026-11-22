@@ -111,11 +111,14 @@ export function ComposerSessionUsage({
           </dl>
         ) : null}
         <dl className="mt-2 grid grid-cols-[1fr_auto] gap-x-2 gap-y-1.5 border-t border-border pt-2 text-xs tabular-nums">
-          <dt>上下文（已用 / 有效上限）</dt>
+          <dt>上下文</dt>
           <dd className="text-end">{display.contextTokensLabel}</dd>
           <dt>上下文占用</dt>
           <dd className="text-end">{display.contextPercentageLabel}</dd>
         </dl>
+        {display.estimateNote ? (
+          <p className="text-xs text-muted-foreground">{display.estimateNote}</p>
+        ) : null}
         {display.costPartial || display.recentCostPartial ? (
           <p className="mt-1 text-xs text-muted-foreground">* 仅含已知费用</p>
         ) : null}

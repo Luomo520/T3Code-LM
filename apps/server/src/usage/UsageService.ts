@@ -150,6 +150,7 @@ export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
+    readonly readModelRates: Effect.Effect<RateTable>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
   }
 >()("t3/usage/UsageService") {}
@@ -311,6 +312,22 @@ export const make = Effect.gen(function* () {
   });
 
   const ensureRates = (force: boolean) => ratesLock.withPermit(loadRates(force));
+
+  const ratesScope = yield* Effect.scope;
+  let nextHeaderRateCheck = 0;
+  const readModelRates = Effect.gen(function* () {
+    yield* loadSavedRates;
+    const now = yield* Clock.currentTimeMillis;
+    // 顶部用量会轮询。先返回本地价格，缺失或过期时由后台复用同一刷新锁。
+    if (
+      now >= nextHeaderRateCheck &&
+      (ratesFetchedAtMs === null || now - ratesFetchedAtMs >= RATES_TTL_MS)
+    ) {
+      nextHeaderRateCheck = now + RATES_REFRESH_FLOOR_MS;
+      yield* ensureRates(false).pipe(Effect.forkIn(ratesScope));
+    }
+    return rates;
+  });
 
   const refreshRates = ensureRates(true).pipe(
     Effect.map(pricing),
@@ -1190,7 +1207,7 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  return { readSummary, readModelRates, refreshRates, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

@@ -137,7 +137,7 @@ it("keeps usage readable in a narrow composer and sends a cross-provider follow-
     expect(amountElement.scrollWidth).toBeLessThanOrEqual(amountElement.clientWidth);
   });
   await sessionUsage.click();
-  await expect.element(page.getByText("250,000 / 1,000,000 Token")).toBeVisible();
+  await expect.element(page.getByText("250K / 1M")).toBeVisible();
   await userEvent.keyboard("{Escape}");
   await model.click();
   await page.getByRole("button", { name: "搜索模型" }).click();

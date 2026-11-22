@@ -25,7 +25,7 @@ import { ServerConfig } from "../config.ts";
 import { HeaderUsageTimingHistory } from "./headerUsageTimingHistory.ts";
 import { headerUsageTiming } from "./headerUsageTiming.ts";
 import { aggregateConversationUsage, readConversationUsageRows } from "./conversationUsage.ts";
-import { createOverrideRateTable } from "./usagePricing.ts";
+import { createOverrideRateTable, type RateTable } from "./usagePricing.ts";
 import {
   aggregateHeaderRequests,
   HeaderTranscriptCache,
@@ -44,7 +44,9 @@ const encodeDirectories = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(Schema.NullOr(Schema.String))),
 );
 
-export const makeHeaderUsage = Effect.fn("makeHeaderUsage")(function* () {
+export const makeHeaderUsage = Effect.fn("makeHeaderUsage")(function* (
+  readModelRates: Effect.Effect<RateTable>,
+) {
   const sql = yield* SqlClient.SqlClient;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const hostEnvironment = yield* HostProcess.Environment;
@@ -382,7 +384,8 @@ export const makeHeaderUsage = Effect.fn("makeHeaderUsage")(function* () {
         refs,
         claudeSessions,
         recordsByInstance: sessionRecords,
-        rates: createOverrideRateTable(settings.usagePriceOverrides),
+        catalog: yield* readModelRates,
+        overrides: createOverrideRateTable(settings.usagePriceOverrides),
         textTiming: (request) => headerUsageTiming.lookup(request) ?? timingHistory.lookup(request),
         requestTiming: (request) =>
           headerUsageRequestTiming.lookup(request) ?? timingHistory.lookupRequest(request),
