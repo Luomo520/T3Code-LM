@@ -111,6 +111,9 @@ vi.mock("./components/SettingsEnvironmentFilterHeader", () => ({
   }),
 }));
 vi.mock("./components/DatabaseStorageNotice", () => ({ DatabaseStorageNotice: () => null }));
+// 更新与重启各自依赖原生应用或连接状态，本套件测试共享设置的保存。
+vi.mock("./components/AndroidAppUpdateSection", () => ({ AndroidAppUpdateSection: () => null }));
+vi.mock("./components/BackendRestartSection", () => ({ BackendRestartSection: () => null }));
 vi.mock("./components/SettingsSection", () => ({ SettingsSection: Children }));
 vi.mock("../../components/ui/ListChoiceRow", () => ({ ListChoiceRow: () => null }));
 vi.mock("./components/SettingsSwitchRow", () => ({
@@ -159,7 +162,6 @@ vi.mock("./settings-environment-filter", () => ({
 }));
 
 import {
-  SettingsEnvironmentSourceControlRouteScreen,
   SettingsEnvironmentMaintenanceRouteScreen,
   SettingsThreadsRouteScreen,
   SettingsWorktreesRouteScreen,

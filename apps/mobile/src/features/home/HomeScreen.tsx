@@ -466,11 +466,13 @@ export function HomeScreen(props: HomeScreenProps) {
   // tap or by shortcut.
   const selectThread = (thread: EnvironmentThreadShell) => {
     const key = threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id });
-    const messageId = contentOnlyThreadKeys.has(key)
-      ? threadSearchMatchByKey.get(key)?.messageId
-      : undefined;
-    if (messageId) {
-      requestThreadMessageJump(scopedThreadKey(thread.environmentId, thread.id), messageId);
+    const match = contentOnlyThreadKeys.has(key) ? threadSearchMatchByKey.get(key) : undefined;
+    if (match) {
+      requestThreadMessageJump(
+        scopedThreadKey(thread.environmentId, thread.id),
+        match,
+        threadSearch.query,
+      );
     }
     onSelectThread(thread);
   };

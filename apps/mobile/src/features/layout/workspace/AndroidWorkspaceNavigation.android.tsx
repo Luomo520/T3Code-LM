@@ -32,7 +32,11 @@ import { useAdaptiveWorkspaceLayout } from "../adaptive-workspace-context";
 import { useAndroidWorkspaceRoot } from "./AndroidWorkspaceTabsProvider";
 import { useNavigationTabOrder, useHiddenNavigationTabs } from "./navigation-tabs";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
-import { FLOATING_TABS, floatingDockMetrics } from "./floating-workspace-tabs";
+import {
+  FLOATING_TABS,
+  floatingDockBottomClearance,
+  floatingDockMetrics,
+} from "./floating-workspace-tabs";
 
 // Matches RAIL_WIDTH in the native rail.
 export const ANDROID_WORKSPACE_RAIL_WIDTH = 72;
@@ -73,7 +77,6 @@ export function AndroidWorkspaceNavigation(props: {
   readonly rail?: boolean;
   readonly floating?: boolean;
   readonly glassScope?: DockGlassScope;
-  readonly fillWidth?: boolean;
   readonly paneWidth?: number;
   readonly onSelect?: () => void;
   /** The rail needs the whole workspace while it widens over the list. */
@@ -109,11 +112,9 @@ export function AndroidWorkspaceNavigation(props: {
     rail ? 5 : 4,
   );
   const showCompose = selectedTab === "threads" && connectionState.hasConnections;
-  const barWidth =
-    (props.paneWidth ?? window.width) -
-    Math.max(insets.left, FLOATING_TABS.edge) -
-    Math.max(insets.right, FLOATING_TABS.edge);
-  const metrics = floatingDockMetrics(tabs.length, fabSize, barWidth, showCompose);
+  const horizontalInset = Math.max(insets.left, insets.right, FLOATING_TABS.edge);
+  const barWidth = (props.paneWidth ?? window.width) - 2 * horizontalInset;
+  const metrics = floatingDockMetrics(tabs.length, fabSize, barWidth);
   if (!rail && keyboardVisible) return null;
   const selectTab = (tab: AndroidWorkspaceNavigationTab) => {
     Keyboard.dismiss();
@@ -135,8 +136,10 @@ export function AndroidWorkspaceNavigation(props: {
         tabs={tabs}
         selectedTab={selectedTab}
         onSelect={selectTab}
-        width={metrics.pill}
+        width={metrics.width}
         height={metrics.height}
+        diameter={metrics.diameter}
+        composeSize={fabSize}
         scale={scale}
         selectedColor={selectedColor}
         unselectedColor={unselectedColor}
@@ -191,16 +194,17 @@ export function AndroidWorkspaceNavigation(props: {
 
 export function FloatingWorkspaceTabs(props: {
   readonly glassScope?: DockGlassScope;
-  readonly fillWidth?: boolean;
   readonly onNewThread: () => void;
   readonly paneWidth?: number;
   readonly onSelect?: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { fabSize } = useAndroidControlSizing();
   const { themeVariables: colors } = useAppearancePreferences();
   const keyboardVisible = useSoftKeyboardShowing();
   useFocusEffect(refreshSoftKeyboardShowing);
   if (keyboardVisible) return null;
+  const horizontalInset = Math.max(insets.left, insets.right, FLOATING_TABS.edge);
   return (
     <View
       pointerEvents="box-none"
@@ -209,9 +213,8 @@ export function FloatingWorkspaceTabs(props: {
         left: 0,
         right: 0,
         bottom: 0,
-        paddingTop: 20,
-        paddingLeft: Math.max(insets.left, FLOATING_TABS.edge),
-        paddingRight: Math.max(insets.right, FLOATING_TABS.edge),
+        paddingTop: FLOATING_TABS.edge,
+        paddingHorizontal: horizontalInset,
         paddingBottom: insets.bottom + FLOATING_TABS.bottom,
         alignItems: "center",
       }}
@@ -220,11 +223,11 @@ export function FloatingWorkspaceTabs(props: {
         pointerEvents="none"
         style={{
           position: "absolute",
-          top: 0,
+          height: floatingDockBottomClearance(insets.bottom, fabSize),
           left: 0,
           right: 0,
           bottom: 0,
-          experimental_backgroundImage: `linear-gradient(to bottom, ${themeColorWithAlpha(colors["--color-screen"], 0)} 0%, ${colors["--color-screen"]} 34%, ${colors["--color-screen"]} 100%)`,
+          experimental_backgroundImage: `linear-gradient(to bottom, ${themeColorWithAlpha(colors["--color-screen"], 0)} 0%, ${colors["--color-screen"]} 26%, ${colors["--color-screen"]} 100%)`,
         }}
       />
       <AndroidWorkspaceNavigation {...props} floating />

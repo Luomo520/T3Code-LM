@@ -3,7 +3,7 @@ import { useLegendListRef } from "~/hooks/useLegendListRef";
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { ChevronRightIcon } from "lucide-react";
-import { type ReactNode, type RefObject, useState } from "react";
+import { type ReactNode, type RefObject, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { shortcutLabelForCommand } from "../keybindings";
@@ -11,6 +11,7 @@ import {
   type CommandPaletteActionItem,
   type CommandPaletteGroup,
   type CommandPaletteRow,
+  type CommandPaletteReturnContext,
   type CommandPaletteSubmenuItem,
 } from "./CommandPalette.logic";
 import {
@@ -97,6 +98,7 @@ export function scrollCommandPaletteRowIntoView(
 interface CommandPaletteVirtualizedResultsProps extends Omit<CommandPaletteResultsProps, "groups"> {
   rows: ReadonlyArray<CommandPaletteRow>;
   listRef: RefObject<LegendListRef | null>;
+  restorePosition?: CommandPaletteReturnContext["position"];
 }
 
 /** Pass flat items with virtualized to Command, scroll highlights via listRef, and handle Enter for
@@ -114,6 +116,17 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
     );
   };
   const scrollRef = useLegendListRef(listRef, updateScrollFade);
+  const restored = useRef(false);
+  const { restorePosition } = props;
+  const canRestore =
+    restorePosition !== undefined &&
+    props.rows.some((row) => row.kind === "item" && row.item.value === restorePosition.itemValue);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 等命中结果加载后恢复虚拟列表的位置。
+  useLayoutEffect(() => {
+    if (!canRestore || !restorePosition || restored.current || !listRef.current) return;
+    restored.current = true;
+    void listRef.current.scrollToOffset({ offset: restorePosition.scrollOffset, animated: false });
+  }, [canRestore, listRef, restorePosition]);
 
   if (props.rows.length === 0) {
     return <CommandPaletteEmptyState {...props} />;

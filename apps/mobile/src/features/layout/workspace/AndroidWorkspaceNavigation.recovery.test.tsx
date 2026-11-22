@@ -5,6 +5,9 @@ const state = vi.hoisted(() => ({
   selected: "threads",
   settingsOpen: false,
   keyboard: false,
+  width: 390,
+  leftInset: 0,
+  rightInset: 0,
   connected: true,
   dispatch: vi.fn(),
   navigate: vi.fn(),
@@ -22,7 +25,8 @@ vi.mock("expo", () => ({
 vi.mock("react-native", () => ({
   Keyboard: { dismiss: state.dismiss },
   processColor: () => 1,
-  useWindowDimensions: () => ({ width: 390, height: 844 }),
+  useWindowDimensions: () => ({ width: state.width, height: 844 }),
+  StyleSheet: { absoluteFill: {} },
   View: (props: { children?: ReactNode; style?: unknown; accessibilityRole?: string }) => (
     <div role={props.accessibilityRole} data-style={JSON.stringify(props.style)}>
       {props.children}
@@ -33,15 +37,29 @@ vi.mock("react-native", () => ({
     onPress?: () => void;
     accessibilityLabel?: string;
     accessibilityState?: { selected?: boolean };
+    readonly style?: unknown;
+    readonly android_ripple?: unknown;
   }) => (
     <button
       aria-label={props.accessibilityLabel}
       aria-selected={props.accessibilityState?.selected}
       onClick={props.onPress}
+      data-style={JSON.stringify(
+        typeof props.style === "function" ? props.style({ pressed: false }) : props.style,
+      )}
+      data-native-ripple={JSON.stringify(props.android_ripple)}
     >
       {props.children}
     </button>
   ),
+}));
+vi.mock("react-native-reanimated", () => ({
+  default: { View: ({ children }: { readonly children?: ReactNode }) => <div>{children}</div> },
+  Easing: { out: () => undefined, cubic: () => undefined },
+  useAnimatedStyle: () => ({}),
+  useReducedMotion: () => false,
+  useSharedValue: () => ({ get: () => 0, set: () => undefined }),
+  withTiming: () => undefined,
 }));
 vi.mock("@tabler/icons-react-native/IconMessages", () => ({ default: () => <svg /> }));
 vi.mock("@tabler/icons-react-native/IconGitPullRequest", () => ({ default: () => <svg /> }));
@@ -59,7 +77,12 @@ vi.mock("@react-navigation/native", () => ({
   },
 }));
 vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => ({ top: 24, left: 0, right: 0, bottom: 24 }),
+  useSafeAreaInsets: () => ({
+    top: 24,
+    left: state.leftInset,
+    right: state.rightInset,
+    bottom: 24,
+  }),
 }));
 vi.mock("../../../components/ui/DockGlass", () => ({
   DockGlassBackdrop: () => <div data-material="true" />,
@@ -131,6 +154,9 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.selected = "threads";
   state.keyboard = false;
+  state.width = 390;
+  state.leftInset = 0;
+  state.rightInset = 0;
   state.connected = true;
   state.settingsOpen = false;
   state.focusEffects.clear();
@@ -149,19 +175,32 @@ it("boots directly into the saved floating style without mounting native Compose
   );
   expect(container.querySelector('[data-material="true"]')).not.toBeNull();
 });
-it("centers a single compact navigation and compose group above the bottom safe area", async () => {
+it("keeps the dock centered on a narrow screen with an asymmetric inset and the compose button above it", async () => {
+  state.width = 320;
+  state.leftInset = 32;
   const { container } = await mount(<FloatingWorkspaceTabs onNewThread={() => {}} />);
   const style = JSON.parse(container.firstElementChild!.getAttribute("data-style")!);
   expect(style.alignItems).toBe("center");
   expect(style.left).toBe(0);
   expect(style.right).toBe(0);
-  expect(style.paddingLeft).toBe(16);
-  expect(style.paddingRight).toBe(16);
+  expect(style.paddingHorizontal).toBe(32);
   expect(style.paddingBottom).toBe(36);
   expect(container.innerHTML).toContain("linear-gradient(to bottom");
-  const pill = JSON.parse(container.querySelector('[role="tablist"]')!.getAttribute("data-style")!);
-  expect(pill.width).toBe(232);
-  expect(pill.height).toBe(56);
+  const dock = container.querySelector('[role="tablist"]')!;
+  const compose = container.querySelector('[aria-label="新会话"]')!;
+  const pill = JSON.parse(dock.getAttribute("data-style")!);
+  expect(pill.width).toBe(256);
+  expect(pill.height).toBe(60);
+  expect(compose.nextElementSibling).toBe(dock);
+  expect(JSON.parse(compose.getAttribute("data-style")!).alignSelf).toBe("flex-end");
+  for (const tab of dock.querySelectorAll("button")) {
+    expect(tab.hasAttribute("data-native-ripple")).toBe(false);
+    const circle = JSON.parse(tab.getAttribute("data-style")!);
+    expect(circle.width).toBeGreaterThanOrEqual(48);
+    expect(circle.height).toBe(circle.width);
+    expect(circle.borderRadius).toBe(circle.width / 2);
+    expect(circle.overflow).toBe("hidden");
+  }
 });
 it("preserves tab selection and root navigation reset", async () => {
   const onSelect = vi.fn();
@@ -183,7 +222,7 @@ it("preserves tab selection and root navigation reset", async () => {
 it("opens settings without changing the selected workspace tab", async () => {
   state.settingsOpen = true;
   const { container } = await mount(<FloatingWorkspaceTabs onNewThread={() => {}} />);
-  expect(container.querySelector('[aria-label="新建任务"]')).toBeNull();
+  expect(container.querySelector('[aria-label="新会话"]')).toBeNull();
   expect(container.querySelectorAll("button")).toHaveLength(4);
   expect(container.querySelector('[aria-label="设置"]')?.getAttribute("aria-selected")).toBe(
     "true",
@@ -223,11 +262,11 @@ it("retains the existing native Material navigation path", async () => {
   expect(page.container.querySelectorAll("button")).toHaveLength(5);
 });
 
-it("invokes the integrated compose action once and dismisses the keyboard", async () => {
+it("invokes the compose action once and dismisses the keyboard", async () => {
   const compose = vi.fn();
   const { container } = await mount(<FloatingWorkspaceTabs onNewThread={compose} />);
   await act(async () =>
-    (container.querySelector('[aria-label="新建任务"]') as HTMLButtonElement).click(),
+    (container.querySelector('[aria-label="新会话"]') as HTMLButtonElement).click(),
   );
   expect(compose).toHaveBeenCalledOnce();
   expect(state.dismiss).toHaveBeenCalledOnce();
@@ -236,9 +275,9 @@ it.each(["usage", "pullRequests"])("has no empty compose slot on %s", async (tab
   state.selected = tab;
   const { container } = await mount(<FloatingWorkspaceTabs onNewThread={() => {}} />);
   expect(container.querySelectorAll("button")).toHaveLength(4);
-  expect(container.querySelector('[aria-label="新建任务"]')).toBeNull();
+  expect(container.querySelector('[aria-label="新会话"]')).toBeNull();
   const pill = JSON.parse(container.querySelector('[role="tablist"]')!.getAttribute("data-style")!);
-  expect(pill.width).toBe(232);
+  expect(pill.width).toBe(268);
 });
 it("hides compose when no environment is connected", async () => {
   state.connected = false;

@@ -56,6 +56,10 @@ import {
   threadOutboxRevision,
   updateThreadOutboxMessage,
 } from "./thread-outbox";
+import {
+  setThreadMessageDeliveryState,
+  threadMessageDeliveryStates,
+} from "./thread-message-delivery";
 import { removeThreadOutboxMessage } from "./thread-outbox-removal";
 import {
   isQueuedThreadCreationSendable,
@@ -605,6 +609,7 @@ const deliveryInputsAtom = Atom.make((get) => {
   return {
     dispatchingQueuedMessageId: get(dispatchingQueuedMessageIdAtom),
     editingQueuedMessageIds: get(editingQueuedMessageIdsAtom),
+    deliveryStates: get(threadMessageDeliveryStates),
     queuedMessagesByThreadKey: get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
     shellStatuses: get(threadOutboxShellStatusesAtom),
     threads: get(environmentThreadShells.threadShellsAtom),
@@ -786,6 +791,58 @@ export function createThreadOutboxDelivery(): {
     return true;
   };
 
+  async function markDispatched(message: QueuedThreadMessage, revision: number) {
+    if (message.deliveryUnconfirmed) return { message, revision };
+    const marked = { ...message, deliveryUnconfirmed: true };
+    if (!(await updateThreadOutboxMessage(marked, revision))) return null;
+    return { message: marked, revision: revision + 1 };
+  }
+
+  async function confirmMessageDelivery(message: QueuedThreadMessage): Promise<boolean> {
+    const revision = threadOutboxRevision(message.messageId);
+    const hasEcho = () =>
+      appAtomRegistry.get(threadMessageDeliveryStates)[message.messageId] === "accepted";
+    const result = hasEcho()
+      ? AsyncResult.success({ status: "accepted" as const })
+      : await runDeliveryCommand(threadEnvironment.getMessageDelivery, {
+          environmentId: message.environmentId,
+          input: {
+            threadId: message.threadId,
+            commandId: message.commandId,
+            messageId: message.messageId,
+          },
+        });
+    if (!hasEcho() && AsyncResult.isFailure(result)) return false;
+    const receipt = AsyncResult.isSuccess(result) ? result.value : undefined;
+    if (!hasEcho() && receipt?.status === "missing") {
+      setThreadMessageDeliveryState(message.messageId, "resend");
+      return true;
+    }
+    if (!hasEcho() && receipt?.status === "legacy-unconfirmed") {
+      setThreadMessageDeliveryState(message.messageId, "legacy-unconfirmed");
+      return true;
+    }
+    if (!hasEcho() && receipt?.status === "rejected") {
+      return restoreQueuedMessage(message, receipt.message ?? "发送失败");
+    }
+    if (message.creation) {
+      recordPendingThreadCreationOutcome({ kind: "delivered", message });
+    } else {
+      acknowledgedExistingThreadMessageIds.add(message.messageId);
+    }
+    const outcome = await completeQueuedMessageDelivery(
+      message,
+      revision,
+      receipt && "sequence" in receipt && typeof receipt.sequence === "number"
+        ? receipt.sequence
+        : undefined,
+    );
+    if (outcome === "removed") {
+      acknowledgedExistingThreadMessageIds.delete(message.messageId);
+    }
+    return outcome === "removed";
+  }
+
   const sendQueuedMessage = async (
     queuedMessage: QueuedThreadMessage,
     thread: EnvironmentThreadShell,
@@ -929,6 +986,8 @@ export function createThreadOutboxDelivery(): {
       if (!isQueuedMessagePayloadCurrent(persistedMessage, deliveryRevision)) return true;
     }
     if (!hasAccess()) return true;
+    const dispatched = await markDispatched(persistedMessage, deliveryRevision);
+    if (dispatched === null || !hasAccess()) return true;
     const deliveryResult = await runDeliveryCommand(threadEnvironment.startTurn, {
       environmentId: queuedMessage.environmentId,
       input: {
@@ -961,19 +1020,27 @@ export function createThreadOutboxDelivery(): {
         resendAfterSocketLoss: false,
       },
     });
-    if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return true;
+    if (AsyncResult.isFailure(deliveryResult)) {
+      if (
+        appAtomRegistry.get(threadMessageDeliveryStates)[queuedMessage.messageId] === "accepted"
+      ) {
+        return confirmMessageDelivery(dispatched.message);
+      }
+      if (!hasAccess()) return true;
+    }
     const failure = reportCommandFailure(queuedMessage, deliveryResult, "start-turn");
     if (failure?.action === "retry") {
+      setThreadMessageDeliveryState(queuedMessage.messageId, undefined);
       return false;
     }
     if (failure?.action === "restore") {
-      return restoreQueuedMessage(persistedMessage, failure.message);
+      return restoreQueuedMessage(dispatched.message, failure.message);
     }
-    acknowledgedExistingThreadMessageIds.add(persistedMessage.messageId);
+    acknowledgedExistingThreadMessageIds.add(dispatched.message.messageId);
     const delivered =
       (await completeQueuedMessageDelivery(
-        persistedMessage,
-        deliveryRevision,
+        dispatched.message,
+        dispatched.revision,
         deliveredSequence(deliveryResult),
       )) === "removed";
     if (delivered) {
@@ -1103,7 +1170,12 @@ export function createThreadOutboxDelivery(): {
         startFromOrigin: false,
       };
     }
-    launchedCreations.set(persistedMessage.messageId, { revision: deliveryRevision, workspace });
+    const dispatched = await markDispatched(persistedMessage, deliveryRevision);
+    if (dispatched === null || !hasAccess()) return true;
+    launchedCreations.set(dispatched.message.messageId, {
+      revision: dispatched.revision,
+      workspace,
+    });
     const deliveryResult = await runDeliveryCommand(threadEnvironment.startTurn, {
       environmentId: queuedMessage.environmentId,
       input: buildProjectThreadStartTurnInput({
@@ -1133,25 +1205,33 @@ export function createThreadOutboxDelivery(): {
         worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
       }),
     });
-    if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return true;
+    if (AsyncResult.isFailure(deliveryResult)) {
+      if (
+        appAtomRegistry.get(threadMessageDeliveryStates)[queuedMessage.messageId] === "accepted"
+      ) {
+        return confirmMessageDelivery(dispatched.message);
+      }
+      if (!hasAccess()) return true;
+    }
     const failure = reportCommandFailure(queuedMessage, deliveryResult, "start-turn");
     if (failure?.action === "retry") {
+      setThreadMessageDeliveryState(queuedMessage.messageId, undefined);
       return false;
     }
     if (failure?.action === "restore") {
-      return restoreQueuedMessage(persistedMessage, failure.message);
+      return restoreQueuedMessage(dispatched.message, failure.message);
     }
-    recordPendingThreadCreationOutcome({ kind: "delivered", message: persistedMessage });
+    recordPendingThreadCreationOutcome({ kind: "delivered", message: dispatched.message });
     const outcome = await completeQueuedMessageDelivery(
-      persistedMessage,
-      deliveryRevision,
+      dispatched.message,
+      dispatched.revision,
       deliveredSequence(deliveryResult),
     );
     if (outcome === "edited") {
       if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
         return true;
       }
-      return recoverEditedCreationAfterDelivery(persistedMessage);
+      return recoverEditedCreationAfterDelivery(dispatched.message);
     }
     return outcome === "removed";
   };
@@ -1184,6 +1264,7 @@ export function createThreadOutboxDelivery(): {
     const {
       dispatchingQueuedMessageId,
       editingQueuedMessageIds,
+      deliveryStates,
       queuedMessagesByThreadKey,
       shellStatuses,
       threads,
@@ -1204,6 +1285,11 @@ export function createThreadOutboxDelivery(): {
     for (const messageId of acknowledgedExistingThreadMessageIds) {
       if (!queuedMessageIds.has(messageId)) {
         acknowledgedExistingThreadMessageIds.delete(messageId);
+      }
+    }
+    for (const messageId of Object.keys(deliveryStates)) {
+      if (!queuedMessageIds.has(MessageId.make(messageId))) {
+        setThreadMessageDeliveryState(MessageId.make(messageId), undefined);
       }
     }
     for (const messageId of launchedCreations.keys()) {
@@ -1265,6 +1351,23 @@ export function createThreadOutboxDelivery(): {
       const environment = connectedEnvironments.find(
         (candidate) => candidate.environmentId === nextQueuedMessage.environmentId,
       );
+      const deliveryStatus = deliveryStates[messageId];
+      if (nextQueuedMessage.deliveryUnconfirmed && deliveryStatus !== "retrying") {
+        if (deliveryStatus !== "accepted" && environment?.connectionState !== "connected") {
+          setThreadMessageDeliveryState(messageId, undefined);
+          continue;
+        }
+        if (
+          deliveryStatus !== "accepted" &&
+          (deliveryStatus !== undefined ||
+            !operableEnvironments.has(nextQueuedMessage.environmentId))
+        ) {
+          continue;
+        }
+        beginDispatchingQueuedMessage(messageId);
+        settle(messageId, confirmMessageDelivery(nextQueuedMessage));
+        return;
+      }
       const shellStatus = shellStatuses.get(nextQueuedMessage.environmentId) ?? "empty";
       const serverConfig = serverConfigs.get(nextQueuedMessage.environmentId);
       let familyRead: ThreadFamilyRead | undefined;
@@ -1450,6 +1553,7 @@ export function createThreadOutboxDelivery(): {
       for (const retry of retries.values()) clearTimeout(retry.timer);
       retries.clear();
       appAtomRegistry.set(retryingQueuedMessageIdsAtom, {});
+      appAtomRegistry.set(threadMessageDeliveryStates, {});
       for (const blocked of blockedRecoveries.values()) blocked.unsubscribe();
       blockedRecoveries.clear();
       for (const release of familyMounts.values()) release();

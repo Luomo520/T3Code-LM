@@ -240,6 +240,8 @@ export type HeaderUsageCounters = typeof HeaderUsageCounters.Type;
 
 export const ConversationUsageTurn = Schema.Struct({
   runId: RunId,
+  // 旧后端只提供累计值。保留字段缺失，客户端据此显示本轮用量未知。
+  turnTokens: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
   cumulativeTokens: Schema.NullOr(NonNegativeInt),
   tokensPerSecond: Schema.NullOr(Schema.Finite),
   estimatedTokensPerSecond: Schema.NullOr(Schema.Finite),

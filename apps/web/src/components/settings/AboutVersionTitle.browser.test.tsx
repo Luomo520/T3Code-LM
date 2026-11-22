@@ -6,16 +6,20 @@ import { APP_VERSION } from "../../branding";
 import { AnchoredToastProvider } from "../ui/toast";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 
-it("copies the version without a notification", async () => {
-  await using screen = await render(
-    <AnchoredToastProvider>
-      <AboutVersionTitle />
-    </AnchoredToastProvider>,
-  );
-  using write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+it.each([undefined, "9.8.7-6"])(
+  "copies the running version %s without a notification",
+  async (nativeVersion) => {
+    await using screen = await render(
+      <AnchoredToastProvider>
+        <AboutVersionTitle {...(nativeVersion === undefined ? {} : { version: nativeVersion })} />
+      </AnchoredToastProvider>,
+    );
+    using write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    const version = nativeVersion ?? APP_VERSION;
 
-  await screen.getByRole("button", { name: `Copy version ${APP_VERSION}` }).click();
+    await screen.getByRole("button", { name: `Copy version ${version}` }).click();
 
-  expect(write).toHaveBeenCalledWith(APP_VERSION);
-  await expect.element(page.getByText(/^Copied!?$/)).not.toBeInTheDocument();
-});
+    expect(write).toHaveBeenCalledWith(version);
+    await expect.element(page.getByText(/^Copied!?$/)).not.toBeInTheDocument();
+  },
+);

@@ -699,6 +699,19 @@ describe("composerDraftStore context persistence", () => {
 
   beforeEach(resetComposerDraftStore);
 
+  it("retains a caret per draft even when two prompts have identical text", () => {
+    const otherRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("other-caret"));
+    const store = useComposerDraftStore.getState();
+    const prompt = "same prompt";
+    store.setPrompt(threadRef, prompt, 3);
+    store.setPrompt(otherRef, prompt, 8);
+    const drafts = () => useComposerDraftStore.getState().draftsByThreadKey;
+    expect(drafts()[scopedThreadKey(threadRef)]?.caret?.offset).toBe(3);
+    expect(drafts()[scopedThreadKey(otherRef)]?.caret?.offset).toBe(8);
+    store.setPrompt(threadRef, "replaced");
+    expect(drafts()[scopedThreadKey(threadRef)]?.caret).toBeUndefined();
+  });
+
   it("preserves snapshots and inline positions through repeated persistence and hydration", () => {
     const terminal = {
       ...makeTerminalContext({ id: "checkout-console" }),

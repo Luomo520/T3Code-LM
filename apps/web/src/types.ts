@@ -73,6 +73,11 @@ export function isVideoAttachment(attachment: ChatFileAttachment): boolean {
 }
 
 export interface ChatMessage {
+  readonly delivery?:
+    | { readonly status: "confirming"; readonly action?: () => void }
+    | { readonly status: "resend"; readonly action: () => void }
+    | { readonly status: "legacy-unconfirmed"; readonly action: () => void }
+    | { readonly status: "accepted" };
   readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
   readonly id: MessageId;
   readonly role: "user" | "assistant" | "system";

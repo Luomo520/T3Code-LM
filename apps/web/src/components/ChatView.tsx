@@ -32,6 +32,11 @@ import { useTimelineRewind } from "./chat/useTimelineRewind";
 import { useThreadLifecycle } from "./chat/useThreadLifecycle";
 import { useRightPanelActions } from "./chat/useRightPanelActions";
 import { type TerminalLaunchContext, useChatTerminalActions } from "./chat/useChatTerminalActions";
+import {
+  forgetEchoedComposerMessages,
+  mergeUnconfirmedComposerMessages,
+  useUnconfirmedComposerMessages,
+} from "./chat/unconfirmedComposerMessages";
 import { useComposerSend } from "./chat/useComposerSend";
 import { useComposerResume } from "./chat/useComposerResume";
 import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
@@ -129,6 +134,7 @@ import {
   use,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -688,7 +694,22 @@ export default function ChatView(props: ChatViewProps) {
     optimisticBlobPreviews.handOff(optimisticState);
     setHeldOptimisticUserMessages(optimisticState);
   }
-  const optimisticUserMessages = optimisticState.messages;
+  const unconfirmedComposerMessages = useUnconfirmedComposerMessages(routeThreadKey);
+  const optimisticUserMessages = mergeUnconfirmedComposerMessages(
+    optimisticState.messages,
+    unconfirmedComposerMessages,
+    serverAcknowledgedUserMessageIds,
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 服务端消息出现后释放断线缓存中的同一条消息
+  useEffect(() => {
+    if (
+      unconfirmedComposerMessages.some((message) =>
+        serverAcknowledgedUserMessageIds.has(message.id),
+      )
+    ) {
+      forgetEchoedComposerMessages(routeThreadKey, serverAcknowledgedUserMessageIds);
+    }
+  }, [routeThreadKey, serverAcknowledgedUserMessageIds, unconfirmedComposerMessages]);
   const setOptimisticUserMessages = (action: SetStateAction<ChatMessage[]>) =>
     setHeldOptimisticUserMessages((state) =>
       applyOptimisticUserMessagesAction(state, threadId, action),
@@ -1572,13 +1593,18 @@ export default function ChatView(props: ChatViewProps) {
     blobPreviews: optimisticBlobPreviews,
     setOptimisticUserMessages: setHeldOptimisticUserMessages,
   });
-  const anchoredTimelineMessages = feedbackSubmissions.flatMap((submission) =>
-    submission.status === "interrupted"
-      ? []
-      : [
-          { ...codexFeedbackMessage(submission), runId: null },
-          { ...codexFeedbackMessage(submission, "assistant"), runId: null },
-        ],
+  // oxlint-disable-next-line t3code/no-manual-memo -- 增量投影依赖此引用稳定，ChatView 可能未被编译器缓存。
+  const anchoredTimelineMessages = useMemo(
+    () =>
+      feedbackSubmissions.flatMap((submission) =>
+        submission.status === "interrupted"
+          ? []
+          : [
+              { ...codexFeedbackMessage(submission), runId: null },
+              { ...codexFeedbackMessage(submission, "assistant"), runId: null },
+            ],
+      ),
+    [feedbackSubmissions],
   );
   const timelineEntriesInput = {
     optimisticMessages: optimisticUserMessages,
@@ -1595,7 +1621,11 @@ export default function ChatView(props: ChatViewProps) {
   // The structure has no assistant or reasoning text, so those rows stay out of
   // ChatView's own entries (anchoring, rewind, prompt history); ThreadTimeline
   // renders every row from the live turn items.
-  const serverTimelineRows = serverVisibleTurnItems.filter(isCompleteTurnItemRow);
+  // oxlint-disable-next-line t3code/no-manual-memo -- 增量投影按引用比较输入，重复渲染时沿用同一批服务端条目。
+  const serverTimelineRows = useMemo(
+    () => serverVisibleTurnItems.filter(isCompleteTurnItemRow),
+    [serverVisibleTurnItems],
+  );
   const hasStreamedTimelineRows =
     isServerThread && serverTimelineRows.length !== serverVisibleTurnItems.length;
   const serverTimelineEntries = useIncrementalTimelineEntries(activeThreadKey, {
@@ -2175,12 +2205,13 @@ export default function ChatView(props: ChatViewProps) {
     setTimelineAnchor,
   });
 
+  const focusDraftAtCaret = useStableCallback(() => composerRef.current?.focus());
   useFocusComposerOnThreadOpen(
     activeThreadRef,
     workspaceLayoutElement,
     !embedded,
     terminalUiState.terminalOpen,
-    isCoarsePointer ? ignoreComposerFocus : focusComposerStable,
+    isCoarsePointer ? ignoreComposerFocus : focusDraftAtCaret,
   );
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window focus listener that refocuses the composer after the window regains focus on a fine pointer
@@ -2206,7 +2237,7 @@ export default function ChatView(props: ChatViewProps) {
             !isInSideChatPane(document.activeElement) &&
             shouldRefocusComposerOnWindowFocus(document.activeElement)
           ) {
-            focusComposerStable();
+            focusDraftAtCaret();
           }
         });
       });
@@ -2219,7 +2250,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeThread?.id,
     embedded,
-    focusComposerStable,
+    focusDraftAtCaret,
     isCoarsePointer,
     isMobileViewport,
     terminalUiState.terminalOpen,

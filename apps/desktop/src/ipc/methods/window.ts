@@ -74,7 +74,12 @@ export const getAppBranding = DesktopIpc.makeSyncIpcMethod({
   result: Schema.NullOr(DesktopAppBrandingSchema),
   handler: Effect.fn("desktop.ipc.window.getAppBranding")(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    return environment.branding;
+    const deviceName = (yield* HostProcess.Hostname).trim();
+    return {
+      ...environment.branding,
+      ...(deviceName ? { deviceName } : {}),
+      appVersion: environment.appVersion,
+    };
   }),
 });
 

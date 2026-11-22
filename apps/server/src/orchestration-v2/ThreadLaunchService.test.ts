@@ -2255,8 +2255,15 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
     assert.deepEqual(yield* fs.readFile(storedPath), new Uint8Array([1, 2, 3, 4]));
     assert.deepEqual(yield* fs.readFile(pendingPath), new Uint8Array([1, 2, 3, 4]));
 
+    const delivery = yield* threads.getMessageDelivery({
+      threadId: input.threadId,
+      commandId: input.commandId,
+    });
+    assert.equal(delivery.status, "accepted");
     const replayed = yield* ThreadMessageIntake.launchThread(input);
     assert.equal(replayed.projection.messages[0]?.id, stored.id);
+    assert.lengthOf(replayed.projection.messages, 1);
+    assert.lengthOf(replayed.projection.runs, 1);
     assert.deepEqual(replayed.projection.messages[0]?.attachments, stored.attachments);
     const claimedFiles = Effect.map(fs.readDirectory(config.attachmentsDir), (files) =>
       files.filter((name) => !name.startsWith("pending-")),
@@ -2932,6 +2939,16 @@ it.effect("replays an accepted send after the project disables the instance", ()
 
     const retry = yield* ThreadMessageIntake.sendToThread(sendInput);
     assert.equal(retry.message.id, first.message.id);
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const projection = yield* threads.getThreadProjection(created.threadId);
+    assert.lengthOf(
+      projection.messages.filter((message) => message.id === first.message.id),
+      1,
+    );
+    assert.lengthOf(
+      projection.runs.filter((run) => run.userMessageId === first.message.id),
+      1,
+    );
 
     const fresh = yield* ThreadMessageIntake.sendToThread({
       ...sendInput,

@@ -96,8 +96,9 @@ function useConnectedThreadSearch(query: string) {
 export function useCommandPaletteThreadItems(input: {
   readonly activeThread: { readonly environmentId: EnvironmentId; readonly id: ThreadId } | null;
   readonly threadSearchQuery: string;
+  readonly rememberResults: (itemValue: string) => () => void;
 }) {
-  const { activeThread, threadSearchQuery } = input;
+  const { activeThread, threadSearchQuery, rememberResults } = input;
   const navigate = useNavigate();
   const threads = useVisibleThreadShells();
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
@@ -218,10 +219,11 @@ export function useCommandPaletteThreadItems(input: {
         },
         // Opens the thread with find on the word at the matched message, so it is in view.
         run: async () => {
+          const onBackToResults = rememberResults(item.value);
           await item.run();
           openThreadFindOnQuery(
             scopedThreadKey(scopeThreadRef(match.environmentId, match.threadId)),
-            findForMessageMatch(match, messageSearch.query),
+            { ...findForMessageMatch(match, messageSearch.query), onBackToResults },
           );
         },
       },

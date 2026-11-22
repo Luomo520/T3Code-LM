@@ -302,12 +302,13 @@ const MAX_LOST_TRANSPORT_RESENDS = 2;
 // alone would leave the send pending forever.
 const MESSAGE_DISPATCH_TIMEOUT = "60 seconds";
 
-const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(function* (
-  command: Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
-  resendAfterSocketLoss: boolean,
-) {
+const messageDispatchTimeout = Effect.fn("EnvironmentCommands.messageDispatchTimeout")(function* <
+  A,
+  E,
+  R,
+>(effect: Effect.Effect<A, E, R>) {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-  const attempt = dispatch(command).pipe(
+  return yield* effect.pipe(
     Effect.timeoutOrElse({
       duration: MESSAGE_DISPATCH_TIMEOUT,
       orElse: () =>
@@ -319,6 +320,14 @@ const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(functio
         ),
     }),
   );
+});
+
+const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(function* (
+  command: Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
+  resendAfterSocketLoss: boolean,
+) {
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const attempt = messageDispatchTimeout(dispatch(command));
   if (!resendAfterSocketLoss) return yield* attempt;
   for (let resends = 0; ; resends += 1) {
     const attemptSession = yield* SubscriptionRef.get(supervisor.session);
@@ -780,25 +789,27 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
-    return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
-      commandId,
-      creationSource: input.creationSource ?? "web",
-      threadId: input.threadId,
-      ...(bootstrap === undefined ? { reuseExistingThread: true } : {}),
-      projectId: thread.projectId,
-      title: input.titleSeed ?? thread.title,
-      generateTitle: input.titleSeed !== undefined,
-      modelSelection: input.modelSelection ?? thread.modelSelection,
-      runtimeMode: input.runtimeMode,
-      interactionMode: input.interactionMode,
-      workspaceStrategy,
-      initialMessage: {
-        messageId: input.message.messageId,
-        text: input.message.text,
-        ...(context ? { context } : {}),
-        attachments,
-      },
-    });
+    return yield* messageDispatchTimeout(
+      request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+        commandId,
+        creationSource: input.creationSource ?? "web",
+        threadId: input.threadId,
+        ...(bootstrap === undefined ? { reuseExistingThread: true } : {}),
+        projectId: thread.projectId,
+        title: input.titleSeed ?? thread.title,
+        generateTitle: input.titleSeed !== undefined,
+        modelSelection: input.modelSelection ?? thread.modelSelection,
+        runtimeMode: input.runtimeMode,
+        interactionMode: input.interactionMode,
+        workspaceStrategy,
+        initialMessage: {
+          messageId: input.message.messageId,
+          text: input.message.text,
+          ...(context ? { context } : {}),
+          attachments,
+        },
+      }),
+    );
   }
 
   const requestedMode = input.dispatchMode ?? "auto";

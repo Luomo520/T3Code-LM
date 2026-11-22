@@ -1052,6 +1052,24 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         ) : null}
       </div>
       <UserMessageProjectedStatus row={row} />
+      {row.message.delivery?.status === "confirming" ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span role="status">确认中</span>
+          {row.message.delivery.action ? (
+            <InlineButton onClick={row.message.delivery.action}>重新确认</InlineButton>
+          ) : null}
+        </div>
+      ) : row.message.delivery?.status === "legacy-unconfirmed" ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span role="status">旧版服务端无法确认投递</span>
+          <InlineButton onClick={row.message.delivery.action}>重新确认</InlineButton>
+        </div>
+      ) : row.message.delivery?.status === "resend" ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span role="status">尚未收到</span>
+          <InlineButton onClick={row.message.delivery.action}>重发</InlineButton>
+        </div>
+      ) : null}
       {!folded || expanded ? (
         <div
           className={cn(

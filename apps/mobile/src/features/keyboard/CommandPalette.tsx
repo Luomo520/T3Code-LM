@@ -82,6 +82,7 @@ const PALETTE_COMMANDS: ReadonlyArray<HardwareKeyboardCommand> = [
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
 ];
 const ROW_HEIGHT = 50;
+const MESSAGE_RESULT_ROW_HEIGHT = 68;
 // The "In messages" label above the first message match; server results always come last.
 const SECTION_LABEL_HEIGHT = 26;
 
@@ -130,7 +131,7 @@ function PaletteRow(props: {
           ? "mx-2 flex-row items-center gap-3 rounded-xl bg-thread-selected px-3"
           : "mx-2 flex-row items-center gap-3 rounded-xl px-3"
       }
-      style={{ height: ROW_HEIGHT }}
+      style={{ height: props.searchMatch ? MESSAGE_RESULT_ROW_HEIGHT : ROW_HEIGHT }}
     >
       <View className="w-7 items-center">
         {props.item.project ? (
@@ -214,11 +215,19 @@ function PaletteRow(props: {
   );
 }
 
+export interface CommandPaletteSearchPosition {
+  readonly query: string;
+  readonly selectedKey: string;
+  readonly scrollOffset: number;
+}
+
 /** Mounted only while open, so the app root does not subscribe to the full thread catalog. */
 export function CommandPalette(props: {
   readonly pathname: string;
   readonly onClose: () => void;
   readonly onCommand: (command: HardwareKeyboardCommand) => void;
+  readonly initialSearch: CommandPaletteSearchPosition | null;
+  readonly onReturnToSearch: (search: CommandPaletteSearchPosition) => void;
 }) {
   const navigation = useNavigation();
   const selectTab = useSelectWorkspaceTab();
@@ -232,10 +241,13 @@ export function CommandPalette(props: {
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const environments = useWorkspaceEnvironments();
   const { savedConnectionsById } = useSavedRemoteConnections();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(props.initialSearch?.query ?? "");
+  const restoreSearch = useRef(props.initialSearch);
   // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
   const [now] = useState(() => Date.now());
-  const [selection, setSelection] = useState<string | null>(null);
+  const [selection, setSelection] = useState<string | null>(
+    props.initialSearch?.selectedKey ?? null,
+  );
   const [visible, setVisible] = useState(true);
   const pendingAction = useRef<(() => void) | null>(null);
   const closing = useRef(false);
@@ -510,7 +522,10 @@ export function CommandPalette(props: {
       : null;
     return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
   }, [activeThread, items, messageMatchKeys, now, query]);
-  const runResult = (item: CommandPaletteResult) => {
+  const runResult = (
+    item: CommandPaletteResult,
+    returnSearch: CommandPaletteSearchPosition | null,
+  ) => {
     const thread =
       item.kind === "thread" && query.trim() && !query.startsWith(">")
         ? threads.find(
@@ -518,8 +533,15 @@ export function CommandPalette(props: {
           )
         : undefined;
     // A message result opens the thread at that message.
-    const messageId = item.fromMessages ? contentMatchByKey.get(item.key)?.messageId : undefined;
-    if (messageId) requestThreadMessageJump(item.key, messageId);
+    const match = item.fromMessages ? contentMatchByKey.get(item.key) : undefined;
+    if (match) {
+      requestThreadMessageJump(
+        item.key,
+        match,
+        search.query,
+        returnSearch ? () => props.onReturnToSearch(returnSearch) : undefined,
+      );
+    }
     // A pick sends its open with the query, always, so the server records it;
     // the thread screen then skips its own open. The open thread is no pick.
     if (thread && !item.secondary) claimThreadOpen(thread.environmentId, thread.id, Date.now());
@@ -547,6 +569,13 @@ export function CommandPalette(props: {
   // selected row under a kept selection, so no single handler owns the scroll.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the native list to the highlighted row, which key presses and live result updates both move
   useEffect(() => {
+    const savedSearch = restoreSearch.current;
+    if (savedSearch) {
+      if (selectedKey !== savedSearch.selectedKey || !listRef.current) return;
+      restoreSearch.current = null;
+      void listRef.current.scrollToOffset({ offset: savedSearch.scrollOffset, animated: false });
+      return;
+    }
     if (selectedIndex === 0) {
       // Centering before the list measures its height scrolls half the first row out of view.
       listRef.current?.scrollToOffset({ offset: 0, animated: false });
@@ -583,6 +612,13 @@ export function CommandPalette(props: {
     dismissFallback.current = setTimeout(handleDismissed, 400);
   }
 
+  function pickResult(item: CommandPaletteResult) {
+    const returnSearch = item.fromMessages
+      ? { query, selectedKey: item.key, scrollOffset: listRef.current?.getState().scroll ?? 0 }
+      : null;
+    close(() => runResult(item, returnSearch));
+  }
+
   function onCommand(command: HardwareKeyboardCommand) {
     if (command === "commandPalette" || command === "paletteDismiss") {
       close();
@@ -593,7 +629,7 @@ export function CommandPalette(props: {
       );
     } else {
       const item = results[threadJumpIndex(command)];
-      if (item) close(() => runResult(item));
+      if (item) pickResult(item);
     }
   }
 
@@ -648,6 +684,7 @@ export function CommandPalette(props: {
                     className="h-[34px] flex-1 px-0 py-0 font-sans text-base text-foreground"
                     value={query}
                     onChangeText={(value) => {
+                      restoreSearch.current = null;
                       setQuery(value);
                       setSelection(null);
                       // The follow effect stays idle when the top row and its key are unchanged,
@@ -658,7 +695,7 @@ export function CommandPalette(props: {
                     submitBehavior="submit"
                     onSubmitEditing={() => {
                       const item = results[selectedIndex];
-                      if (item) close(() => runResult(item));
+                      if (item) pickResult(item);
                     }}
                   />
                 </View>
@@ -675,8 +712,9 @@ export function CommandPalette(props: {
                 }}
                 keyboardShouldPersistTaps="handled"
                 keyExtractor={(item) => item.key}
-                getFixedItemSize={(_, index) =>
-                  ROW_HEIGHT + (index === firstMessageIndex ? SECTION_LABEL_HEIGHT : 0)
+                getFixedItemSize={(item, index) =>
+                  (item.fromMessages ? MESSAGE_RESULT_ROW_HEIGHT : ROW_HEIGHT) +
+                  (index === firstMessageIndex ? SECTION_LABEL_HEIGHT : 0)
                 }
                 recycleItems
                 contentContainerStyle={{ paddingBottom: 8 }}
@@ -709,7 +747,7 @@ export function CommandPalette(props: {
                       selected={item.key === selectedKey}
                       searchMatch={item.fromMessages ? contentMatchByKey.get(item.key) : undefined}
                       searchQuery={search.query}
-                      onSelect={() => close(() => runResult(item))}
+                      onSelect={() => pickResult(item)}
                     />
                   </>
                 )}

@@ -463,6 +463,8 @@ const contextInsertionHandlers = new Map<string, ComposerContextInsertionHandler
 
 export interface ComposerThreadDraftState {
   prompt: string;
+  // 光标仅在本次打开的草稿间恢复；文本被其他入口替换后，旧偏移失效。
+  caret?: { prompt: string; offset: number };
   images: ComposerImageAttachment[];
   files: ComposerFileAttachment[];
   nonPersistedImageIds: string[];
@@ -634,7 +636,7 @@ interface ComposerDraftStoreState {
   finalizePromotedDraftThread: (threadRef: ComposerThreadTarget) => void;
   clearDraftThread: (threadRef: ComposerThreadTarget) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
-  setPrompt: (threadRef: ComposerThreadTarget, prompt: string) => void;
+  setPrompt: (threadRef: ComposerThreadTarget, prompt: string, cursor?: number) => void;
   setTerminalContexts: (threadRef: ComposerThreadTarget, contexts: TerminalContextDraft[]) => void;
   setModelSelection: (
     threadRef: ComposerThreadTarget,
@@ -697,6 +699,7 @@ interface ComposerDraftStoreState {
     prompt: string,
     context: TerminalContextDraft,
     index: number,
+    cursor?: number,
   ) => boolean;
   addTerminalContexts: (
     threadRef: ComposerThreadTarget,
@@ -3199,7 +3202,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        setPrompt: (threadRef, prompt) => {
+        setPrompt: (threadRef, prompt, cursor) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0) {
             return;
@@ -3209,7 +3212,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const nextDraft: ComposerThreadDraftState = {
               ...existing,
               prompt,
+              ...(cursor !== undefined ? { caret: { prompt, offset: cursor } } : {}),
             };
+            if (nextDraft.caret?.prompt !== prompt) delete nextDraft.caret;
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
               delete nextDraftsByThreadKey[threadKey];
@@ -3774,7 +3779,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           });
           return markedMissing;
         },
-        insertTerminalContext: (threadRef, prompt, context, index) => {
+        insertTerminalContext: (threadRef, prompt, context, index, cursor) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           const threadId = resolveComposerThreadId(get(), threadRef);
           if (!threadKey || !threadId) {
@@ -3799,6 +3804,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const nextDraft: ComposerThreadDraftState = {
               ...existing,
               prompt,
+              ...(cursor !== undefined ? { caret: { prompt, offset: cursor } } : {}),
               terminalContexts: [
                 ...existing.terminalContexts.slice(0, boundedIndex),
                 normalizedContext,

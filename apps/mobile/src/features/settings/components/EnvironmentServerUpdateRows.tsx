@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { AuthEnvironmentMaintainScope, managedUpdatesDenial } from "@t3tools/contracts";
+import {
+  AuthEnvironmentMaintainScope,
+  AuthOrchestrationReadScope,
+  managedUpdatesDenial,
+} from "@t3tools/contracts";
 import { serverUpdateDownloadPercent } from "@t3tools/client-runtime/state/server";
 import { resolveForkUpdateTarget } from "@t3tools/shared/forkRelease";
 import { AsyncResult } from "effect/reactivity";
@@ -12,7 +16,11 @@ import { Progress } from "../../../components/ui/Progress";
 import { useEnvironmentQuery } from "../../../state/query";
 import type { ConnectedEnvironmentSummary } from "../../../state/remote-runtime-types";
 import { serverEnvironment } from "../../../state/server";
-import { readEnvironmentScope, useEnvironmentScope } from "../../../state/session";
+import {
+  environmentSession,
+  readEnvironmentScope,
+  useEnvironmentScope,
+} from "../../../state/session";
 import { useAtomCommand } from "../../../state/use-atom-command";
 import {
   ENVIRONMENT_RELEASES_PAGE_URL,
@@ -28,29 +36,37 @@ export function EnvironmentServerUpdateRows({
 }) {
   const { environmentId, environmentLabel } = environment;
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const sessionConfig = useAtomValue(environmentSession.initialConfigValueAtom(environmentId));
   const state = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
   const canMaintain = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
+  const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const update = useAtomCommand(serverEnvironment.updateServer, { reportFailure: false });
   const connected = environment.isEnabled && environment.connectionState === "connected";
   const denial = managedUpdatesDenial(config?.managedPolicy);
   const canCheck = connected && canMaintain && denial === undefined;
-  const version = config?.environment.serverVersion;
+  const runningVersion = connected ? sessionConfig?.environment.serverVersion : undefined;
+  const lastVersion = config?.environment.serverVersion;
+  const deviceName =
+    sessionConfig?.environment.label ?? config?.environment.label ?? environmentLabel;
   const capabilities = config?.environment.capabilities;
   const supportsLookup = capabilities?.npmReleaseLookup === true;
   const canInstall = capabilities !== undefined && supportsEnvironmentUpdate(capabilities);
   const releaseQuery = useEnvironmentQuery(
-    canCheck && supportsLookup
+    connected && canRead && supportsLookup
       ? serverEnvironment.npmRelease({ environmentId, input: { spec: "latest" } })
       : null,
   );
   const release =
-    releaseQuery.isSuccess && version
-      ? resolveForkUpdateTarget(version, releaseQuery.data?.version ?? null)
+    releaseQuery.isSuccess && runningVersion
+      ? resolveForkUpdateTarget(runningVersion, releaseQuery.data?.version ?? null)
       : null;
   const targetVersion = release?.targetVersion ?? null;
   const manual =
     canCheck &&
-    (!supportsLookup || release?.manualCheckRequired || (!canInstall && targetVersion !== null));
+    (!supportsLookup ||
+      !canRead ||
+      release?.manualCheckRequired ||
+      (!canInstall && targetVersion !== null));
   const running = state.status === "running";
   const providerBusy =
     config?.providers.some(
@@ -63,17 +79,14 @@ export function EnvironmentServerUpdateRows({
   function requestUpdate() {
     if (!canCheck || !canInstall || targetVersion === null || running || providerBusy) return;
     Dialog.confirm({
-      title: `更新 ${environmentLabel}？`,
+      title: `更新 ${deviceName}？`,
       message: `安装 T3 Code ${targetVersion}。${capabilities?.serverSelfUpdate === "desktop-managed" ? "桌面应用将关闭并重新启动。" : "服务端将重启并重新连接。"}正在运行的会话可能会中断。`,
       confirmText: "更新服务端",
       onConfirm: () => {
         if (!readEnvironmentScope(environmentId, AuthEnvironmentMaintainScope)) return;
         void update({ environmentId, input: { targetVersion } }).then((result) => {
           if (AsyncResult.isSuccess(result)) {
-            Dialog.alert(
-              "服务端已更新",
-              `${environmentLabel} 已更新至 ${result.value.targetVersion}。`,
-            );
+            Dialog.alert("服务端已更新", `${deviceName} 已更新至 ${result.value.targetVersion}。`);
           }
         });
       },
@@ -82,27 +95,35 @@ export function EnvironmentServerUpdateRows({
 
   const description =
     denial ??
-    (!connected
-      ? "连接后可检查和更新服务端。"
-      : !canMaintain
-        ? "当前连接没有维护权限。"
-        : releaseQuery.error
-          ? null
-          : targetVersion !== null
-            ? `可更新至 ${targetVersion}。`
-            : releaseQuery.isSuccess && !manual
-              ? "已是最新版本。"
-              : null);
+    (!connected ? "连接后可检查和更新服务端。" : !canMaintain ? "当前连接没有维护权限。" : null);
+  const availableVersion =
+    state.status === "running"
+      ? state.targetVersion
+      : (targetVersion ??
+        (releaseQuery.isPending
+          ? "正在检查"
+          : release !== null && !release.manualCheckRequired
+            ? "无，已是最新版本"
+            : "未确认"));
 
   return (
     <>
       {!compact || state.status !== "idle" ? (
         <View className="gap-1 px-4 py-3">
           {!compact ? (
-            <Text className="text-base text-foreground">
-              {environmentLabel}
-              {version ? ` · ${version}` : ""}
-            </Text>
+            <>
+              <Text className="text-base text-foreground">
+                {deviceName === environmentLabel
+                  ? deviceName
+                  : `${deviceName} · ${environmentLabel}`}
+              </Text>
+              <Text className="text-sm text-foreground-muted">
+                {runningVersion
+                  ? `运行版本 ${runningVersion}`
+                  : `运行版本未确认${lastVersion ? `（上次连接 ${lastVersion}）` : ""}`}
+              </Text>
+              <Text className="text-sm text-foreground-muted">可更新版本 {availableVersion}</Text>
+            </>
           ) : null}
           {state.status === "running" ? (
             <>
@@ -116,7 +137,7 @@ export function EnvironmentServerUpdateRows({
               {state.stage === "downloading" ? (
                 <Progress
                   className="mt-1"
-                  label={`${environmentLabel} 服务端更新下载进度`}
+                  label={`${deviceName} 服务端更新下载进度`}
                   {...(percent === undefined ? {} : { value: percent / 100 })}
                 />
               ) : null}
@@ -138,8 +159,8 @@ export function EnvironmentServerUpdateRows({
             description={
               providerBusy
                 ? "服务提供方正在更新，完成后可更新服务端。"
-                : compact && version
-                  ? `${version} → ${targetVersion}`
+                : compact && runningVersion
+                  ? `${runningVersion} → ${targetVersion}`
                   : undefined
             }
             disabled={providerBusy}

@@ -72,7 +72,11 @@ import {
 } from "../keyboard/hardwareKeyboardCommands";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { useEnabledNavigationTabs } from "./workspace/navigation-tabs";
-import { FLOATING_TABS, floatingTabsMetrics } from "./workspace/floating-workspace-tabs";
+import {
+  FLOATING_TABS,
+  floatingDockBottomClearance,
+  floatingDockWidth,
+} from "./workspace/floating-workspace-tabs";
 import {
   AndroidWorkspaceNavigation,
   FloatingWorkspaceTabs,
@@ -331,8 +335,8 @@ function AdaptiveWorkspaceLayoutContent(
   const shouldRenderNavigationRail =
     Platform.OS === "android" && baseLayout.usesSplitView && !floatingTabsEnabled;
   const enabledTabs = useEnabledNavigationTabs();
-  const { scale, fabSize } = useAndroidControlSizing();
-  const floatingTabs = floatingTabsMetrics(enabledTabs.length + 1, scale, fabSize);
+  const { fabSize } = useAndroidControlSizing();
+  const floatingTabsWidth = floatingDockWidth(enabledTabs.length + 1) + 2 * FLOATING_TABS.edge;
   // The rail stays whether or not the sidebar shows; only the list pane comes and goes.
   const navigationRailWidth = shouldRenderNavigationRail ? ANDROID_WORKSPACE_RAIL_WIDTH : 0;
   const [hinge, setHinge] = useState<VerticalHinge | null>(null);
@@ -353,17 +357,17 @@ function AdaptiveWorkspaceLayoutContent(
       !aligned.usesSplitView ||
       aligned.listPaneGap !== undefined ||
       aligned.listPaneWidth === null ||
-      aligned.listPaneWidth >= floatingTabs.row ||
-      viewportWidth - floatingTabs.row < 320
+      aligned.listPaneWidth >= floatingTabsWidth ||
+      viewportWidth - floatingTabsWidth < 320
     )
       return aligned;
-    return { ...aligned, listPaneWidth: floatingTabs.row };
+    return { ...aligned, listPaneWidth: floatingTabsWidth };
   }, [
     baseLayout,
     hinge,
     navigationRailWidth,
     viewportWidth,
-    floatingTabs.row,
+    floatingTabsWidth,
     floatingTabsEnabled,
   ]);
   // The rail keeps its room even while the sidebar floats; only the list pane overlays the page.
@@ -1095,11 +1099,7 @@ function AdaptiveWorkspaceLayoutContent(
                   (compactAndroidSettings || (layout.usesSplitView && workspacePage))
                     ? {
                         ...safeAreaInsets,
-                        bottom:
-                          safeAreaInsets.bottom +
-                          FLOATING_TABS.bottom +
-                          FLOATING_TABS.edge +
-                          floatingTabs.height,
+                        bottom: floatingDockBottomClearance(safeAreaInsets.bottom, fabSize),
                       }
                     : compactAndroidSettings
                       ? { ...safeAreaInsets, bottom: 0 }
@@ -1116,7 +1116,6 @@ function AdaptiveWorkspaceLayoutContent(
               (compactAndroidSettings || (layout.usesSplitView && workspacePage)) ? (
                 <FloatingWorkspaceTabs
                   paneWidth={layout.usesSplitView ? (layout.listPaneWidth ?? undefined) : undefined}
-                  fillWidth={compactAndroidSettings}
                   onNewThread={handleStartNewTask}
                 />
               ) : compactAndroidSettings ? (

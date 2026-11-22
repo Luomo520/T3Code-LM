@@ -359,6 +359,18 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     };
   }, [props.contextClipboardFragment, props.markdown]);
   const { fontScale } = useWindowDimensions();
+  const searchHighlightPattern = useMemo(
+    () =>
+      props.searchHighlightTerms?.length
+        ? "(" +
+          [...props.searchHighlightTerms]
+            .sort((a, b) => b.length - a.length)
+            .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("|") +
+          ")"
+        : null,
+    [props.searchHighlightTerms],
+  );
   const baseMarkdownStyle = useMemo(() => {
     const style = enrichedStyle(props.textStyle, themeAppearance === "dark", fontScale);
     return {
@@ -378,11 +390,27 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
                 : undefined,
           }
         : {}),
+      ...(Platform.OS === "android" && searchHighlightPattern
+        ? {
+            textHighlight: {
+              pattern: searchHighlightPattern,
+              inlineCodeEdge: "[\\s\\S]*",
+              colors: [themeAppearance === "dark" ? "#fde68a" : "#854d0e"],
+            },
+          }
+        : {}),
       paragraph: props.textAlign
         ? { ...style.paragraph, textAlign: props.textAlign }
         : style.paragraph,
     };
-  }, [props.textStyle, props.textAlign, props.semanticHighlights, themeAppearance, fontScale]);
+  }, [
+    props.textStyle,
+    props.textAlign,
+    props.semanticHighlights,
+    themeAppearance,
+    fontScale,
+    searchHighlightPattern,
+  ]);
   // Link variants change as a message streams. The code renderer reads only the base style, so
   // it stays the same function and the library keeps its rendered blocks.
   const markdownStyle = useMemo(

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
-import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { cn } from "~/lib/utils";
@@ -19,6 +19,7 @@ interface ThreadFindBarProps {
   readonly onNext: () => void;
   readonly onPrevious: () => void;
   readonly onClose: () => void;
+  readonly onBackToResults?: () => void;
 }
 
 export const THREAD_FIND_BAR_RESERVED_HEIGHT = 36 + THREAD_DETAILS_CARD_GAP;
@@ -73,6 +74,19 @@ export function ThreadFindBar(props: ThreadFindBarProps) {
         aria-busy={props.status === "loading" || props.counting === true}
         className="w-full"
       >
+        {props.onBackToResults ? (
+          <InputGroupAddon align="inline-start" inset="pill">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="返回搜索结果"
+              title="返回搜索结果"
+              onClick={props.onBackToResults}
+            >
+              <ArrowLeftIcon />
+            </Button>
+          </InputGroupAddon>
+        ) : null}
         <InputGroupInput
           ref={inputRef}
           type="search"

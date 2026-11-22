@@ -108,7 +108,8 @@ export type CommandPaletteUiAction =
       readonly mode: "files" | "content";
       readonly context: CommandPaletteReturnContext;
     }
-  | { readonly _tag: "BackToCommand" };
+  | { readonly _tag: "BackToCommand" }
+  | { readonly _tag: "RestoreSearch"; readonly context: CommandPaletteReturnContext };
 
 export function reduceCommandPaletteUiState(
   state: CommandPaletteUiState,
@@ -148,6 +149,14 @@ export function reduceCommandPaletteUiState(
             ...(state.parentSearch ? { restoredSearch: state.parentSearch } : {}),
           }
         : state;
+    case "RestoreSearch":
+      return {
+        open: true,
+        mode: "command",
+        openIntent: null,
+        session: session + 1,
+        restoredSearch: action.context,
+      };
     case "OpenSearch":
       return openWithIntent({
         kind: "search",
@@ -246,6 +255,10 @@ export interface CommandPaletteView {
 export interface CommandPaletteReturnContext {
   readonly query: string;
   readonly linkedThreadSearch: Extract<CommandPaletteOpenIntent, { kind: "search" }> | null;
+  readonly position?: {
+    readonly itemValue: string;
+    readonly scrollOffset: number;
+  };
 }
 
 export interface CommandPaletteSearchState {

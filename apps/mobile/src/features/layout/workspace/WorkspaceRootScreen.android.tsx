@@ -11,13 +11,14 @@ import { AppBar } from "../../../components/ui/AppBar";
 import { WorkspaceEmptyDetail } from "../WorkspaceEmptyDetail";
 import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { useAndroidControlSizing } from "../../../components/ui/useAndroidControlSizing";
+import { useWorkspaceConnectionState } from "../../../state/workspace";
 import { HomeRouteScreen } from "../../home/HomeRouteScreen";
 import { PullRequestsScreen } from "../../pull-requests/PullRequestsScreen";
 import { PullRequestToolbar } from "./PullRequestToolbar.android";
 import { useAdaptiveWorkspaceLayout } from "../AdaptiveWorkspaceLayout";
 import { WorkspaceSettledContentWidthContext } from "../workspace-content-width";
 import { AndroidWorkspaceNavigation, FloatingWorkspaceTabs } from "./AndroidWorkspaceNavigation";
-import { FLOATING_TABS } from "./floating-workspace-tabs";
+import { floatingDockBottomClearance } from "./floating-workspace-tabs";
 import { WorkspaceTabsContext, useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { WorkspaceTabPanes } from "./WorkspaceTabPanes";
 import { WorkspaceAppBarScope } from "../../../components/ui/WorkspaceAppBar.android";
@@ -40,17 +41,18 @@ function WorkspaceRoot() {
   const enabled = useEnabledNavigationTabs();
   const insets = useSafeAreaInsets();
   const { fabClearance, fabSize } = useAndroidControlSizing();
+  const { hasConnections } = useWorkspaceConnectionState();
+  const tab = workspace.state.selectedTab;
   const context = {
     ...workspace,
     bottomClearance: layout.usesSplitView
       ? workspace.bottomClearance
       : floatingTabsEnabled
-        ? insets.bottom + FLOATING_TABS.bottom + FLOATING_TABS.edge + fabSize
-        : workspace.state.selectedTab === "threads"
+        ? floatingDockBottomClearance(insets.bottom, fabSize, tab === "threads" && hasConnections)
+        : tab === "threads"
           ? fabClearance + 16
           : 16,
   };
-  const tab = workspace.state.selectedTab;
   const selectTab = useSelectWorkspaceTab();
   // Tabs are panes of Home, not routes, so Back has nothing to pop and would leave the app.
   // An open search keeps Back for itself.
@@ -121,7 +123,7 @@ function WorkspaceRoot() {
           )}
         </SafeAreaInsetsContext>
         {layout.usesSplitView ? null : floatingTabsEnabled ? (
-          <FloatingWorkspaceTabs fillWidth onNewThread={startNewTask} />
+          <FloatingWorkspaceTabs onNewThread={startNewTask} />
         ) : (
           <AndroidWorkspaceNavigation onNewThread={startNewTask} />
         )}

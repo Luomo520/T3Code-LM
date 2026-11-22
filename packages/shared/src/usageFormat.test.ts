@@ -190,21 +190,29 @@ describe("token formatting", () => {
     expect(formatTokens(-999_999)).toBe("-1M");
   });
 
-  it("formats reply speed with measured data first and preserves missing values", () => {
+  it("formats per-turn reply count and speed and preserves missing values", () => {
     expect(
       formatReplyUsage({
-        cumulativeTokens: 12_400,
+        turnTokens: 12_400,
         tokensPerSecond: 48,
         estimatedTokensPerSecond: 22,
       }),
-    ).toEqual({ tokens: "12.4k token", speed: "48t/s" });
+    ).toEqual({ tokens: "12.4K", speed: "48T/s" });
     expect(
       formatReplyUsage({
-        cumulativeTokens: 1_000_000_000,
+        turnTokens: 1_100_000_000,
         tokensPerSecond: null,
         estimatedTokensPerSecond: 27.35,
       }),
-    ).toEqual({ tokens: "1b token", speed: "≈27.4t/s" });
+    ).toEqual({ tokens: "1.1B", speed: "27.4T/s" });
+    const timing = { tokensPerSecond: null, estimatedTokensPerSecond: null };
+    expect(formatReplyUsage({ ...timing, turnTokens: 1_200_000 }).tokens).toBe("1.2M");
+    expect(formatReplyUsage({ ...timing, turnTokens: 999_999 }).tokens).toBe("1M");
+    expect(formatReplyUsage({ ...timing, turnTokens: 860 }).tokens).toBe("860");
+    expect(formatReplyUsage({ ...timing, turnTokens: 0 }).tokens).toBe("0");
+    expect(formatReplyUsage({ ...timing, turnTokens: null }).tokens).toBe("—");
+    const legacy = { ...timing, cumulativeTokens: 1_130_000_000, tokensPerSecond: 50 };
+    expect(formatReplyUsage(legacy)).toEqual({ tokens: "—", speed: "50T/s" });
     expect(formatReplyUsage(undefined)).toEqual({ tokens: "—", speed: "—" });
   });
 });

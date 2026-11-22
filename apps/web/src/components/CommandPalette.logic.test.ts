@@ -106,6 +106,15 @@ describe("reduceCommandPaletteUiState", () => {
       openIntent: { kind: "add-project" },
       session: 2,
     });
+
+    const context = {
+      query: "pnpm test",
+      linkedThreadSearch: null,
+      position: { itemValue: "thread:nas:one", scrollOffset: 240 },
+    };
+    state = reduceCommandPaletteUiState(state, { _tag: "SetOpen", open: false });
+    state = reduceCommandPaletteUiState(state, { _tag: "RestoreSearch", context });
+    expect(state).toMatchObject({ open: true, session: 3, restoredSearch: context });
   });
 });
 

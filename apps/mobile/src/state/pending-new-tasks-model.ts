@@ -105,6 +105,7 @@ export function isQueuedCreationSending(
 ): boolean {
   const environmentId = message.environmentId;
   return (
+    !message.deliveryUnconfirmed &&
     isQueuedThreadCreationSendable(message) &&
     gate.retryingMessageIds[message.messageId] !== true &&
     gate.operableEnvironmentIds.has(environmentId) &&

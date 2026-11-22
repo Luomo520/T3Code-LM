@@ -503,15 +503,30 @@ describe("MessagesTimeline messages", () => {
       message("First reply", { role: "assistant", runId: firstRunId }, "first-reply"),
       message("Second reply", { role: "assistant", runId: secondRunId }, "second-reply"),
     ];
-    const timeline = (turns: readonly ConversationUsageTurn[] | null) => (
-      <MessagesTimeline {...props} timelineEntries={entries} replyUsageTurns={turns} />
-    );
     const recorded = {
       costUsd: null,
       costPartial: false,
       cacheRate: null,
       estimatedTokensPerSecond: null,
     };
+    const first = {
+      ...recorded,
+      runId: firstRunId,
+      turnTokens: 12_400,
+      cumulativeTokens: 12_400,
+      tokensPerSecond: 48,
+    };
+    const second = {
+      ...recorded,
+      runId: secondRunId,
+      turnTokens: 860,
+      cumulativeTokens: 13_260,
+      tokensPerSecond: null,
+      estimatedTokensPerSecond: 50,
+    };
+    const timeline = (turns: readonly ConversationUsageTurn[] | null, key = "initial") => (
+      <MessagesTimeline key={key} {...props} timelineEntries={entries} replyUsageTurns={turns} />
+    );
     await using screen = await renderElement(timeline(null));
     screen.container.style.width = "320px";
     const readReplyUsage = (reply: string) => {
@@ -524,18 +539,18 @@ describe("MessagesTimeline messages", () => {
       ];
     };
     await vi.waitFor(() => expect(readReplyUsage("First reply")).toEqual(["—", "—"]));
-    await screen.rerender(
-      timeline([
-        { ...recorded, runId: secondRunId, cumulativeTokens: 26_000, tokensPerSecond: 64 },
-        { ...recorded, runId: firstRunId, cumulativeTokens: 12_400, tokensPerSecond: 48 },
-      ]),
-    );
+    await screen.rerender(timeline([first]));
     await vi.waitFor(() => {
-      expect(readReplyUsage("First reply")).toEqual(["12.4k token", "48t/s"]);
-      expect(readReplyUsage("Second reply")).toEqual(["26k token", "64t/s"]);
+      expect(readReplyUsage("First reply")).toEqual(["12.4K", "48T/s"]);
+      expect(readReplyUsage("Second reply")).toEqual(["—", "—"]);
     });
-    await screen.rerender(timeline(null));
-    await vi.waitFor(() => expect(readReplyUsage("Second reply")).toEqual(["—", "—"]));
+    for (const key of ["initial", "reopened"]) {
+      await screen.rerender(timeline([second, first], key));
+      await vi.waitFor(() => {
+        expect(readReplyUsage("First reply")).toEqual(["12.4K", "48T/s"]);
+        expect(readReplyUsage("Second reply")).toEqual(["860", "50T/s"]);
+      });
+    }
   });
 
   it("settles when equally long messages have very different rendered heights", async () => {

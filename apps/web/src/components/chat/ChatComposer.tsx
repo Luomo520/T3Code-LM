@@ -78,7 +78,7 @@ import {
   collapseExpandedComposerCursor,
   composerRequiresModifier,
   composerSubmissionIntentForKey,
-  composerStateAtPromptEnd,
+  composerStateAtCursor,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
@@ -111,6 +111,7 @@ import {
   useComposerThreadDraft,
 } from "../../composerDraftStore";
 import { ComposerSessionUsage } from "./ComposerSessionUsage";
+import type { SessionContextWindow } from "@t3tools/shared/sessionUsageDisplay";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
 import { useComposerTriggerState } from "./useComposerTriggerState";
@@ -293,6 +294,7 @@ function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
 }
 
 export interface ChatComposerHandle {
+  focus: () => void;
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
   addDroppedFiles: (files: File[]) => void;
@@ -385,10 +387,7 @@ export interface ChatComposerProps {
   bannerItems: readonly ComposerBannerStackItem[];
   resumeCompactionTokens: number | null;
   sessionUsage?: ConversationUsage | null | undefined;
-  sessionContextWindow?:
-    | { readonly usedTokens: number; readonly maxTokens: number | null }
-    | null
-    | undefined;
+  sessionContextWindow?: SessionContextWindow | null | undefined;
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
   onUsageLimitsCommand?: (() => void) | undefined;
@@ -993,9 +992,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
   })();
 
+  const savedDraftCursor =
+    !activePendingProgress?.activeQuestion && composerDraft.caret?.prompt === prompt
+      ? composerDraft.caret.offset
+      : undefined;
   const [composerCursor, setComposerCursor] = useState(() => {
     const value = isLiteralPendingAnswer ? (activePendingProgress?.customAnswer ?? prompt) : prompt;
-    return collapseExpandedComposerCursor(value, value.length, isLiteralPendingAnswer);
+    return (
+      savedDraftCursor ??
+      collapseExpandedComposerCursor(value, value.length, isLiteralPendingAnswer)
+    );
   });
   const {
     trigger: composerTrigger,
@@ -1004,7 +1010,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     dismissTrigger: dismissComposerTrigger,
     resetTrigger: resetComposerTrigger,
   } = useComposerTriggerState(() =>
-    isLiteralPendingAnswer ? null : detectComposerTrigger(prompt, prompt.length),
+    isLiteralPendingAnswer
+      ? null
+      : detectComposerTrigger(prompt, expandCollapsedComposerCursor(prompt, composerCursor)),
   );
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const composerSuggestionId = useId();
@@ -1456,7 +1464,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (typeof nextCustomAnswer !== "string") {
       if (lastSyncedPendingInputRef.current !== null) {
         promptRef.current = prompt;
-        const { cursor, trigger } = composerStateAtPromptEnd(prompt);
+        const { cursor, trigger } = composerStateAtCursor(prompt);
         setComposerCursor(cursor);
         resetComposerTrigger(trigger);
       }
@@ -1481,7 +1489,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
 
     promptRef.current = nextCustomAnswer;
-    const { cursor, trigger } = composerStateAtPromptEnd(nextCustomAnswer, isLiteralPendingAnswer);
+    const { cursor, trigger } = composerStateAtCursor(nextCustomAnswer, isLiteralPendingAnswer);
     setComposerCursor(cursor);
     resetComposerTrigger(trigger);
     setComposerHighlightedItemId(null);
@@ -1495,7 +1503,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     resetComposerTrigger,
   ]);
 
-  const composerSessionKey = `${draftId ?? ""}:${activeThreadId ?? ""}:${isLiteralPendingAnswer}`;
+  const composerSessionKey = `${composerDraftTargetKey}:${isLiteralPendingAnswer}`;
   const [shownComposerSessionKey, setShownComposerSessionKey] = useState(composerSessionKey);
   if (shownComposerSessionKey !== composerSessionKey) {
     setShownComposerSessionKey(composerSessionKey);
@@ -1504,9 +1512,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setComposerSubmissionError(null);
     setProviderInputSubmissionError(null);
     const pendingAnswer = activePendingProgress?.customAnswer;
-    const { cursor, trigger } = composerStateAtPromptEnd(
-      typeof pendingAnswer === "string" ? pendingAnswer : prompt,
+    const value = typeof pendingAnswer === "string" ? pendingAnswer : prompt;
+    const { cursor, trigger } = composerStateAtCursor(
+      value,
       isLiteralPendingAnswer,
+      savedDraftCursor,
     );
     setComposerCursor(cursor);
     resetComposerTrigger(trigger);
@@ -1604,7 +1614,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     onTypingGuardDraftChange();
     promptRef.current = nextPrompt;
-    setPrompt(nextPrompt);
+    setComposerDraftPrompt(composerDraftTarget, nextPrompt, nextCursor);
     if (promptHistoryPositionRef.current?.position.recalled !== nextPrompt) {
       promptHistoryPositionRef.current = null;
     }
@@ -1780,7 +1790,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         isLiteralPendingAnswer,
       );
     } else {
-      setPrompt(next.text);
+      setComposerDraftPrompt(composerDraftTarget, next.text, nextCursor);
       onTypingGuardDraftChange();
     }
     setComposerCursor(nextCursor);
@@ -3008,6 +3018,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useImperativeHandle(
     composerRef,
     () => ({
+      focus: () => composerEditorRef.current?.focus(),
       focusAtEnd: () => {
         composerEditorRef.current?.focusAtEnd();
       },
@@ -3176,6 +3187,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           insertion.prompt,
           context,
           composerTerminalContexts.length,
+          nextCollapsedCursor,
         );
         if (!inserted) return;
         promptRef.current = insertion.prompt;
@@ -3331,6 +3343,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       focusComposer={focusComposer}
     />
   ) : null;
+  const composerSessionUsage =
+    routeKind === "server" && activeThreadId !== null ? (
+      <ComposerSessionUsage
+        key={`session-usage:${environmentId}:${activeThreadId}`}
+        usage={props.sessionUsage}
+        contextWindow={
+          [activeThreadModelSelection, reportedModelSelection].some(
+            (selection) =>
+              selection?.instanceId === selectedModelSelection.instanceId &&
+              selection.model === selectedModelSelection.model,
+          )
+            ? props.sessionContextWindow
+            : null
+        }
+        theme={resolvedTheme}
+      />
+    ) : null;
+  const pendingAnswerHidesFooter =
+    showMobilePendingAnswerActions && speechInput.state.phase === "idle";
+  const sessionUsageNeedsOwnRow = pendingAnswerHidesFooter || dictationTakesFooter;
   return (
     <form
       ref={composerFormRef}
@@ -3706,9 +3738,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 className={cn(
                   "flex min-w-0 flex-nowrap items-center overflow-visible px-2 pb-2",
                   pendingUserInputs.length > 0 && "pt-2",
-                  showMobilePendingAnswerActions &&
-                    speechInput.state.phase === "idle" &&
-                    "hidden sm:flex",
+                  pendingAnswerHidesFooter && "hidden sm:flex",
                 )}
               >
                 {composerAttachButton && !dictationTakesFooter ? (
@@ -3733,6 +3763,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   >
                     {composerControls}
                   </div>
+                  {!showInlineRestingControls && !sessionUsageNeedsOwnRow
+                    ? composerSessionUsage
+                    : null}
                   <ComposerFooterPrimaryActions
                     // Stop state belongs to one thread; the composer stays mounted across threads.
                     key={`${environmentId}:${activeThreadId ?? "new"}`}
@@ -3819,7 +3852,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               </div>
             )}
             {showInlineRestingControls ? (
-              <div className="h-8">
+              <div className={composerSessionUsage ? "h-9 pointer-coarse:h-13" : "h-8"}>
                 <div
                   ref={setInlineRestingControlsHost}
                   className="absolute bottom-2 inset-x-4 min-w-0"
@@ -3827,35 +3860,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <div
                     ref={attachRestingComposerControls}
                     data-chat-composer-resting-controls="true"
-                    aria-hidden={restingControlsVisible ? undefined : true}
-                    inert={restingControlsVisible ? undefined : true}
-                    className={cn(
-                      "relative flex w-max min-w-0 max-w-full items-center gap-1 text-muted-foreground/70 [&_button]:text-xs!",
-                      !restingControlsVisible && "invisible",
-                    )}
+                    className="relative flex w-max min-w-0 max-w-full items-center gap-1 text-muted-foreground/70 [&_button]:text-xs!"
                   >
-                    {composerControls}
+                    <div
+                      aria-hidden={restingControlsVisible ? undefined : true}
+                      inert={restingControlsVisible ? undefined : true}
+                      className={cn(
+                        "relative flex min-w-0 items-center gap-1",
+                        !restingControlsVisible && "invisible absolute",
+                      )}
+                    >
+                      {composerControls}
+                    </div>
+                    {composerSessionUsage}
                   </div>
                 </div>
               </div>
             ) : null}
-            {routeKind === "server" && activeThreadId !== null ? (
-              <div className="flex min-w-0 justify-end px-2">
-                <ComposerSessionUsage
-                  key={`${environmentId}:${activeThreadId}`}
-                  usage={props.sessionUsage}
-                  contextWindow={
-                    [activeThreadModelSelection, reportedModelSelection].some(
-                      (selection) =>
-                        selection?.instanceId === selectedModelSelection.instanceId &&
-                        selection.model === selectedModelSelection.model,
-                    )
-                      ? props.sessionContextWindow
-                      : null
-                  }
-                  theme={resolvedTheme}
-                />
-              </div>
+            {!showInlineRestingControls && composerSessionUsage && sessionUsageNeedsOwnRow ? (
+              <div className="flex justify-end px-2">{composerSessionUsage}</div>
             ) : null}
           </div>
         </ComposerSurface.Main>

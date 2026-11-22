@@ -53,6 +53,16 @@ describe("deriveComposerContextWindow", () => {
       maxTokens: 180_000,
     });
     expect(
+      deriveComposerContextWindow(
+        withLimit,
+        [{ item: { ...compaction, afterTokenCount: undefined } as ThreadStructureTurnItem }],
+        selection,
+      ),
+    ).toEqual({
+      usedTokens: null,
+      maxTokens: 180_000,
+    });
+    expect(
       deriveComposerContextWindow(withLimit, [], { ...selection, model: "claude-sonnet-4-6" }),
     ).toBeNull();
   });

@@ -1,15 +1,16 @@
 import { findSearchTokenRanges, splitSearchText } from "@t3tools/shared/paletteSearch";
-import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
+import type { OrchestrationThreadSearchMatch } from "@t3tools/contracts";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
 
 export function ThreadSearchMatchExcerpt(props: {
-  readonly match: EnvironmentThreadSearchMatch;
+  readonly match: Pick<OrchestrationThreadSearchMatch, "source" | "snippet">;
   readonly query: string;
   readonly selected?: boolean;
   readonly compact?: boolean;
   readonly sidebar?: boolean;
+  readonly expanded?: boolean;
 }) {
   const isUser = props.match.source === "user";
   const parts = splitSearchText(
@@ -26,7 +27,7 @@ export function ThreadSearchMatchExcerpt(props: {
             ? "text-drawer-foreground-muted"
             : "text-foreground-muted",
       )}
-      numberOfLines={1}
+      numberOfLines={props.expanded ? undefined : 2}
     >
       <Text
         className={cn(
@@ -47,6 +48,7 @@ export function ThreadSearchMatchExcerpt(props: {
           className={cn(
             props.compact ? "text-sm" : "text-xs",
             part.highlighted && "font-t3-bold",
+            part.highlighted && props.expanded && "bg-focus/20",
             props.selected
               ? "text-thread-selected-foreground"
               : part.highlighted

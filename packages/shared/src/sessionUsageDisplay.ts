@@ -1,5 +1,10 @@
 import type { ConversationUsage, UsageCategoryCost } from "@t3tools/contracts";
-import { formatPercent, formatUsd, UNKNOWN_CONVERSATION_USAGE } from "./usageFormat.ts";
+import {
+  formatCount,
+  formatPercent,
+  formatUsd,
+  UNKNOWN_CONVERSATION_USAGE,
+} from "./usageFormat.ts";
 
 const SESSION_COST_CATEGORIES = [
   "input",
@@ -10,6 +15,11 @@ const SESSION_COST_CATEGORIES = [
 ] as const;
 
 export type SessionCostCategory = (typeof SESSION_COST_CATEGORIES)[number];
+
+export interface SessionContextWindow {
+  readonly usedTokens: number | null;
+  readonly maxTokens: number | null;
+}
 
 export const SESSION_COST_LABELS = {
   input: "输入",
@@ -57,26 +67,27 @@ function costSegments(amount: number | null, categories: UsageCategoryCost | nul
 
 export function sessionUsageDisplay(
   usage: ConversationUsage | null | undefined,
-  contextWindow:
-    | { readonly usedTokens: number; readonly maxTokens: number | null }
-    | null
-    | undefined,
+  contextWindow: SessionContextWindow | null | undefined,
 ) {
   const recent = usage?.turns.at(-1);
   const costPartial = usage?.costUsd != null && usage.costPartial;
   const recentCostPartial = recent?.costUsd != null && recent.costPartial;
-  const used = contextWindow?.usedTokens;
-  const limit = contextWindow?.maxTokens;
+  const usedTokens = contextWindow?.usedTokens;
+  const maxTokens = contextWindow?.maxTokens;
+  const used =
+    usedTokens != null && Number.isSafeInteger(usedTokens) && usedTokens >= 0 ? usedTokens : null;
+  const limit =
+    maxTokens != null && Number.isSafeInteger(maxTokens) && maxTokens > 0 ? maxTokens : null;
   // 上下文窗口可随压缩或模型切换而变化，因此占比只使用当前窗口的用量和上限。
-  const contextPercentage =
-    used != null &&
-    Number.isFinite(used) &&
-    used >= 0 &&
-    limit != null &&
-    Number.isFinite(limit) &&
-    limit > 0
-      ? Math.min(100, (used / limit) * 100)
-      : null;
+  const contextShare = used !== null && limit !== null ? used / limit : null;
+  const contextPercentageLabel =
+    contextShare === null ? UNKNOWN_CONVERSATION_USAGE : formatPercent(contextShare);
+  const usedLabel = used === null ? UNKNOWN_CONVERSATION_USAGE : formatCount(used);
+  const limitLabel = limit === null ? UNKNOWN_CONVERSATION_USAGE : formatCount(limit);
+  const contextTokensLabel =
+    used === null && limit === null
+      ? UNKNOWN_CONVERSATION_USAGE
+      : `${usedLabel} / ${limitLabel} Token`;
   return {
     costLabel: costLabel(usage?.costUsd, costPartial),
     costPartial,
@@ -85,10 +96,9 @@ export function sessionUsageDisplay(
     recentCostPartial,
     cacheRateLabel:
       recent?.cacheRate == null ? UNKNOWN_CONVERSATION_USAGE : formatPercent(recent.cacheRate),
-    contextPercentage,
-    contextLabel:
-      contextPercentage === null
-        ? "上下文用量未知"
-        : `上下文占用 ${formatPercent(contextPercentage / 100)}`,
+    contextBarPercentage: contextShare === null ? null : Math.min(100, contextShare * 100),
+    contextPercentageLabel,
+    contextTokensLabel,
+    contextLabel: contextShare === null ? "上下文占用未知" : `上下文占用 ${contextPercentageLabel}`,
   };
 }

@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.text.format.DateFormat
+import android.view.View
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
@@ -55,6 +56,12 @@ class T3NativeControlsModule : Module() {
       val window = appContext.currentActivity?.window ?: return@AsyncFunction
       val controller = WindowCompat.getInsetsController(window, window.decorView)
       controller.isAppearanceLightNavigationBars = light
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("revealMarkdownSearchMatch") { rowTag: Int, bodyTag: Int, terms: List<String> ->
+      val row = runCatching { appContext.findView<View>(rowTag) }.getOrNull() ?: return@AsyncFunction null
+      val body = runCatching { appContext.findView<View>(bodyTag) }.getOrNull() ?: return@AsyncFunction null
+      T3MarkdownSearch.reveal(row, body, terms)
     }.runOnQueue(Queues.MAIN)
 
     Function("is24HourFormat") {

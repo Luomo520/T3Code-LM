@@ -241,7 +241,7 @@ function AssistantMessageMeta({
         ) : null}
       </div>
       {!message.streaming && (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+        <div className="flex shrink-0 items-center gap-3 whitespace-nowrap text-muted-foreground">
           <Tooltip>
             <TooltipTrigger render={<p />}>
               {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
@@ -252,11 +252,11 @@ function AssistantMessageMeta({
           </Tooltip>
           {usage ? (
             <>
-              <span className="whitespace-nowrap">
-                <span className="sr-only">会话累计 Token </span>
+              <span>
+                <span className="sr-only">本轮 Token 用量 </span>
                 <span data-reply-usage="tokens">{usage.tokens}</span>
               </span>
-              <span className="whitespace-nowrap">
+              <span>
                 <span className="sr-only">本轮输出速度 </span>
                 <span data-reply-usage="speed">{usage.speed}</span>
               </span>
@@ -341,7 +341,13 @@ function AssistantCopyButton({
     return null;
   }
 
-  return <MessageCopyButton text={assistantCopyState.text ?? ""} variant="ghost" />;
+  return (
+    <MessageCopyButton
+      text={assistantCopyState.text ?? ""}
+      markdown={message.text}
+      variant="ghost"
+    />
+  );
 }
 
 export function ProposedPlanTimelineRow({

@@ -60,7 +60,9 @@ vi.mock("./uuid", () => ({
 vi.mock("expo-file-system", () => ({
   File: class {
     readonly uri: string;
-    exists = true;
+    get exists() {
+      return !this.uri.endsWith("/expired.png");
+    }
     constructor(uri: string, name?: string) {
       this.uri = name ? `${uri}/${name}` : uri;
     }
@@ -292,7 +294,7 @@ describe("prepareTurnAttachments", () => {
     const { fileUri: _, ...missingImage } = fileBackedImage;
     await expect(
       prepareTurnAttachments({ environmentId, attachments: [missingImage] }),
-    ).rejects.toThrow("'photo.png' is no longer available. Attach the image again.");
+    ).rejects.toThrow("附件「photo.png」已不可用，请重新选择文件。");
   });
 
   it.each(["resolve", "reject"] as const)(
@@ -588,6 +590,32 @@ describe("prepareTurnAttachments", () => {
     expect(prepared.status).toBe("ready");
     if (prepared.status !== "ready") return;
     expect(prepared.pendingAttachmentIds).toEqual([MINTED_ID]);
+  });
+
+  it.each([false, true])(
+    "names an expired attachment (image uploads: %s)",
+    async (supportsImageUploads) => {
+      await expect(
+        prepareTurnAttachments({
+          environmentId,
+          supportsImageUploads,
+          attachments: [{ ...fileBackedImage, fileUri: "file:///cache/expired.png" }],
+        }),
+      ).rejects.toThrow("附件「photo.png」已不可用，请重新选择文件。");
+    },
+  );
+
+  it("recovers expired image files from inline bytes and deletes only the temporary copy", async () => {
+    const result = await prepareTurnAttachments({
+      environmentId,
+      supportsImageUploads: true,
+      attachments: [{ ...image, fileUri: "file:///cache/expired.png" }],
+    });
+    expect(result.status).toBe("ready");
+    expect(mocks.writeFile).toHaveBeenCalledWith("file:///cache/t3-upload-uuid", "YWJj", {
+      encoding: "base64",
+    });
+    expect(mocks.deleteFile).toHaveBeenCalledExactlyOnceWith("file:///cache/t3-upload-uuid");
   });
 
   it("uploads image bytes over HTTP while retaining the durable offline image", async () => {

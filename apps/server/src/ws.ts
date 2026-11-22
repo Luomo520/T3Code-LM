@@ -1897,6 +1897,7 @@ export const layerWsRpc = (
           shellOlderSettled: true,
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
+          messageDeliveryReceipts: true,
           threadFind: true,
           threadFindProgressive: true,
           secretProviderSettings: true,
@@ -2027,6 +2028,17 @@ export const layerWsRpc = (
           readWorkflowScript({ scriptPath: input.scriptPath }),
         [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: (input) =>
           nativeChildWork.getNativeChildWork(input),
+        [ORCHESTRATION_V2_WS_METHODS.getMessageDelivery]: (input) =>
+          threadManagement.getMessageDelivery(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId: input.threadId,
+                  message: "Failed to read message delivery",
+                  cause,
+                }),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
           threadManagement.getTurnItem(input).pipe(
             Effect.mapError(

@@ -16,8 +16,7 @@ import { FabScrollContext } from "./FabScrollContext";
 import { updateFabScroll } from "./fab-scroll";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { WorkspaceTabsContext, useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
-import { FLOATING_TABS, floatingTabsMetrics } from "../layout/workspace/floating-workspace-tabs";
-import { useEnabledNavigationTabs } from "../layout/workspace/navigation-tabs";
+import { floatingDockBottomClearance } from "../layout/workspace/floating-workspace-tabs";
 import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
@@ -31,17 +30,13 @@ export function AndroidHomeFabLayout(props: ComponentProps<typeof SharedAndroidH
   const [layoutWidth, setLayoutWidth] = useState<number | null>(null);
   const { state } = useWorkspaceState();
   const [expanded, setExpanded] = useState(true);
-  const { scale, fabSize } = useAndroidControlSizing();
-  const enabledTabs = useEnabledNavigationTabs();
-  const barWidth =
-    layoutWidth === null
-      ? undefined
-      : layoutWidth - (Math.max(insets.left, FLOATING_TABS.edge) - FLOATING_TABS.edge);
-  const size = floatingTabsEnabled
-    ? floatingTabsMetrics(enabledTabs.length + 1, scale, fabSize, barWidth).height
-    : fabSize;
+  const { fabSize } = useAndroidControlSizing();
   const workspace = useWorkspaceTabs();
-  const bottomClearance = insets.bottom + FLOATING_TABS.bottom + FLOATING_TABS.edge + size;
+  const bottomClearance = floatingDockBottomClearance(
+    insets.bottom,
+    fabSize,
+    !props.disabled && state.hasConnections,
+  );
   const context = floatingTabsEnabled && workspace ? { ...workspace, bottomClearance } : workspace;
   const scrollState = useRef({ anchor: 0, expanded: true });
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -55,8 +50,7 @@ export function AndroidHomeFabLayout(props: ComponentProps<typeof SharedAndroidH
     scrollState.current = next;
   };
 
-  // Remount only the FAB when its font or pane changes to clear the cached expanded width.
-  // Floating navigation shares this row; Material split views put New thread in the rail.
+  // 字体或窗格变化时仅重建 Material 新会话按钮，清除缓存的展开宽度。
   return (
     <View className="flex-1" onLayout={(event) => setLayoutWidth(event.nativeEvent.layout.width)}>
       <WorkspaceTabsContext value={context}>
@@ -69,18 +63,11 @@ export function AndroidHomeFabLayout(props: ComponentProps<typeof SharedAndroidH
       layoutWidth !== null ? (
         <ScrollComposeButton
           key={`${appearance.baseFontSize}:${fontScale}:${layoutWidth}`}
-          size={size}
-          expanded={floatingTabsEnabled ? false : expanded}
+          size={fabSize}
+          expanded={expanded}
           onPress={props.onStartNewTask}
           className="absolute"
-          style={
-            floatingTabsEnabled
-              ? {
-                  right: FLOATING_TABS.edge,
-                  bottom: insets.bottom + FLOATING_TABS.bottom,
-                }
-              : androidHomeFabPosition(insets.bottom, props.sidebar)
-          }
+          style={androidHomeFabPosition(insets.bottom, props.sidebar)}
         />
       ) : null}
     </View>

@@ -1,9 +1,10 @@
-import { CommandId, type ModelSelection, type ThreadId } from "@t3tools/contracts";
+import { CommandId, type MessageId, type ModelSelection, type ThreadId } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import {
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
@@ -20,6 +21,7 @@ import {
   environmentConnectionAtom,
   mapAtomCommandResult,
 } from "./runtime.ts";
+import { getInitialServerConfig, request } from "../rpc/client.ts";
 import { waitForTitleRegenerationOutcome } from "./threadTitleRegeneration.ts";
 import {
   type InterruptThreadTurnInput,
@@ -304,6 +306,32 @@ export function createThreadEnvironmentAtoms<R, E>(
       execute: setThreadInteractionMode,
       scheduler,
       concurrency,
+    }),
+    getMessageDelivery: createEnvironmentCommand(runtime, {
+      label: "environment-data:thread:message-delivery",
+      execute: Effect.fn("ThreadCommands.getMessageDelivery")(function* (input: {
+        readonly threadId: ThreadId;
+        readonly commandId: CommandId;
+        readonly messageId: MessageId;
+      }) {
+        const { threadId, commandId, messageId } = input;
+        const config = yield* getInitialServerConfig();
+        const receipt =
+          config.messageDeliveryReceipts === true
+            ? yield* request(ORCHESTRATION_V2_WS_METHODS.getMessageDelivery, {
+                threadId,
+                commandId,
+              })
+            : null;
+        if (receipt !== null && receipt.status !== "rejected") return receipt;
+        // 旧版快照可以确认已出现的消息。已有回显也优先于重试获取的拒绝回执。
+        const projection = yield* request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
+          threadId,
+        }).pipe(Effect.orElseSucceed(() => null));
+        return projection?.messages.some((message) => message.id === messageId)
+          ? ({ status: "accepted" } as const)
+          : (receipt ?? ({ status: "legacy-unconfirmed" } as const));
+      }, Effect.timeout("10 seconds")),
     }),
     startTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:start-turn",

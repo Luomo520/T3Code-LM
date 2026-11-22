@@ -222,6 +222,14 @@ export function useThreadFind({
       onNext: () => step(1),
       onPrevious: () => step(-1),
       onClose: closeThreadFind,
+      ...(state.onBackToResults
+        ? {
+            onBackToResults: () => {
+              closeThreadFind();
+              state.onBackToResults?.();
+            },
+          }
+        : {}),
     },
     timelineProps: timeline,
   };

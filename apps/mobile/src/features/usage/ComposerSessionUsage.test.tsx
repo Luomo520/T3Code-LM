@@ -75,7 +75,7 @@ it("opens the details, reflects live changes in both views and closes with Andro
 
   render({ usage, contextWindow: { usedTokens: 20, maxTokens: 100 } });
   const trigger = container.querySelector("button")!;
-  expect(trigger.textContent).toBe("$1.25*");
+  expect(trigger.textContent).toBe("$1.25*20.0%");
   act(() => trigger.click());
   expect(keyboardDismiss).toHaveBeenCalledOnce();
   const details = container.querySelector<HTMLElement>('[role="dialog"]')!;
@@ -84,11 +84,12 @@ it("opens the details, reflects live changes in both views and closes with Andro
   expect(details.textContent).toContain("缓存读取$0.10");
   expect(details.textContent).toContain("分类未知$0.30");
   expect(details.textContent).toContain("仅含已知费用");
-  expect(details.textContent).toContain("上下文占用 20");
+  expect(details.textContent).toContain("20 / 100 Token");
+  expect(details.textContent).toContain("上下文占用20.0%");
 
   render({ usage: null, contextWindow: null });
-  expect(trigger.textContent).toBe("—上下文用量未知");
-  expect(trigger.getAttribute("aria-label")).toContain("上下文用量未知");
+  expect(trigger.textContent).toBe("——");
+  expect(trigger.getAttribute("aria-label")).toContain("上下文占用未知");
   expect(details.textContent).toContain("最近一轮费用—");
   expect(details.textContent).toContain("最近一轮缓存命中率—");
   expect(details.textContent).not.toContain("仅含已知费用");

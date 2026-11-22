@@ -1,4 +1,5 @@
 import { Button } from "../../components/ui/Button";
+import { PendingMessageDelivery } from "./PendingMessageDelivery";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
@@ -114,6 +115,7 @@ import {
   useSyncExternalStore,
   useId,
   type ComponentPropsWithRef,
+  type ComponentRef,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -149,7 +151,8 @@ import Animated, { FadeIn, FadeInDown, type SharedValue } from "react-native-rea
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { replyPlainText } from "@t3tools/shared/replyClipboard";
+import { copyTextWithHaptic, tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { splitMarkdownDetails } from "../../lib/markdownDetails";
 import { markdownReferenceDefinitions, withReferenceDefinitions } from "../../lib/markdownDocument";
@@ -211,6 +214,17 @@ import {
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { type ThreadWorkGroupScrollPosition } from "./thread-feed-scroll-position";
+import {
+  threadMessageJumpCandidates,
+  threadMessageJumpTerms,
+  type ThreadMessageJump,
+} from "./threadMessageJump";
+import {
+  canRevealAndroidMarkdownSearchMatch,
+  revealAndroidMarkdownSearchMatch,
+} from "../../native/AndroidMarkdownSearch";
+import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import { useThreadFeedReadingPosition } from "./useThreadFeedReadingPosition";
 import {
   collapsedWorkLogHeight,
   ThreadDisclosureChevron,
@@ -341,8 +355,7 @@ export interface ThreadFeedProps {
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
-  /** A message to scroll to once it is in the feed; see `onJumpedToMessage`. */
-  readonly jumpToMessageId?: MessageId | null;
+  readonly messageJump?: ThreadMessageJump | null;
   readonly onJumpedToMessage?: () => void;
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly keyboardOffset: number;
@@ -359,6 +372,11 @@ export interface ThreadFeedProps {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
 }
+
+const ASSISTANT_COPY_ACTIONS = [
+  { id: "plain", title: "复制正文" },
+  { id: "markdown", title: "复制 Markdown" },
+];
 
 const USER_MESSAGE_COPY_MENU_ACTIONS = [
   { id: "copy-prompt-link", title: "复制提示词链接", image: "link" },
@@ -1166,6 +1184,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
+  readonly searchHighlightTerms?: ReadonlyArray<string> | undefined;
 }) {
   const models = useModelMentions(props.environmentId, props.markdown);
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
@@ -1188,6 +1207,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       renderImage={props.renderImage}
       skills={props.skills}
       models={models}
+      searchHighlightTerms={props.searchHighlightTerms}
     />
   );
 });
@@ -1202,6 +1222,7 @@ function AssistantMarkdownBlocks(props: {
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
+  readonly searchHighlightTerms?: ReadonlyArray<string> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
 }) {
   const { blocks, definitions } = useMemo(() => {
@@ -1253,6 +1274,7 @@ function AssistantMarkdownBlocks(props: {
           textStyle={props.markdownStyles.nativeTextStyle}
           {...props.linkHandlers}
           renderImage={props.renderImage}
+          searchHighlightTerms={props.searchHighlightTerms}
         />
       );
     });
@@ -1700,6 +1722,7 @@ function renderFeedEntry(
     readonly threadTitle: string;
     readonly workflowOpening: WorkflowOpening | null;
     readonly userMessageGrouping: GroupedThreadFeedRow["userMessageGrouping"];
+    readonly searchHighlightTerms?: ReadonlyArray<string>;
   },
 ) {
   const entry = info.item;
@@ -1963,7 +1986,7 @@ function renderFeedEntry(
           context={message.context}
           scheduledTaskId={presentation.scheduledTaskId}
           timestampLabel={timestampLabel}
-          expanded={props.expandedWorkRows[rowId] ?? false}
+          expanded={props.expandedWorkRows[rowId] || !!props.searchHighlightTerms}
           onToggle={() => props.onToggleWorkRow(rowId, entry.id)}
           bubbleColor={userBubbleColor}
           bubbleMaxWidth={props.duoColumns ? "85%" : props.userBubbleMaxWidth}
@@ -1986,7 +2009,8 @@ function renderFeedEntry(
         (message.senderThreadId
           ? scopeThreadRef(props.environmentId, message.senderThreadId)
           : null);
-      const foldExpanded = foldRowId !== null && (props.expandedWorkRows[foldRowId] ?? false);
+      const foldExpanded =
+        foldRowId !== null && (props.expandedWorkRows[foldRowId] || !!props.searchHighlightTerms);
       const bubbleBodyVisible = foldRowId === null || foldExpanded;
       const intentBadge = props.userMessageGrouping.continuesSteer
         ? null
@@ -2206,6 +2230,7 @@ function renderFeedEntry(
                         skills={props.skills}
                         linkHandlers={props.markdownLinkHandlers}
                         renderImage={props.renderMarkdownImage}
+                        searchHighlightTerms={props.searchHighlightTerms}
                       />
                     </MarkdownImageAvailableWidthContext>
                   ) : null}
@@ -2244,13 +2269,18 @@ function renderFeedEntry(
                   ·
                 </Text>
               ) : null}
-              <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
-                {entry.pendingMessage && !entry.acknowledged ? "Pending" : timestampLabel}
-              </Text>
+              {entry.pendingMessage?.deliveryUnconfirmed && !entry.acknowledged ? (
+                <PendingMessageDelivery message={entry.pendingMessage} />
+              ) : (
+                <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
+                  {entry.pendingMessage && !entry.acknowledged ? "Pending" : timestampLabel}
+                </Text>
+              )}
               {props.onEditPendingMessage !== null &&
               entry.pendingMessage &&
               !entry.acknowledged &&
               !entry.pendingMessage.creation &&
+              !entry.pendingMessage.deliveryUnconfirmed &&
               entry.pendingMessage.messageId !== props.dispatchingMessageId ? (
                 <Pressable
                   accessibilityRole="button"
@@ -2320,6 +2350,7 @@ function renderFeedEntry(
               onUseArtifactTemplate={props.onUseArtifactTemplate}
               renderImage={props.renderMarkdownImage}
               skills={props.skills}
+              searchHighlightTerms={props.searchHighlightTerms}
             />
           </MarkdownImageAvailableWidthContext>
         ) : null}
@@ -2337,13 +2368,35 @@ function renderFeedEntry(
         ) : null}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row flex-wrap items-center gap-1">
-            <CopyTextButton
-              accessibilityLabel="复制消息"
-              text={renderedText}
-              tintColor={iconSubtleColor}
-              buttonSize={props.replyActionSize.button}
-              iconSize={props.replyActionSize.icon}
-            />
+            {renderedText.trim() ? (
+              <Menu
+                accessibilityLabel="复制消息"
+                actions={ASSISTANT_COPY_ACTIONS}
+                onPressAction={async ({ nativeEvent }) => {
+                  const text =
+                    nativeEvent.event === "markdown"
+                      ? presentation.text
+                      : replyPlainText(renderedText);
+                  if (!(await tryCopyTextWithHaptic(text)))
+                    Dialog.alert("复制失败", "请再试一次。");
+                }}
+              >
+                <View
+                  className="items-center justify-center"
+                  style={{
+                    width: props.replyActionSize.button,
+                    height: props.replyActionSize.button,
+                  }}
+                >
+                  <SymbolView
+                    name={{ ios: "doc.on.doc", android: "content_copy" }}
+                    size={props.replyActionSize.icon}
+                    tintColor={iconSubtleColor}
+                    type="monochrome"
+                  />
+                </View>
+              </Menu>
+            ) : null}
             {message.projectedItem ? (
               <AssistantForkButton
                 environmentId={props.environmentId}
@@ -2354,25 +2407,27 @@ function renderFeedEntry(
                 sourceTitle={props.threadTitle}
               />
             ) : null}
-            <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
-              {timestampLabel}
-            </Text>
-            {replyUsage ? (
-              <View className="flex-row flex-wrap items-center gap-x-2">
-                <Text
-                  accessibilityLabel={`会话累计 Token ${replyUsage.tokens}`}
-                  className="font-t3-medium text-xs tabular-nums text-foreground-secondary"
-                >
-                  {replyUsage.tokens}
-                </Text>
-                <Text
-                  accessibilityLabel={`本轮输出速度 ${replyUsage.speed}`}
-                  className="font-t3-medium text-xs tabular-nums text-foreground-secondary"
-                >
-                  {replyUsage.speed}
-                </Text>
-              </View>
-            ) : null}
+            <View className="shrink-0 flex-row items-center gap-3">
+              <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
+                {timestampLabel}
+              </Text>
+              {replyUsage ? (
+                <>
+                  <Text
+                    accessibilityLabel={`本轮 Token 用量 ${replyUsage.tokens}`}
+                    className="font-t3-medium text-xs tabular-nums text-foreground-secondary"
+                  >
+                    {replyUsage.tokens}
+                  </Text>
+                  <Text
+                    accessibilityLabel={`本轮输出速度 ${replyUsage.speed}`}
+                    className="font-t3-medium text-xs tabular-nums text-foreground-secondary"
+                  >
+                    {replyUsage.speed}
+                  </Text>
+                </>
+              ) : null}
+            </View>
           </View>
         ) : null}
       </Animated.View>
@@ -2437,6 +2492,7 @@ type UserMessageContentProps = {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly linkHandlers: MarkdownLinkHandlers;
   readonly renderImage: MarkdownImageRenderer;
+  readonly searchHighlightTerms?: ReadonlyArray<string> | undefined;
 };
 
 function UserMessageContent(props: UserMessageContentProps) {
@@ -2572,6 +2628,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
         preserveSoftBreaks
         {...props.linkHandlers}
         renderImage={props.renderImage}
+        searchHighlightTerms={props.searchHighlightTerms}
       />
     );
   }
@@ -2605,6 +2662,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
             preserveSoftBreaks
             {...props.linkHandlers}
             renderImage={props.renderImage}
+            searchHighlightTerms={props.searchHighlightTerms}
           />
         );
       })}
@@ -2762,6 +2820,7 @@ const THREAD_FEED_MAINTAIN_SCROLL_AT_END = {
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const { listRef, onIsAtEndChange, onHeaderMaterialVisibilityChange } = props;
+  const feedThreadKey = scopedThreadKey(props.environmentId, props.threadId);
   const workflowOpening = useWorkflowOpening(props.detailRef);
   const guestShare = useThreadGuestShare(props.detailRef);
   const deviceType = useDeviceType();
@@ -2808,16 +2867,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly expandedTurnIds: ReadonlySet<RunId>;
-    readonly revealedMessageId: MessageId | null;
   }>({
     copiedRowId: null,
     expandedWorkGroups: {},
     expandedWorkRows: {},
     expandedTurnIds: new Set(),
-    revealedMessageId: null,
   });
-  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds, revealedMessageId } =
-    interactionState;
+  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
   const markdownLinkRequest = useRef<AbortController | null>(null);
   const onInlinePlaybackStart = () => {
     markdownLinkRequest.current?.abort();
@@ -3399,11 +3455,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     const state = listRef.current?.getState();
     if (state) onIsAtEndChange?.(state.isAtEnd);
   };
+  const readingPosition = useThreadFeedReadingPosition(
+    feedThreadKey,
+    listRef,
+    !!props.messageJump,
+    usesNativeAutomaticInsets ? anchorTopInset : 0,
+  );
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     reportHeaderMaterialVisibility(
       event.nativeEvent.contentOffset.y + (usesNativeAutomaticInsets ? barInset : 0) > 6,
     );
     handleMetricsChange();
+    readingPosition.remember();
   };
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the list's end state to report it to the parent
   useLayoutEffect(() => {
@@ -3420,7 +3483,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       for (const stop of stops) stop();
     };
   }, [listRef, handleMetricsChange]);
-  const feedThreadKey = scopedThreadKey(props.environmentId, props.threadId);
   const [workGroupScrollPositions] = useState(
     () => new Map<string, ThreadWorkGroupScrollPosition>(),
   );
@@ -3429,19 +3491,36 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // the jump unfolds a run hiding the message and stops following the end, so
   // the committed list holds the target row with end maintenance off.
   const [loadedListKey, setLoadedListKey] = useState<string | null>(null);
-  const { jumpToMessageId } = props;
-  const jumpReady = !!jumpToMessageId && loadedListKey === feedThreadKey;
-  if (jumpReady && revealedMessageId !== jumpToMessageId) {
-    setInteractionState((current) => ({ ...current, revealedMessageId: jumpToMessageId }));
+  const { messageJump } = props;
+  const jumpReady = !!messageJump && loadedListKey === feedThreadKey;
+  const nativeSearchBody = useRef<ComponentRef<typeof View> | null>(null);
+  const jumpScroll = useRef<AbortController | null>(null);
+  const [messageHighlight, setMessageHighlight] = useState<{
+    readonly threadKey: string;
+    readonly jump: ThreadMessageJump;
+  } | null>(null);
+  if (jumpReady && messageHighlight?.jump !== messageJump) {
+    setMessageHighlight({ threadKey: feedThreadKey, jump: messageJump });
   }
+  const currentMessageHighlight =
+    messageHighlight?.threadKey === feedThreadKey ? messageHighlight.jump : null;
+  const highlightTerms = useMemo(
+    () => (currentMessageHighlight ? threadMessageJumpTerms(currentMessageHighlight) : undefined),
+    [currentMessageHighlight],
+  );
   const presentedFeed = appendGuestPendingMessages(
-    useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups, revealedMessageId),
+    useThreadFeedPresentation(
+      props,
+      expandedTurnIds,
+      expandedWorkGroups,
+      currentMessageHighlight?.messageId ?? null,
+    ),
     guestShare,
   );
   const jumpRunId =
     jumpReady &&
-    !presentedFeed.some((entry) => entry.type === "message" && entry.id === jumpToMessageId)
-      ? messageFoldRunId(props.feed, jumpToMessageId, presentedFeed)
+    !presentedFeed.some((entry) => entry.type === "message" && entry.id === messageJump.messageId)
+      ? messageFoldRunId(props.feed, messageJump.messageId, presentedFeed)
       : null;
   if (jumpRunId && !expandedTurnIds.has(jumpRunId)) {
     setInteractionState((current) => ({
@@ -3465,27 +3544,68 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     if (list && bottom > 0) list.reportContentInset({ bottom });
   };
   const jumpIndex = jumpReady
-    ? presentedFeed.findIndex((entry) => entry.type === "message" && entry.id === jumpToMessageId)
+    ? presentedFeed.findIndex(
+        (entry) => entry.type === "message" && entry.id === messageJump.messageId,
+      )
     : null;
-  const landJump = useEffectEvent((index: number) => {
+  const landJump = useEffectEvent((index: number, jump: ThreadMessageJump) => {
     const list = listRef.current;
     if (!list) return;
+    const scroll = new AbortController();
+    jumpScroll.current = scroll;
     let cancelled = false;
-    const positioning =
-      index === -1 ? undefined : list.scrollToIndex({ index, viewPosition: 0.2, animated: false });
-    void Promise.resolve(positioning).then(() => {
+    const position = async () => {
+      if (index < 0) return;
+      await list.scrollToIndex({
+        index,
+        viewPosition: 0.2,
+        viewPositionFallback: "start",
+        viewOffset: CHAT_LIST_ANCHOR_OFFSET,
+        animated: false,
+      });
+      if (!canRevealAndroidMarkdownSearchMatch) return;
+
+      // 原生 Markdown 异步排版，消息行先出现，正文坐标可能要稍后才可用。
+      const terms = threadMessageJumpCandidates(jump);
+      const start = anchorTopInset + (jump.onBackToResults ? 56 : CHAT_LIST_ANCHOR_OFFSET);
+      for (let frame = 0; frame < 30 && !scroll.signal.aborted && terms.length > 0; frame++) {
+        const state = list.getState();
+        const targetIndex = state.indexByKey(jump.messageId);
+        if (targetIndex === undefined) return;
+        const match = await revealAndroidMarkdownSearchMatch(
+          state.elementAtIndex(targetIndex),
+          nativeSearchBody.current,
+          terms,
+        );
+        if (scroll.signal.aborted) return;
+        if (match && Number.isFinite(match.top) && match.height > 0) {
+          await list.scrollIndexIntoView({
+            index: targetIndex,
+            itemOffset: Math.max(0, match.top),
+            itemLength: match.height,
+            viewportMargin: { start, end: bottomContentInset },
+            animated: false,
+          });
+          return;
+        }
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+    };
+    const finish = () => {
+      if (jumpScroll.current === scroll) jumpScroll.current = null;
       if (!cancelled && listRef.current === list) props.onJumpedToMessage?.();
-    });
+    };
+    void position().then(finish, finish);
     return () => {
       cancelled = true;
+      scroll.abort();
     };
   });
   // A jump can unfold a run; keep end maintenance off until its position settles.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the native list to the jump target after the commit that rendered its row
   useEffect(() => {
-    if (jumpIndex !== null) return landJump(jumpIndex);
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Jumping to a different message whose row index is unchanged must still land the jump.
-  }, [jumpToMessageId, jumpIndex]);
+    if (jumpIndex !== null && messageJump) return landJump(jumpIndex, messageJump);
+  }, [messageJump, jumpIndex]);
 
   const handleViewportLayout = (event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -3745,92 +3865,122 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
   }, [textSizeKey, contentWidth, hasHtmlRenders, listRef]);
 
-  const renderItem = (info: { item: GroupedThreadFeedRow; index: number }) => (
-    <DisclosureRow
-      key={info.item.id}
-      itemKey={info.item.id}
-      index={info.index}
-      layout={disclosureLayout}
-    >
-      <MessageImageGalleryScope
-        entry={info.item}
-        environmentId={props.environmentId}
-        threadId={props.threadId}
-        workspaceRoot={props.workspaceRoot}
+  const renderItem = (info: { item: GroupedThreadFeedRow; index: number }) => {
+    const highlight =
+      currentMessageHighlight?.messageId === info.item.id ? currentMessageHighlight : null;
+    const item = renderFeedEntry(info, {
+      userMessageGrouping: info.item.userMessageGrouping,
+      environmentId: props.environmentId,
+      dispatchingMessageId: props.dispatchingMessageId,
+      onEditPendingMessage: props.onEditPendingMessage,
+      onUseArtifactTemplate: props.onUseArtifactTemplate,
+      threadId: props.threadId,
+      copiedRowId,
+      expandedWorkRows,
+      workRowSizing,
+      workGroupScrollPositions,
+      terminalAssistantMessageIds,
+      replyUsageByRun,
+      unsettledTurnId,
+      compactionLabelsByEntryId,
+      failedRunIds,
+      onCopyWorkRow,
+      onToggleWorkGroup,
+      onToggleWorkRow,
+      onToggleTurnFold,
+      onOpenTurnDiff,
+      onPressPreview,
+      onPlaybackStart: onInlinePlaybackStart,
+      markdownLinkHandlers,
+      renderMarkdownImage,
+      renderViewedImage,
+      renderReasoning,
+      iconSubtleColor,
+      replyActionSize,
+      screenColor,
+      userBubbleColor,
+      markdownStyles,
+      reviewCommentColors,
+      reviewCommentBubbleWidth,
+      themeAppearance,
+      duoColumns,
+      userBubbleMaxWidth,
+      markdownContentWidth,
+      contentWidth,
+      threadTitle: props.threadTitle,
+      skills: props.skills,
+      workspaceRoot: props.workspaceRoot,
+      workflowOpening,
+      searchHighlightTerms: highlight ? highlightTerms : undefined,
+    });
+    return (
+      <DisclosureRow
+        key={info.item.id}
+        itemKey={info.item.id}
+        index={info.index}
+        layout={disclosureLayout}
       >
-        <ThreadMediaVisibility>
-          {info.item.type === "message" &&
-          info.item.message.projectedItem?.item.type === "user_message" &&
-          info.item.message.projectedItem.item.freshContext ? (
-            <ThreadContextDivider
-              label="New session"
-              icon="arrow.clockwise"
-              iconColor={iconSubtleColor}
-            />
-          ) : null}
-          {info.item.type === "message" &&
-          !isCompactionCommandFeedEntry(info.item) &&
-          info.item.message.projectedItem?.item.type === "user_message" &&
-          info.item.message.projectedItem.item.modelSwitch ? (
-            <ThreadModelSwitchDivider
-              environmentId={props.environmentId}
-              modelSwitch={info.item.message.projectedItem.item.modelSwitch}
-              iconColor={iconSubtleColor}
-            />
-          ) : null}
-          {renderFeedEntry(info, {
-            userMessageGrouping: info.item.userMessageGrouping,
-            environmentId: props.environmentId,
-            dispatchingMessageId: props.dispatchingMessageId,
-            onEditPendingMessage: props.onEditPendingMessage,
-            onUseArtifactTemplate: props.onUseArtifactTemplate,
-            threadId: props.threadId,
-            copiedRowId,
-            expandedWorkRows,
-            workRowSizing,
-            workGroupScrollPositions,
-            terminalAssistantMessageIds,
-            replyUsageByRun,
-            unsettledTurnId,
-            compactionLabelsByEntryId,
-            failedRunIds,
-            onCopyWorkRow,
-            onToggleWorkGroup,
-            onToggleWorkRow,
-            onToggleTurnFold,
-            onOpenTurnDiff,
-            onPressPreview,
-            onPlaybackStart: onInlinePlaybackStart,
-            markdownLinkHandlers,
-            renderMarkdownImage,
-            renderViewedImage,
-            renderReasoning,
-            iconSubtleColor,
-            replyActionSize,
-            screenColor,
-            userBubbleColor,
-            markdownStyles,
-            reviewCommentColors,
-            reviewCommentBubbleWidth,
-            themeAppearance,
-            duoColumns,
-            userBubbleMaxWidth,
-            markdownContentWidth,
-            contentWidth,
-            threadTitle: props.threadTitle,
-            skills: props.skills,
-            workspaceRoot: props.workspaceRoot,
-            workflowOpening,
-          })}
-          {props.worktreeSetup && info.index === setupAnchorIndex ? (
-            <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
-          ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
-            <WorktreeWorkingHeader startedAt={props.setupWorkingStartedAt} />
-          ) : null}
-        </ThreadMediaVisibility>
-      </MessageImageGalleryScope>
-    </DisclosureRow>
-  );
+        <MessageImageGalleryScope
+          entry={info.item}
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          workspaceRoot={props.workspaceRoot}
+        >
+          <ThreadMediaVisibility>
+            {highlight ? (
+              <View className="mb-2 rounded-md border border-border-subtle bg-subtle px-3 py-2">
+                <ThreadSearchMatchExcerpt
+                  match={highlight.match}
+                  query={highlight.query}
+                  expanded
+                />
+                {!canRevealAndroidMarkdownSearchMatch && highlight.onBackToResults ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={highlight.onBackToResults}
+                    className="min-h-11 self-start justify-center"
+                  >
+                    <Text className="text-sm text-foreground">返回搜索结果</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
+            {info.item.type === "message" &&
+            info.item.message.projectedItem?.item.type === "user_message" &&
+            info.item.message.projectedItem.item.freshContext ? (
+              <ThreadContextDivider
+                label="New session"
+                icon="arrow.clockwise"
+                iconColor={iconSubtleColor}
+              />
+            ) : null}
+            {info.item.type === "message" &&
+            !isCompactionCommandFeedEntry(info.item) &&
+            info.item.message.projectedItem?.item.type === "user_message" &&
+            info.item.message.projectedItem.item.modelSwitch ? (
+              <ThreadModelSwitchDivider
+                environmentId={props.environmentId}
+                modelSwitch={info.item.message.projectedItem.item.modelSwitch}
+                iconColor={iconSubtleColor}
+              />
+            ) : null}
+            {highlight && canRevealAndroidMarkdownSearchMatch ? (
+              <View ref={nativeSearchBody} collapsable={false}>
+                {item}
+              </View>
+            ) : (
+              item
+            )}
+            {props.worktreeSetup && info.index === setupAnchorIndex ? (
+              <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
+            ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
+              <WorktreeWorkingHeader startedAt={props.setupWorkingStartedAt} />
+            ) : null}
+          </ThreadMediaVisibility>
+        </MessageImageGalleryScope>
+      </DisclosureRow>
+    );
+  };
 
   if (props.contentPresentation.kind === "unavailable" && props.queuedMessages.length === 0) {
     return (
@@ -3873,9 +4023,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             {...(usesNativeAutomaticInsets ? { contentInset: { top: anchorTopInset } } : {})}
             freeze={props.freeze}
             maintainScrollAtEnd={jumpReady ? false : THREAD_FEED_MAINTAIN_SCROLL_AT_END}
+            maintainScrollAtEndThreshold={0}
             maintainVisibleContentPosition
             data={groupedFeed}
-            extraData={listAppearanceData}
+            extraData={{ ...listAppearanceData, currentMessageHighlight }}
             renderItem={renderItem}
             viewabilityConfig={THREAD_MEDIA_VIEWABILITY_CONFIG}
             keyExtractor={(entry) => entry.id}
@@ -3911,11 +4062,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             initialScrollAtEnd
             onReady={() => {
               setLoadedListKey(feedThreadKey);
+              readingPosition.onReady();
               handleMetricsChange();
             }}
             onLayout={handleMetricsChange}
             onItemSizeChanged={handleItemSizeChanged}
             onScroll={handleScroll}
+            onScrollBeginDrag={() => jumpScroll.current?.abort()}
             scrollEventThrottle={16}
             ListHeaderComponent={
               <>
@@ -3947,6 +4100,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }}
           />
         </View>
+        {canRevealAndroidMarkdownSearchMatch && currentMessageHighlight?.onBackToResults ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              jumpScroll.current?.abort();
+              currentMessageHighlight.onBackToResults?.();
+            }}
+            className="absolute min-h-11 justify-center rounded-lg border border-border-subtle bg-screen px-3"
+            style={{ top: anchorTopInset + 4, right: contentRightInset + horizontalPadding }}
+          >
+            <Text className="text-sm text-foreground">返回搜索结果</Text>
+          </Pressable>
+        ) : null}
         {presentedFeed.length === 0 &&
         !props.worktreeSetup &&
         props.activeWorkStartedAt === null &&

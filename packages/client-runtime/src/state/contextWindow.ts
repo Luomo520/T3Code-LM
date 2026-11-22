@@ -13,6 +13,7 @@ import {
   COMPACTION_SUGGESTION_MIN_TOKENS,
   isClaudeResumeCompactionQuestion,
 } from "@t3tools/shared/claudeCompaction";
+import type { SessionContextWindow } from "@t3tools/shared/sessionUsageDisplay";
 import * as DateTime from "effect/DateTime";
 
 import { resolvePendingHandoff } from "../handoff.ts";
@@ -46,7 +47,7 @@ export function deriveComposerContextWindow(
   projection: ThreadStructure | null,
   entries: ReadonlyArray<{ readonly item: ThreadStructureTurnItem }>,
   selection: ModelSelection | null | undefined,
-): { readonly usedTokens: number; readonly maxTokens: number | null } | null {
+): SessionContextWindow | null {
   if (
     projection === null ||
     selection?.instanceId !== projection.thread.modelSelection.instanceId ||
@@ -102,9 +103,7 @@ export function deriveComposerContextWindow(
     DateTime.toEpochMillis(compacted.completedAt ?? compacted.updatedAt) >
       Date.parse(snapshot.updatedAt)
   ) {
-    return compacted.afterTokenCount === undefined
-      ? null
-      : { usedTokens: compacted.afterTokenCount, maxTokens };
+    return { usedTokens: compacted.afterTokenCount ?? null, maxTokens };
   }
   return { usedTokens: snapshot.usedTokens, maxTokens };
 }

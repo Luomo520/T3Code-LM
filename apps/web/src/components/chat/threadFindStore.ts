@@ -30,6 +30,7 @@ export interface ThreadFindState {
   readonly navigationId: number;
   readonly requestId: number;
   readonly localSelection: ThreadFindLocalSelection | null;
+  readonly onBackToResults: (() => void) | undefined;
 }
 
 export const CLOSED_THREAD_FIND: ThreadFindState = {
@@ -41,6 +42,7 @@ export const CLOSED_THREAD_FIND: ThreadFindState = {
   navigationId: 0,
   requestId: 0,
   localSelection: null,
+  onBackToResults: undefined,
 };
 
 export const useThreadFindStore = create<ThreadFindState>(() => CLOSED_THREAD_FIND);
@@ -108,6 +110,7 @@ export interface PendingThreadFind {
   readonly query: string;
   /** Where find starts, such as the message a palette result came from. */
   readonly start?: ThreadFindStart;
+  readonly onBackToResults?: () => void;
 }
 
 /**
@@ -124,6 +127,7 @@ export function openThreadFindOnQuery(threadKey: string, find: PendingThreadFind
     offset: 0,
     start: find.start,
     localSelection: null,
+    onBackToResults: find.onBackToResults,
     focusRequestId: previous.focusRequestId + 1,
     navigationId: previous.navigationId + 1,
     requestId: previous.navigationId + 1,

@@ -73,16 +73,20 @@ export function formatTokens(value: number): string {
   return formatScaledTokens(value, TOKEN_SUFFIXES);
 }
 
-function formatScaledTokens(value: number, suffixes: readonly string[]): string {
+function formatScaledTokens(
+  value: number,
+  suffixes: readonly string[],
+  maxFractionDigits = 2,
+): string {
   if (Math.abs(Math.round(value)) < 1e3) return INTEGER.format(Math.round(value));
   let scaled = value / 1e3;
   let unit = 0;
   // Choose the unit after rounding, so 999,999 reads 1M rather than 1000K.
-  while (Math.abs(Number(trim(scaled))) >= 1e3 && unit < suffixes.length - 1) {
+  while (Math.abs(Number(trim(scaled, maxFractionDigits))) >= 1e3 && unit < suffixes.length - 1) {
     scaled /= 1e3;
     unit += 1;
   }
-  return `${trim(scaled)}${suffixes[unit]}`;
+  return `${trim(scaled, maxFractionDigits)}${suffixes[unit]}`;
 }
 
 export function formatConversationTokens(value: number | null | undefined): string {
@@ -93,25 +97,29 @@ export function formatConversationTokens(value: number | null | undefined): stri
 
 export function formatReplyUsage(
   usage:
-    | Pick<
-        ConversationUsageTurn,
-        "cumulativeTokens" | "tokensPerSecond" | "estimatedTokensPerSecond"
-      >
+    | Pick<ConversationUsageTurn, "turnTokens" | "tokensPerSecond" | "estimatedTokensPerSecond">
     | undefined,
 ): { readonly tokens: string; readonly speed: string } {
+  const count = usage?.turnTokens;
   const measured = usage?.tokensPerSecond;
   const estimated = usage?.estimatedTokensPerSecond;
   const knownSpeed = (value: number | null | undefined): value is number =>
     value != null && Number.isFinite(value) && value > 0;
-  let speed = UNKNOWN_CONVERSATION_USAGE;
-  if (knownSpeed(measured)) speed = `${measured.toFixed(1).replace(/\.0$/, "")}t/s`;
-  else if (knownSpeed(estimated)) speed = `≈${estimated.toFixed(1).replace(/\.0$/, "")}t/s`;
-  return { tokens: formatConversationTokens(usage?.cumulativeTokens), speed };
+  const speed = knownSpeed(measured) ? measured : estimated;
+  return {
+    tokens:
+      count == null || !Number.isFinite(count) || count < 0
+        ? UNKNOWN_CONVERSATION_USAGE
+        : formatScaledTokens(count, CONVERSATION_TOKEN_SUFFIXES, 1),
+    speed: knownSpeed(speed)
+      ? `${speed.toFixed(1).replace(/\.0$/, "")}T/s`
+      : UNKNOWN_CONVERSATION_USAGE,
+  };
 }
 
-function trim(value: number): string {
+function trim(value: number, maxFractionDigits: number): string {
   const abs = Math.abs(value);
-  const digits = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
+  const digits = Math.min(maxFractionDigits, abs >= 100 ? 0 : abs >= 10 ? 1 : 2);
   return value.toFixed(digits).replace(/\.0+$/, "");
 }
 

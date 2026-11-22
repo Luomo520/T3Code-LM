@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./replyClipboard": {
+      "types": "./src/replyClipboard.ts",
+      "import": "./src/replyClipboard.ts"
+    },
     "./sessionUsageDisplay": {
       "types": "./src/sessionUsageDisplay.ts",
       "import": "./src/sessionUsageDisplay.ts"

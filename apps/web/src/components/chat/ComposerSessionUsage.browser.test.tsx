@@ -31,11 +31,14 @@ it("previews on hover, pins by click, and closes when clicked outside", async ()
     </>,
   );
   const trigger = screen.getByRole("button", { name: /会话费用.*上下文占用/ });
+  await expect.element(trigger.getByText("$0.12*")).toBeVisible();
+  await expect.element(trigger.getByText("29.0%")).toBeVisible();
   const popup = page.getByRole("dialog", { name: "会话用量" });
   const outside = screen.getByRole("button", { name: "Outside" });
   await userEvent.hover(trigger);
   await expect.element(popup.getByText("仅含已知费用", { exact: false })).toBeVisible();
   await expect.element(popup.getByText("34.0%", { exact: true })).toBeVisible();
+  await expect.element(popup.getByText("29,000 / 100,000 Token", { exact: true })).toBeVisible();
   await expect.element(popup.getByText("分类未知", { exact: true })).toBeVisible();
   await userEvent.hover(outside);
   await expect.element(popup).not.toBeInTheDocument();
@@ -49,7 +52,7 @@ it("previews on hover, pins by click, and closes when clicked outside", async ()
   await expect.element(popup).not.toBeInTheDocument();
 });
 
-it("reports explicitly when the context and costs are unavailable", async () => {
+it("keeps a known context count when the limit and costs are unavailable", async () => {
   await using screen = await render(
     <ComposerSessionUsage
       theme="dark"
@@ -57,6 +60,6 @@ it("reports explicitly when the context and costs are unavailable", async () => 
       contextWindow={{ usedTokens: 10, maxTokens: null }}
     />,
   );
-  await screen.getByRole("button", { name: /会话费用 —，上下文用量未知/ }).click();
-  await expect.element(page.getByText("上下文用量未知", { exact: true })).toBeVisible();
+  await screen.getByRole("button", { name: /会话费用 —，上下文占用未知/ }).click();
+  await expect.element(page.getByText("10 / — Token", { exact: true })).toBeVisible();
 });

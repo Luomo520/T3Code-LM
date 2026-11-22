@@ -381,7 +381,7 @@ function CommandPaletteDialog(props: {
         const composer = composerHandleRef?.current;
         // Behind the Settings modal the composer is inert and cannot take focus.
         if (!composer || document.querySelector("[data-app-modal]")) return returnFocus;
-        composer.focusAtEnd();
+        composer.focus();
         return false;
       }}
       onBackdropPointerDown={() => {
@@ -442,7 +442,9 @@ function OpenCommandPaletteDialog(props: {
   const setQuery = (query: string) => dispatchSearch({ type: "query", query });
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
-  const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
+  const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(
+    initialSearch.position?.itemValue ?? null,
+  );
   const resultListRef = useRef<LegendListRef | null>(null);
   // A pushed view drops the typed highlight until the user moves it again.
   const highlightClearedRef = useRef(viewStack.length > 0);
@@ -922,7 +924,21 @@ function OpenCommandPaletteDialog(props: {
     threadMessageItems,
     now: searchNow,
     isSearchPending: isThreadSearchPending,
-  } = useCommandPaletteThreadItems({ activeThread: activeThread ?? null, threadSearchQuery });
+  } = useCommandPaletteThreadItems({
+    activeThread: activeThread ?? null,
+    threadSearchQuery,
+    rememberResults: (itemValue) => {
+      const context: CommandPaletteReturnContext = {
+        query,
+        linkedThreadSearch,
+        position: {
+          itemValue,
+          scrollOffset: resultListRef.current?.getScrollableNode()?.scrollTop ?? 0,
+        },
+      };
+      return () => dispatchCommandPalette({ _tag: "RestoreSearch", context });
+    },
+  });
   // Recent means used recently: written in or opened, whichever is later. The
   // open thread would always lead that list, so it is left out.
   const activeThreadValue = activeThread
@@ -3039,6 +3055,7 @@ function OpenCommandPaletteDialog(props: {
         rows={resultRows.rows}
         listRef={resultListRef}
         highlightedItemValue={highlightedItemValue}
+        restorePosition={query === initialSearch.query ? initialSearch.position : undefined}
         isActionsOnly={isActionsOnly}
         keybindings={keybindings}
         onExecuteItem={executeItem}

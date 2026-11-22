@@ -3844,6 +3844,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getNativeChildWork: "orchestration.getNativeChildWork",
   stopWorkflow: "orchestration.stopWorkflow",
   forceStopThread: "orchestration.forceStopThread",
+  getMessageDelivery: "orchestration.getMessageDelivery",
   getTurnItem: "orchestration.getTurnItem",
   launchThread: "orchestration.launchThread",
   subscribeShell: "orchestration.subscribeShell",
@@ -4395,6 +4396,21 @@ export class OrchestrationWorkflowFileError extends Schema.TaggedError<Orchestra
   }
 }
 
+export const OrchestrationV2GetMessageDeliveryInput = Schema.Struct({
+  threadId: ThreadId,
+  commandId: CommandId,
+});
+export type OrchestrationV2GetMessageDeliveryInput =
+  typeof OrchestrationV2GetMessageDeliveryInput.Type;
+
+export const OrchestrationV2GetMessageDeliveryResult = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("accepted"), sequence: NonNegativeInt }),
+  Schema.Struct({ status: Schema.Literal("missing") }),
+  Schema.Struct({ status: Schema.Literal("rejected"), message: Schema.NullOr(Schema.String) }),
+]);
+export type OrchestrationV2GetMessageDeliveryResult =
+  typeof OrchestrationV2GetMessageDeliveryResult.Type;
+
 export const OrchestrationV2GetTurnItemInput = Schema.Struct({
   threadId: ThreadId,
   itemId: TurnItemId,
@@ -4552,6 +4568,10 @@ export const OrchestrationV2RpcSchemas = {
   getNativeChildWork: {
     input: OrchestrationV2GetNativeChildWorkInput,
     output: OrchestrationV2GetNativeChildWorkResult,
+  },
+  getMessageDelivery: {
+    input: OrchestrationV2GetMessageDeliveryInput,
+    output: OrchestrationV2GetMessageDeliveryResult,
   },
   getTurnItem: {
     input: OrchestrationV2GetTurnItemInput,

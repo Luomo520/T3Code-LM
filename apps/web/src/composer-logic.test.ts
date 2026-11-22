@@ -17,7 +17,7 @@ import {
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
   composerSubmissionIntentForKey,
-  composerStateAtPromptEnd,
+  composerStateAtCursor,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   extendReplacementRangeForTrailingSpace,
@@ -450,19 +450,19 @@ describe("expandCollapsedComposerCursor", () => {
   });
 });
 
-describe("composerStateAtPromptEnd", () => {
+describe("composerStateAtCursor", () => {
   it("collapses mention chips so the next keystroke lands after the draft", () => {
     const prompt = carryDisplacedCustomAnswerIntoPrompt("", "see @AGENTS.md please");
 
-    expect(composerStateAtPromptEnd(prompt).cursor).toBe("see ".length + 1 + " please".length);
-    expect(composerStateAtPromptEnd(prompt).cursor).not.toBe(0);
-    expect(composerStateAtPromptEnd(prompt).cursor).not.toBe(prompt.length);
+    expect(composerStateAtCursor(prompt).cursor).toBe("see ".length + 1 + " please".length);
+    expect(composerStateAtCursor(prompt).cursor).not.toBe(0);
+    expect(composerStateAtCursor(prompt).cursor).not.toBe(prompt.length);
   });
 
   it("keeps a trailing mention trigger when the restored draft ends with @", () => {
     const prompt = "look at @";
 
-    expect(composerStateAtPromptEnd(prompt)).toEqual({
+    expect(composerStateAtCursor(prompt)).toEqual({
       cursor: prompt.length,
       trigger: { kind: "path", query: "", rangeStart: "look at ".length, rangeEnd: prompt.length },
     });
@@ -561,12 +561,12 @@ describe("literal editor answer cursor state", () => {
 
   it("does not open a skill or path menu when restoring an editor answer", () => {
     for (const value of ["- [X] done $my-skill", "Use @README", ""]) {
-      expect(composerStateAtPromptEnd(value, true)).toEqual({
+      expect(composerStateAtCursor(value, true)).toEqual({
         cursor: value.length,
         trigger: null,
       });
     }
-    expect(composerStateAtPromptEnd("Use $my").trigger?.kind).toBe("skill");
+    expect(composerStateAtCursor("Use $my").trigger?.kind).toBe("skill");
   });
 });
 

@@ -18,6 +18,7 @@ import {
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
+  CommandId,
   DEFAULT_MODEL,
   type EnvironmentId,
   type ModelSelection,
@@ -103,6 +104,10 @@ import {
   multipleModelSendBlock,
   referencedThreadContexts,
 } from "./composerSend.logic";
+import {
+  confirmComposerMessageDelivery,
+  isUncertainComposerDelivery,
+} from "./unconfirmedComposerMessages";
 import { useMultipleModelSend } from "./useMultipleModelSend";
 import { type ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import {
@@ -1131,6 +1136,7 @@ export function useComposerSend(input: ComposerSendInput) {
     const optimisticMessage: ChatMessage = {
       id: messageIdForSend,
       role: "user",
+      delivery: { status: "confirming" },
       text: outgoingMessageText,
       ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
       ...(outgoingMessageContext !== undefined ? { context: outgoingMessageContext } : {}),
@@ -1281,31 +1287,47 @@ export function useComposerSend(input: ComposerSendInput) {
           )
         : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
-      const startPromise = startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            attachments: turnAttachmentsResult.value,
-            ...withMessageContext({
-              text: outgoingMessageText,
-              context: buildOutgoingMessageContext(
-                boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
-              ),
-            }),
+      const commandId = CommandId.make(`send:${messageIdForSend}`);
+      const start = () =>
+        startThreadTurn({
+          environmentId,
+          input: {
+            commandId,
+            resendAfterSocketLoss: false,
+            threadId: threadIdForSend,
+            message: {
+              messageId: messageIdForSend,
+              role: "user",
+              attachments: turnAttachmentsResult.value,
+              ...withMessageContext({
+                text: outgoingMessageText,
+                context: buildOutgoingMessageContext(
+                  boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+                ),
+              }),
+            },
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: title,
+            runtimeMode,
+            interactionMode: DEFAULT_INTERACTION_MODE,
+            dispatchMode: turnDispatchMode,
+            ...(freshArm === undefined ? {} : { freshContext: true }),
+            ...(bootstrap ? { bootstrap } : {}),
+            createdAt: messageCreatedAt,
           },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode: DEFAULT_INTERACTION_MODE,
-          dispatchMode: turnDispatchMode,
-          ...(freshArm === undefined ? {} : { freshContext: true }),
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
+        });
+      const startPromise = start().then((result) =>
+        isUncertainComposerDelivery(result)
+          ? confirmComposerMessageDelivery({
+              environmentId,
+              threadId: threadIdForSend,
+              threadKey: routeThreadKey,
+              commandId,
+              message: optimisticMessage,
+              resend: start,
+            })
+          : result,
+      );
       if (backgroundThreadRef) {
         try {
           backgroundDraftOpened = Boolean(
@@ -1334,6 +1356,13 @@ export function useComposerSend(input: ComposerSendInput) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        setOptimisticUserMessages((existing) =>
+          existing.map((message) =>
+            message.id === messageIdForSend
+              ? { ...message, delivery: { status: "accepted" } }
+              : message,
+          ),
+        );
         if (checkoutPullRequestUrl) {
           linkCheckoutPullRequest(
             scopeThreadRef(environmentId, threadIdForSend),

@@ -315,6 +315,72 @@ it("a stashed prompt ending in a file chip restores with the chip", async () => 
   await expect.element(chip).toBeVisible();
 });
 
+it("resumes typing after an attachment chip when returning to a thread's draft", async () => {
+  const first = threadWithHistory("draft-caret-a", 1);
+  const second = threadWithHistory("draft-caret-b", 1);
+  using _environment = installFakeEnvironment([first, second]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${first.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot 提供实际的会话路由。
+    router: false,
+  });
+  const editor = page.getByTestId("composer-editor");
+  const readDraft = (threadId: ThreadId) =>
+    useComposerDraftStore.getState().getComposerDraft(scopeThreadRef(ENVIRONMENT_ID, threadId));
+  const open = async (threadId: ThreadId) => {
+    await act(() =>
+      router.navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: ENVIRONMENT_ID, threadId },
+      }),
+    );
+    await expect.element(page.getByText(`Answer 0 for ${threadId}.`)).toBeVisible();
+    await expect.element(editor).toHaveFocus();
+  };
+  await expect.element(page.getByText(`Answer 0 for ${first.id}.`)).toBeVisible();
+  await userEvent.click(editor);
+  await userEvent.keyboard("left right{ArrowLeft>5/}");
+
+  const png = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a11UAAAAASUVORK5CYII=",
+    ),
+    (char) => char.charCodeAt(0),
+  );
+  const image = new File([png], "draft-caret.png", { type: "image/png" });
+  const clipboardData = new DataTransfer();
+  clipboardData.items.add(image);
+  await act(() => {
+    editor
+      .element()
+      .dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }),
+      );
+  });
+  await vi.waitFor(() =>
+    expect(editor.element().textContent).toMatch(/left.*draft-caret\.png.*right/),
+  );
+
+  await open(second.id);
+  await userEvent.keyboard("independent draft");
+  await expect.element(editor).toHaveTextContent("independent draft");
+
+  await open(first.id);
+  await userEvent.keyboard("RESUMED");
+  await vi.waitFor(() =>
+    expect(editor.element().textContent).toMatch(/draft-caret\.png.*RESUMED.*right/),
+  );
+  expect(readDraft(first.id)?.images.map(({ name }) => name)).toEqual([image.name]);
+  expect(readDraft(second.id)).toMatchObject({ prompt: "independent draft", images: [] });
+});
+
 it("a rejected send leaves the timeline when a new draft was typed meanwhile", async () => {
   const thread = threadWithHistory("rejected-send", 1);
   using _environment = installFakeEnvironment([thread], {

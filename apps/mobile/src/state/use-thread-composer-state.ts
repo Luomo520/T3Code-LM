@@ -123,6 +123,7 @@ import {
 } from "./use-thread-detail";
 import { useThreadSelection } from "./use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import { setThreadMessageDeliveryState } from "./thread-message-delivery";
 import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-thread-outbox";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
@@ -252,6 +253,20 @@ export function useThreadComposerState(input: {
     }));
   };
   const selectedThreadMessages = selectedThreadProjection?.projection.messages;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 用服务端会话消息的回显结束发件箱的投递确认
+  useEffect(() => {
+    if (!selectedThreadKey || !selectedThreadMessages?.length) return;
+    for (const pending of queuedMessagesByThreadKey[selectedThreadKey] ?? []) {
+      if (
+        pending.deliveryUnconfirmed &&
+        selectedThreadMessages.some(
+          (message) => message.role === "user" && message.id === pending.messageId,
+        )
+      ) {
+        setThreadMessageDeliveryState(pending.messageId, "accepted");
+      }
+    }
+  }, [selectedThreadKey, selectedThreadMessages, queuedMessagesByThreadKey]);
   const selectedThreadAttempts = selectedThreadProjection?.projection.attempts;
   const selectedThreadNodes = selectedThreadProjection?.projection.nodes;
   const selectedThreadSequence = useAtomValue(

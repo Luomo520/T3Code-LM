@@ -3,6 +3,7 @@ import {
   SESSION_COST_COLORS,
   SESSION_COST_LABELS,
   sessionUsageDisplay,
+  type SessionContextWindow,
 } from "@t3tools/shared/sessionUsageDisplay";
 import { useState } from "react";
 import { Keyboard, Modal, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
@@ -12,10 +13,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 
 interface ComposerSessionUsageProps {
   readonly usage?: ConversationUsage | null;
-  readonly contextWindow?: {
-    readonly usedTokens: number;
-    readonly maxTokens: number | null;
-  } | null;
+  readonly contextWindow?: SessionContextWindow | null | undefined;
 }
 
 const CONTEXT_COLOR = { light: "#23794e", dark: "#65ce96" };
@@ -41,55 +39,58 @@ export function ComposerSessionUsage({ usage, contextWindow }: ComposerSessionUs
           .join("，")}
         accessibilityHint="查看会话用量详情"
         accessibilityState={{ expanded }}
-        className="min-h-12 min-w-12 max-w-[110px] shrink-0 justify-center gap-0.5 rounded-lg px-1.5 active:bg-subtle"
+        className="min-h-12 min-w-12 max-w-[132px] shrink-0 justify-center rounded-lg px-1.5 active:bg-subtle"
         onPress={() => {
           Keyboard.dismiss();
           setExpanded(true);
         }}
       >
-        <Text
-          className="text-right text-xs font-t3-medium tabular-nums"
-          numberOfLines={1}
-          maxFontSizeMultiplier={1.3}
-        >
-          {display.costLabel}
-        </Text>
-        <View
-          importantForAccessibility="no-hide-descendants"
-          className="h-[3px] flex-row overflow-hidden rounded-full bg-subtle-strong"
-        >
-          {display.categorySegments.map((segment) => (
-            <View
-              key={segment.category}
-              style={{
-                flex: segment.share,
-                backgroundColor: SESSION_COST_COLORS[segment.category][themeAppearance],
-              }}
-            />
-          ))}
-        </View>
-        {display.contextPercentage === null ? (
+        <View className="flex-row items-center justify-end gap-1.5">
           <Text
-            className="text-right text-2xs text-foreground-muted"
+            className="shrink text-right text-xs font-t3-medium tabular-nums"
             numberOfLines={1}
             maxFontSizeMultiplier={1.3}
           >
-            {display.contextLabel}
+            {display.costLabel}
           </Text>
-        ) : (
           <View
             importantForAccessibility="no-hide-descendants"
-            className="h-[3px] overflow-hidden rounded-full bg-subtle-strong"
+            className="h-[3px] w-6 shrink-0 flex-row overflow-hidden rounded-full bg-subtle-strong"
           >
-            <View
-              className="h-full"
-              style={{
-                width: `${display.contextPercentage}%`,
-                backgroundColor: CONTEXT_COLOR[themeAppearance],
-              }}
-            />
+            {display.categorySegments.map((segment) => (
+              <View
+                key={segment.category}
+                style={{
+                  flex: segment.share,
+                  backgroundColor: SESSION_COST_COLORS[segment.category][themeAppearance],
+                }}
+              />
+            ))}
           </View>
-        )}
+        </View>
+        <View className="flex-row items-center justify-end gap-1.5">
+          <Text
+            className="shrink text-right text-xs tabular-nums"
+            numberOfLines={1}
+            maxFontSizeMultiplier={1.3}
+          >
+            {display.contextPercentageLabel}
+          </Text>
+          <View
+            importantForAccessibility="no-hide-descendants"
+            className="h-0.5 w-6 shrink-0 overflow-hidden rounded-full bg-subtle-strong"
+          >
+            {display.contextBarPercentage === null ? null : (
+              <View
+                className="h-full"
+                style={{
+                  width: `${display.contextBarPercentage}%`,
+                  backgroundColor: CONTEXT_COLOR[themeAppearance],
+                }}
+              />
+            )}
+          </View>
+        </View>
       </Pressable>
       {expanded ? (
         <Modal transparent animationType="fade" onRequestClose={close}>
@@ -119,7 +120,11 @@ export function ComposerSessionUsage({ usage, contextWindow }: ComposerSessionUs
                 ) : null}
                 <UsageDetailRow label="最近一轮费用" value={display.recentCostLabel} />
                 <UsageDetailRow label="最近一轮缓存命中率" value={display.cacheRateLabel} />
-                <Text className="text-sm">{display.contextLabel}</Text>
+                <UsageDetailRow
+                  label="上下文（已用 / 有效上限）"
+                  value={display.contextTokensLabel}
+                />
+                <UsageDetailRow label="上下文占用" value={display.contextPercentageLabel} />
                 {display.costPartial || display.recentCostPartial ? (
                   <Text className="text-xs text-foreground-muted">* {knownCostNote}</Text>
                 ) : null}

@@ -77,8 +77,11 @@ export function useWorktreeSetup(input: {
     readonly routeThreadRef: ScopedThreadRef;
     readonly latestSnapshot: WorktreeSetupSnapshot | null | undefined;
   }>({ routeThreadRef, latestSnapshot: null });
-  if (heldFor.routeThreadRef !== routeThreadRef || heldFor.latestSnapshot !== latestSnapshot) {
-    const routeChanged = heldFor.routeThreadRef !== routeThreadRef;
+  // 同一会话的引用对象可以重新创建，只有环境或会话 ID 变化时才清空保留的状态。
+  const routeChanged =
+    heldFor.routeThreadRef.environmentId !== routeThreadRef.environmentId ||
+    heldFor.routeThreadRef.threadId !== routeThreadRef.threadId;
+  if (routeChanged || heldFor.latestSnapshot !== latestSnapshot) {
     setHeldFor({ routeThreadRef, latestSnapshot });
     if (routeChanged) {
       setHeldSnapshot(null);

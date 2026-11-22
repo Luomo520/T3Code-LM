@@ -283,6 +283,7 @@ export function aggregateConversationUsage(input: {
     costPartial ||= run.costPartial;
     turns.push({
       runId: RunId.make(runId),
+      turnTokens: run.tokens,
       // 此字段是截至这一轮的会话累计量；本轮缺少记录时保留 null，以免沿用上一轮的数字。
       cumulativeTokens: run.tokens === null ? null : tokens,
       tokensPerSecond: run.speed.seconds > 0 ? run.speed.tokens / run.speed.seconds : null,

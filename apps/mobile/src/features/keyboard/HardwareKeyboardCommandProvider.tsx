@@ -23,7 +23,7 @@ import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import { useThreadShell } from "../../state/entities";
 import type { GitActionProgress } from "../../state/use-vcs-action-state";
 import { GitActionProgressOverlay } from "../threads/GitActionProgressOverlay";
-import { CommandPalette } from "./CommandPalette";
+import { CommandPalette, type CommandPaletteSearchPosition } from "./CommandPalette";
 import {
   dispatchHardwareKeyboardCommand,
   getHardwareKeyboardCommandRegistrationVersion,
@@ -54,7 +54,12 @@ export function HardwareKeyboardCommandProvider({
 }: PropsWithChildren<{ readonly pathname: string }>) {
   const navigation = useNavigation();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteSearch, setPaletteSearch] = useState<CommandPaletteSearchPosition | null>(null);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const returnToPaletteSearch = useCallback((search: CommandPaletteSearchPosition) => {
+    setPaletteSearch(search);
+    setPaletteOpen(true);
+  }, []);
   const activeThreadRef = useMemo(() => parseActiveThreadPath(pathname), [pathname]);
   const activeThread = useThreadShell(activeThreadRef);
   const copyTarget = useMemo(
@@ -127,6 +132,7 @@ export function HardwareKeyboardCommandProvider({
   const onCommand = useCallback(
     (command: HardwareKeyboardCommand) => {
       if (command === "commandPalette") {
+        setPaletteSearch(null);
         setPaletteOpen(true);
         return;
       }
@@ -188,9 +194,15 @@ export function HardwareKeyboardCommandProvider({
   const palette = useMemo(
     () =>
       paletteOpen ? (
-        <CommandPalette pathname={pathname} onClose={closePalette} onCommand={onCommand} />
+        <CommandPalette
+          pathname={pathname}
+          onClose={closePalette}
+          onCommand={onCommand}
+          initialSearch={paletteSearch}
+          onReturnToSearch={returnToPaletteSearch}
+        />
       ) : null,
-    [closePalette, onCommand, paletteOpen, pathname],
+    [closePalette, onCommand, paletteOpen, paletteSearch, pathname, returnToPaletteSearch],
   );
 
   return (

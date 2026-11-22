@@ -4,6 +4,8 @@ import { hostEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { AttachmentLimitSettingsRow } from "./AttachmentLimitSettingsRow";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
+import { APP_VERSION, DESKTOP_APP_VERSION, DESKTOP_DEVICE_NAME } from "../../branding";
+import { isHostedStaticApp } from "../../hostedPairing";
 import { CheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -15,6 +17,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceId,
   type SidebarProjectGroupingMode,
+  type DesktopUpdateState,
 } from "@t3tools/contracts";
 import {
   DEFAULT_UNIFIED_SETTINGS,
@@ -30,6 +33,7 @@ import {
 } from "@t3tools/contracts/settings";
 import { createModelSelection, pickModelSelection } from "@t3tools/shared/model";
 import { resolvePastedPath } from "@t3tools/shared/path";
+import { resolveForkUpdateTarget } from "@t3tools/shared/forkRelease";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { AboutVersionTitle } from "./AboutVersionTitle";
@@ -76,7 +80,9 @@ import { isMacPlatform, isWindowsPlatform } from "../../lib/utils";
 import {
   useEnvironmentProviders,
   useEnvironments,
+  usePrimaryEnvironment,
   usePrimaryEnvironmentId,
+  type EnvironmentPresentation,
 } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { Button } from "../ui/button";
@@ -118,7 +124,11 @@ import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
 import { StorageCleanupSections } from "./StorageSettings";
 import { BackendRestartSection } from "./BackendRestartSection";
 import { UpdateDownloadProgress } from "../ServerUpdateAction";
-import { ServerVersionUpdateRow } from "./ServerVersionUpdate";
+import {
+  ServerVersionUpdateRow,
+  desktopUpdateAvailability,
+  useServerVersionUpdate,
+} from "./ServerVersionUpdate";
 import { downloadLocalUpdate } from "../sidebar/SidebarUpdatePill";
 
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
@@ -164,8 +174,7 @@ const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
 };
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
-function AboutVersionSection() {
-  const updateState = useDesktopUpdateState();
+function AboutVersionSection({ updateState }: { readonly updateState: DesktopUpdateState | null }) {
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
 
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
@@ -267,28 +276,31 @@ function AboutVersionSection() {
   };
   const buttonLabel =
     actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "检查 PC 客户端更新";
-  const description =
-    action === "download" || action === "install"
-      ? `可更新至 ${updateState?.downloadedVersion ?? updateState?.availableVersion ?? "新版"}，包含内置后端。`
-      : (getDesktopUpdateDisabledReason(updateState, updatesDenial) ??
-        (updateState?.status === "up-to-date"
-          ? "PC 客户端已是最新版本。"
-          : "PC 客户端及内置后端。"));
+  const device = DESKTOP_DEVICE_NAME ?? "本机";
+  const version = DESKTOP_APP_VERSION ?? updateState?.currentVersion ?? APP_VERSION;
+  const disabledReason = getDesktopUpdateDisabledReason(updateState, updatesDenial);
 
   return (
     <>
       <SettingsRow
         id={searchableSetting("app-version").id}
-        title={<AboutVersionTitle />}
-        description={description}
+        title={`PC 客户端 · ${device}`}
+        description={<AboutVersionTitle version={version} />}
         status={
-          updateState?.status === "downloading" ? (
-            <UpdateDownloadProgress
-              label="PC 客户端更新下载进度"
-              detail="正在下载 PC 客户端…"
-              percent={updateState.downloadPercent ?? undefined}
-            />
-          ) : null
+          <>
+            <p>可更新版本 {desktopUpdateAvailability(updateState)}</p>
+            {disabledReason ? <p>{disabledReason}</p> : null}
+            {!disabledReason && updateState?.status === "error" && updateState.message ? (
+              <p role="alert">{updateState.message}</p>
+            ) : null}
+            {updateState?.status === "downloading" ? (
+              <UpdateDownloadProgress
+                label="PC 客户端更新下载进度"
+                detail="正在下载 PC 客户端…"
+                percent={updateState.downloadPercent ?? undefined}
+              />
+            ) : null}
+          </>
         }
         managed={updatesDenial}
         control={
@@ -2226,30 +2238,83 @@ export function MaintenanceSettingsPanel() {
   );
 }
 
-function AboutServerUpdates() {
+function AboutServerUpdates({
+  desktopUpdate,
+}: {
+  readonly desktopUpdate: DesktopUpdateState | null;
+}) {
   const { environments } = useEnvironments();
   const primaryId = usePrimaryEnvironmentId();
   const hostId = useAtomValue(hostEnvironmentIdAtom);
-  const targets = isElectron
-    ? environments.filter(
-        (environment) =>
-          environment.entry.enabled &&
-          environment.environmentId !== primaryId &&
-          environment.environmentId !== hostId &&
-          !isDesktopLocalConnectionTarget(environment.entry.target),
-      )
-    : environments.filter((environment) => environment.environmentId === primaryId);
+  const targets = environments.filter((environment) => environment.entry.enabled);
   if (targets.length === 0) return null;
   return (
     <SettingsSection id="about-server-updates" title="服务端">
-      {targets.map(({ environmentId }) => (
+      {targets.map((environment) => (
         <ServerVersionUpdateRow
-          key={environmentId}
-          environmentId={environmentId}
-          servesWeb={!isElectron}
+          key={environment.environmentId}
+          environmentId={environment.environmentId}
+          servesWeb={servesCurrentWebsite(environment)}
+          {...(isElectron &&
+          (environment.environmentId === primaryId ||
+            environment.environmentId === hostId ||
+            isDesktopLocalConnectionTarget(environment.entry.target))
+            ? { bundledDesktop: { updateState: desktopUpdate } }
+            : {})}
         />
       ))}
     </SettingsSection>
+  );
+}
+
+function servesCurrentWebsite(environment: EnvironmentPresentation | null) {
+  const target = environment?.entry.target;
+  return (
+    !isElectron &&
+    typeof window !== "undefined" &&
+    !isHostedStaticApp() &&
+    target?._tag === "PrimaryConnectionTarget" &&
+    URL.parse(target.httpBaseUrl)?.origin === window.location.origin
+  );
+}
+
+function AboutWebVersionSection() {
+  const primary = usePrimaryEnvironment();
+  const servedByPrimary = servesCurrentWebsite(primary);
+  const update = useServerVersionUpdate(servedByPrimary ? primary : null);
+  // 网页当前版本来自已加载的资源，服务端重连后仍需刷新网页才能换用新资源。
+  const readyVersion = resolveForkUpdateTarget(
+    APP_VERSION,
+    update.runningVersion ?? null,
+  ).targetVersion;
+  const offeredVersion = resolveForkUpdateTarget(
+    APP_VERSION,
+    update.lookup.isSuccess ? (update.lookup.data?.version ?? null) : null,
+  );
+  const availableVersion =
+    readyVersion ??
+    offeredVersion.targetVersion ??
+    (update.lookup.isPending
+      ? "正在检查"
+      : update.lookup.isSuccess && !offeredVersion.manualCheckRequired
+        ? "无，已是最新版本"
+        : servedByPrimary
+          ? "未确认"
+          : "由网页站点发布");
+  return (
+    <SettingsRow
+      id={searchableSetting("app-version").id}
+      title={typeof window === "undefined" ? "网页客户端" : `网页客户端 · ${window.location.host}`}
+      description={<AboutVersionTitle />}
+      status={<p>可更新版本 {availableVersion}</p>}
+      control={
+        readyVersion ? (
+          <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+            刷新网页
+          </Button>
+        ) : null
+      }
+    />
   );
 }
 
@@ -2258,9 +2323,10 @@ export function AboutSettingsPanel() {
   // The Welcome page sets up this computer, so it needs one.
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const telemetryOff = managedTelemetryOffMessage(primaryPolicy);
+  const desktopUpdate = useDesktopUpdateState();
   return (
     <SettingsPageContainer>
-      <SettingsSection id="about" title="App">
+      <SettingsSection id="about" title="客户端">
         {primaryPolicy ? (
           <SettingsRow
             title="Organization"
@@ -2281,15 +2347,9 @@ export function AboutSettingsPanel() {
           />
         ) : null}
         {isElectron ? (
-          <AboutVersionSection />
+          <AboutVersionSection updateState={desktopUpdate} />
         ) : (
-          <>
-            <SettingsRow
-              id={searchableSetting("app-version").id}
-              title={<AboutVersionTitle />}
-              description="Current version of the application."
-            />
-          </>
+          <AboutWebVersionSection />
         )}
         <MobileAppSettingsRow />
         {primaryEnvironmentId === null ? null : (
@@ -2305,7 +2365,7 @@ export function AboutSettingsPanel() {
         )}
       </SettingsSection>
 
-      <AboutServerUpdates />
+      <AboutServerUpdates desktopUpdate={desktopUpdate} />
       <SettingsSection id="legal" title="Legal">
         <SettingsRow
           {...searchableSetting("privacy-policy")}

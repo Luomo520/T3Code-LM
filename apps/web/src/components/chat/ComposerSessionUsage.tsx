@@ -4,8 +4,10 @@ import {
   SESSION_COST_COLORS,
   SESSION_COST_LABELS,
   sessionUsageDisplay,
+  type SessionContextWindow,
 } from "@t3tools/shared/sessionUsageDisplay";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { composerFloatingLayerProps } from "./composerEventScope";
 
 export function ComposerSessionUsage({
   usage,
@@ -13,10 +15,7 @@ export function ComposerSessionUsage({
   theme,
 }: {
   readonly usage: ConversationUsage | null | undefined;
-  readonly contextWindow:
-    | { readonly usedTokens: number; readonly maxTokens: number | null }
-    | null
-    | undefined;
+  readonly contextWindow: SessionContextWindow | null | undefined;
   readonly theme: "light" | "dark";
 }) {
   const [mode, setMode] = useState<"hover" | "pinned" | null>(null);
@@ -41,37 +40,49 @@ export function ComposerSessionUsage({
         type="button"
         openOnHover={mode !== "pinned"}
         delay={150}
+        data-composer-session-usage
         aria-label={`会话费用 ${display.costLabel}，${display.contextLabel}，查看用量详情`}
         render={
           <button
             type="button"
-            className="flex min-h-7 max-w-full items-center gap-2 rounded-md px-2 text-xs text-muted-foreground tabular-nums hover:bg-accent hover:text-accent-foreground focus-visible:outline focus-visible:outline-ring pointer-coarse:min-h-11"
+            className="grid min-h-7 shrink-0 grid-cols-[auto_1.5rem] content-center items-center gap-x-1.5 rounded-md px-1.5 text-xs leading-tight whitespace-nowrap text-foreground tabular-nums hover:bg-accent hover:text-accent-foreground focus-visible:outline focus-visible:outline-ring pointer-coarse:min-h-11"
           />
         }
       >
-        <span className="max-w-full truncate">{display.costLabel}</span>
-        <span className="flex w-14 shrink-0 flex-col gap-1" aria-hidden>
-          <span className="flex h-[3px] overflow-hidden rounded-full bg-muted-foreground/25">
-            {display.categorySegments.map(({ category, share }) => (
-              <span
-                key={category}
-                style={{
-                  width: `${share * 100}%`,
-                  backgroundColor: SESSION_COST_COLORS[category][theme],
-                }}
-              />
-            ))}
-          </span>
-          <span className="flex h-0.5 overflow-hidden rounded-full bg-muted-foreground/25">
-            {display.contextPercentage === null ? null : (
-              <span
-                style={{ width: `${display.contextPercentage}%`, backgroundColor: contextColor }}
-              />
-            )}
-          </span>
+        <span className="text-end">{display.costLabel}</span>
+        <span
+          aria-hidden
+          className="flex h-[3px] overflow-hidden rounded-full bg-muted-foreground/25"
+        >
+          {display.categorySegments.map(({ category, share }) => (
+            <span
+              key={category}
+              style={{
+                width: `${share * 100}%`,
+                backgroundColor: SESSION_COST_COLORS[category][theme],
+              }}
+            />
+          ))}
+        </span>
+        <span className="text-end">{display.contextPercentageLabel}</span>
+        <span
+          aria-hidden
+          className="flex h-0.5 overflow-hidden rounded-full bg-muted-foreground/25"
+        >
+          {display.contextBarPercentage === null ? null : (
+            <span
+              style={{ width: `${display.contextBarPercentage}%`, backgroundColor: contextColor }}
+            />
+          )}
         </span>
       </PopoverTrigger>
-      <PopoverPopup side="top" align="end" width="sm" padding="compact">
+      <PopoverPopup
+        side="top"
+        align="end"
+        width="sm"
+        padding="compact"
+        {...composerFloatingLayerProps}
+      >
         <div className="mb-2">
           <PopoverTitle>会话用量</PopoverTitle>
         </div>
@@ -99,7 +110,12 @@ export function ComposerSessionUsage({
             ))}
           </dl>
         ) : null}
-        <p className="mt-2 text-xs text-muted-foreground">{display.contextLabel}</p>
+        <dl className="mt-2 grid grid-cols-[1fr_auto] gap-x-2 gap-y-1.5 border-t border-border pt-2 text-xs tabular-nums">
+          <dt>上下文（已用 / 有效上限）</dt>
+          <dd className="text-end">{display.contextTokensLabel}</dd>
+          <dt>上下文占用</dt>
+          <dd className="text-end">{display.contextPercentageLabel}</dd>
+        </dl>
         {display.costPartial || display.recentCostPartial ? (
           <p className="mt-1 text-xs text-muted-foreground">* 仅含已知费用</p>
         ) : null}

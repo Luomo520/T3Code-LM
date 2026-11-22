@@ -1039,6 +1039,7 @@ const make = Effect.gen(function* () {
       ),
       Effect.ignoreCause,
       Effect.ensuring(releasePreparation(input.commandId)),
+      Effect.interruptible,
       Effect.forkIn(preparationScope),
     );
   });
@@ -1078,7 +1079,8 @@ const make = Effect.gen(function* () {
         commandId: input.commandId,
         instanceId: input.modelSelection.instanceId,
       });
-      return yield* Effect.gen(function* () {
+      // 客户端断开后，已提交消息的准备任务仍须入队，才能按回执确认投递。
+      const dispatched = yield* Effect.gen(function* () {
         // Recover ids from accepted launch receipts before allocating; retries have no client id and new ids collide with receipts.
         const reusableLaunchReceipt =
           input.threadId === undefined &&
@@ -1286,13 +1288,8 @@ const make = Effect.gen(function* () {
             );
           }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
         }
-        const projection = yield* threads
-          .getThreadProjection(threadId)
-          .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
-
         return {
           threadId,
-          projection,
           // An attempt that failed after claiming the thread recorded nothing, so
           // only a repeat of the final write counts as resumed.
           resumed:
@@ -1301,7 +1298,12 @@ const make = Effect.gen(function* () {
               : messageWasAlreadyAccepted,
           ...(messageSequence === undefined ? {} : { sequence: messageSequence }),
         };
-      });
+      }).pipe(Effect.uninterruptible);
+
+      const projection = yield* threads
+        .getThreadProjection(dispatched.threadId)
+        .pipe(Effect.mapError(mapError(input, "create-thread", dispatched.threadId)));
+      return { ...dispatched, projection };
     },
   );
 

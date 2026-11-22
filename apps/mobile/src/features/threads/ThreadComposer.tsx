@@ -119,6 +119,7 @@ import {
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
 import { ComposerSessionUsage } from "../usage/ComposerSessionUsage";
+import type { SessionContextWindow } from "@t3tools/shared/sessionUsageDisplay";
 import type { ExistingThreadSettingsRouteParams } from "./ThreadSettingsSheet";
 import {
   useThreadSettingsSheetPresentation,
@@ -220,10 +221,7 @@ export interface ThreadComposerProps {
   readonly selectedThread: EnvironmentThreadShell;
   readonly reportedModelSelection?: ModelSelection | null;
   readonly sessionUsage?: ConversationUsage | null | undefined;
-  readonly contextWindow?:
-    | { readonly usedTokens: number; readonly maxTokens: number | null }
-    | null
-    | undefined;
+  readonly contextWindow?: SessionContextWindow | null | undefined;
   readonly hasCompactableConversation: boolean;
   /** Arms a fresh session for the next message; absent where `/clear` is unavailable. */
   readonly onFreshSession?: () => void;

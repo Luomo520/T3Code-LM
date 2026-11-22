@@ -5,7 +5,7 @@ import { NAVIGATION_TAB_ORDER } from "./navigation-tab-order";
 import { useNavigationState } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAndroidControlSizing } from "../../../components/ui/useAndroidControlSizing";
-import { FLOATING_TABS } from "./floating-workspace-tabs";
+import { floatingDockBottomClearance } from "./floating-workspace-tabs";
 import { View } from "react-native";
 import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { PullRequestsScreen } from "../../pull-requests/PullRequestsScreen";
@@ -32,7 +32,7 @@ export function AndroidWorkspaceSidebar() {
   const coveredByPage =
     (useAndroidWorkspaceRoot()?.settingsOpen ?? false) || workspace.state.selectedTab === "usage";
   const bottomClearance = floatingTabsEnabled
-    ? insets.bottom + FLOATING_TABS.bottom + FLOATING_TABS.edge + fabSize
+    ? floatingDockBottomClearance(insets.bottom, fabSize)
     : 16;
   const context = { ...workspace, bottomClearance };
   if (enabled.length === 0) return <WorkspaceNoTabs />;

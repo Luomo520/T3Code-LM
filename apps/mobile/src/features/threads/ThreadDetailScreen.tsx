@@ -28,6 +28,7 @@ import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
+import type { SessionContextWindow } from "@t3tools/shared/sessionUsageDisplay";
 import { queuedRunEditBlockedReason } from "@t3tools/client-runtime/queued-run-edit";
 import {
   childThreadInputsTitle,
@@ -254,10 +255,7 @@ export interface ThreadDetailScreenProps {
   readonly providerSubagentStatus?: ProviderSubagentStatus | null;
   readonly extensionStatuses?: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
   readonly isCompacting: boolean;
-  readonly contextWindow?: {
-    readonly usedTokens: number;
-    readonly maxTokens: number | null;
-  } | null;
+  readonly contextWindow?: SessionContextWindow | null;
   /** Set while the next send compacts the thread first. */
   readonly compactBeforeSend?: {
     readonly tokens: number;
@@ -936,9 +934,10 @@ function ThreadDetailBody(
   const selectedThreadFeed = props.selectedThreadFeed;
   // A palette message result opens the thread at that message: earlier
   // history loads until the message is in the feed, which then scrolls to it.
-  const jumpMessageId = useSyncExternalStore(subscribeThreadMessageJump, () =>
+  const messageJump = useSyncExternalStore(subscribeThreadMessageJump, () =>
     pendingThreadMessageJump(selectedThreadKey),
   );
+  const jumpMessageId = messageJump?.messageId ?? null;
   const jumpMessageLoaded =
     jumpMessageId !== null &&
     selectedThreadFeed.some((entry) => entry.type === "message" && entry.id === jumpMessageId);
@@ -950,10 +949,10 @@ function ThreadDetailBody(
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- requests earlier history from the server until the jump target message loads, or ends the jump
   useEffect(() => {
-    if (jumpMessageId === null || jumpMessageLoaded || contentPresentationKind !== "ready") return;
+    if (messageJump === null || jumpMessageLoaded || contentPresentationKind !== "ready") return;
     if (historyForJump?.loading) return;
     if (!historyForJump?.hasMoreHistory || historyForJump.error !== null) {
-      finishThreadMessageJump(selectedThreadKey);
+      finishThreadMessageJump(selectedThreadKey, messageJump);
       return;
     }
     loadEarlierForJump();
@@ -962,7 +961,7 @@ function ThreadDetailBody(
     historyForJump?.error,
     historyForJump?.hasMoreHistory,
     historyForJump?.loading,
-    jumpMessageId,
+    messageJump,
     jumpMessageLoaded,
     selectedThreadKey,
   ]);
@@ -1533,8 +1532,10 @@ function ThreadDetailBody(
                     listRef={listRef}
                     freeze={freeze}
                     anchorMessageId={anchorMessageId}
-                    jumpToMessageId={jumpMessageLoaded ? jumpMessageId : null}
-                    onJumpedToMessage={() => finishThreadMessageJump(selectedThreadKey)}
+                    messageJump={jumpMessageLoaded ? messageJump : null}
+                    onJumpedToMessage={() => {
+                      if (messageJump) finishThreadMessageJump(selectedThreadKey, messageJump);
+                    }}
                     contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
                     keyboardOffset={composerKeyboardOffset}
                     sendingWithKeyboard={sendingWithKeyboard}

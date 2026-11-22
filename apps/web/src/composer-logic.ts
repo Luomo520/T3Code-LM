@@ -302,14 +302,18 @@ export function pastedPathQueryLength(
   return /^\S*/.exec(pasted)![0].length;
 }
 
-export function composerStateAtPromptEnd(
+export function composerStateAtCursor(
   text: string,
   literalText = false,
+  savedCursor?: number,
 ): {
   cursor: number;
   trigger: ComposerTrigger | null;
 } {
-  const cursor = collapseExpandedComposerCursor(text, text.length, literalText);
+  const cursor =
+    savedCursor === undefined
+      ? collapseExpandedComposerCursor(text, text.length, literalText)
+      : clampCollapsedComposerCursor(text, savedCursor, literalText);
   return {
     cursor,
     trigger: literalText

@@ -22,6 +22,8 @@ import {
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
+  type OrchestrationV2GetMessageDeliveryInput,
+  type OrchestrationV2GetMessageDeliveryResult,
   type OrchestrationV2GetTurnItemResult,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ConversationMessage,
@@ -406,6 +408,12 @@ export interface ThreadManagementServiceShape {
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
   readonly getMessagesById: Orchestrator.OrchestratorV2["Service"]["getMessagesById"];
+  readonly getMessageDelivery: (
+    input: OrchestrationV2GetMessageDeliveryInput,
+  ) => Effect.Effect<
+    OrchestrationV2GetMessageDeliveryResult,
+    CommandReceiptStore.CommandReceiptStoreV2Error
+  >;
   readonly getTurnItem: (input: {
     readonly threadId: ThreadId;
     readonly itemId: TurnItemId;
@@ -1730,6 +1738,30 @@ const make = Effect.gen(function* () {
         );
       },
     ),
+    getMessageDelivery: Effect.fn("ThreadManagementService.getMessageDelivery")(function* ({
+      threadId,
+      commandId,
+    }): Effect.fn.Return<
+      OrchestrationV2GetMessageDeliveryResult,
+      CommandReceiptStore.CommandReceiptStoreV2Error
+    > {
+      let receipt = yield* receipts.getByCommandId(commandId);
+      if (
+        Option.isSome(receipt) &&
+        receipt.value.threadId === threadId &&
+        receipt.value.status === "accepted" &&
+        receipt.value.commandType === "thread.metadata.update"
+      ) {
+        // 复用已有线程时，创建声明和首条消息分别提交。
+        receipt = yield* receipts.getByCommandId(CommandId.make(`${commandId}:initial-message`));
+      }
+      if (Option.isNone(receipt) || receipt.value.threadId !== threadId) {
+        return { status: "missing" };
+      }
+      return receipt.value.status === "accepted"
+        ? { status: "accepted", sequence: receipt.value.resultSequence }
+        : { status: "rejected", message: receipt.value.error };
+    }),
     getTurnItem: Effect.fn("ThreadManagementService.getTurnItem")(function (input) {
       return ensureProjectionTranscript(input.threadId).pipe(
         Effect.andThen(orchestrator.getTurnItem(input)),

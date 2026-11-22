@@ -204,6 +204,43 @@ it.effect.each([
   }).pipe(Effect.provide(layerDispatchChokepointTest(settings)(dispatched)));
 });
 
+it.effect("queries only committed delivery receipts for the requesting thread", () =>
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+    const threadId = ThreadId.make("thread:delivery");
+    const commandId = CommandId.make("command:delivery");
+    const input = { threadId, commandId };
+    const getDelivery = () => threads.getMessageDelivery(input);
+    expect(yield* getDelivery()).toEqual({ status: "missing" });
+
+    const claim = {
+      threadId,
+      commandId,
+      commandType: "thread.metadata.update",
+      acceptedAt: yield* DateTime.now,
+      resultSequence: 20,
+      status: "accepted",
+      error: null,
+    } as const;
+    yield* receipts.insertIfAbsent(claim);
+    expect(yield* getDelivery()).toEqual({ status: "missing" });
+
+    yield* receipts.insertIfAbsent({
+      ...claim,
+      commandId: CommandId.make(`${commandId}:initial-message`),
+      commandType: "message.dispatch",
+      resultSequence: 21,
+    });
+    expect(yield* getDelivery()).toEqual({ status: "accepted", sequence: 21 });
+    expect(
+      yield* threads.getMessageDelivery({ ...input, threadId: ThreadId.make("other") }),
+    ).toEqual({
+      status: "missing",
+    });
+  }).pipe(Effect.provide(layerDispatchChokepointTest(ServerSettings.layerTest({}))([]))),
+);
+
 it.effect(
   "the dispatch chokepoint refuses a continuation message.dispatch on a project-disabled instance before reaching the orchestrator",
   () => {

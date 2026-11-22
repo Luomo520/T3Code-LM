@@ -1,39 +1,36 @@
-// Keep the native drawing inset out of the visible size and edge margins.
-export const FLOATING_TABS = { edge: 16, bottom: 12, gap: 12, shadow: 8 };
+export const FLOATING_TABS = { edge: 16, bottom: 12, gap: 12, innerPadding: 6 };
 
-export function floatingTabsMetrics(
-  count: number,
-  scale: number,
-  fabSize: number,
-  paneWidth?: number,
-  fillWidth = false,
-) {
-  const unit = Math.max(1, scale);
-  const spacing = 2 * FLOATING_TABS.edge + FLOATING_TABS.gap;
-  // Share width evenly when space is tight, retaining Android's 48dp touch target.
-  const height =
-    paneWidth === undefined
-      ? fabSize
-      : Math.max(48, Math.min(fabSize, (paneWidth - spacing) / (count + 1)));
-  const beside = spacing + height;
-  const room = paneWidth === undefined ? count * 60 * unit : paneWidth - beside;
-  return {
-    // Reserve the compose slot even while its button is hidden.
-    pill: Math.max(0, fillWidth ? room : Math.min(count * 72 * unit, room)),
-    height,
-    row: beside + count * 60 * unit,
-  };
+export function floatingDockWidth(count: number) {
+  return count * 64 + 2 * FLOATING_TABS.innerPadding;
 }
 
-/** One centered group; pages without a compose action do not reserve an empty slot. */
-export function floatingDockMetrics(
-  count: number,
+function floatingDockHeight(fabSize: number) {
+  return Math.min(68, Math.max(60, fabSize + 4));
+}
+
+export function floatingDockMetrics(count: number, fabSize: number, availableWidth: number) {
+  const height = floatingDockHeight(fabSize);
+  const width = Math.max(0, Math.min(floatingDockWidth(count), availableWidth));
+  const diameter = Math.max(
+    0,
+    Math.min(
+      height - 2 * FLOATING_TABS.innerPadding,
+      (width - 2 * FLOATING_TABS.innerPadding) / count,
+    ),
+  );
+  return { width, height, diameter };
+}
+
+export function floatingDockBottomClearance(
+  bottomInset: number,
   fabSize: number,
-  availableWidth: number,
-  action: boolean,
+  showCompose = false,
 ) {
-  const height = Math.max(48, Math.min(64, fabSize));
-  const actionWidth = action ? height + FLOATING_TABS.gap : 0;
-  const pill = Math.max(0, Math.min(count * 56 + 8, availableWidth - actionWidth));
-  return { pill, height, row: pill + actionWidth };
+  return (
+    bottomInset +
+    FLOATING_TABS.bottom +
+    FLOATING_TABS.edge +
+    floatingDockHeight(fabSize) +
+    (showCompose ? FLOATING_TABS.gap + fabSize : 0)
+  );
 }

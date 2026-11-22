@@ -1,9 +1,10 @@
 import * as Dialog from "../../components/ui/Dialog";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import Constants from "expo-constants";
+import { nativeApplicationVersion } from "expo-application";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { useRef, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -38,7 +39,7 @@ export function SettingsAboutRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         <AppSettingsSection />
-        <AndroidAppUpdateSection />
+        <AndroidAppUpdateSection checkOnOpen />
         {connectedEnvironments.length > 0 ? (
           <SettingsSection title="服务端">
             {connectedEnvironments.map((environment) => (
@@ -66,7 +67,7 @@ function AppSettingsSection() {
   const updateInFlight = useRef(false);
   const hiddenUpdateTapCount = useRef(0);
 
-  const version = Constants.expoConfig?.version ?? "0.0.0";
+  const version = nativeApplicationVersion ?? Constants.expoConfig?.version ?? "未知";
   // Match app.config.ts's production fallback to avoid mislabeling builds as development.
   const variant = (Constants.expoConfig?.extra?.appVariant as string | undefined) ?? "production";
   const variantLabel = variant === "production" ? "" : capitalize(variant);
@@ -150,9 +151,9 @@ function AppSettingsSection() {
         >
           {versionRow}
         </Pressable>
-      ) : (
+      ) : Platform.OS !== "android" ? (
         versionRow
-      )}
+      ) : null}
     </SettingsSection>
   );
 }

@@ -2,7 +2,18 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
-import { AuthOrchestrationOperateScope, AuthSourceControlWriteScope } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthSourceControlWriteScope,
+  EnvironmentId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
+import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
+import { makeThreadFixture } from "../test-fixtures";
+import type { Thread } from "../types";
+import { useThreadFindStore } from "./chat/threadFindStore";
 import { act, render } from "../../test/render";
 import { CommandPalette } from "./CommandPalette";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -11,10 +22,14 @@ import { primaryServerKeybindingsAtom } from "../state/server";
 const scopes = vi.hoisted(() => ({
   denied: undefined as string | undefined,
   sourceControl: undefined as unknown,
+  threads: [] as ReadonlyArray<Thread>,
+  matches: [] as ReadonlyArray<EnvironmentThreadSearchMatch>,
 }));
 const setup = (deniedScope?: string, sourceControl?: unknown) => {
   scopes.denied = deniedScope;
   scopes.sourceControl = sourceControl;
+  scopes.threads = [];
+  scopes.matches = [];
 };
 const githubAvailable = {
   versionControlSystems: [],
@@ -98,7 +113,7 @@ vi.mock("../state/entities", async (original) => ({
   ...(await original<typeof import("../state/entities")>()),
   useProjects: () => [],
   useThreadShells: () => [],
-  useVisibleThreadShells: () => [],
+  useVisibleThreadShells: () => scopes.threads,
   useHiddenThreadKeys: () => new Set(),
   useAnyEnvironmentHiding: () => false,
   useEnvironmentThreadRefs: () => [],
@@ -108,7 +123,7 @@ vi.mock("../state/entities", async (original) => ({
 vi.mock("../state/queries", async (original) => ({
   ...(await original<typeof import("../state/queries")>()),
   useThreadSearch: (_environmentIds: unknown, query: string) => ({
-    matches: [],
+    matches: query ? scopes.matches : [],
     query,
     isPending: false,
   }),
@@ -125,6 +140,11 @@ vi.mock("../state/filesystem", async (original) => ({
 vi.mock("../state/query", async (original) => ({
   ...(await original<typeof import("../state/query")>()),
   useEnvironmentQuery: () => ({ data: scopes.sourceControl, isLoading: false }),
+}));
+vi.mock("./ThreadStatusIndicators", () => ({
+  ThreadRowLeadingStatus: () => null,
+  ThreadRowTrailingStatus: () => null,
+  ThreadSearchPullRequestNumber: () => null,
 }));
 vi.mock("./settings/useAvailableSettingsSearchItems", () => ({
   useAvailableSettingsSearchItems: () => [],
@@ -242,4 +262,70 @@ it("tells screen readers whether a new project will be published", async () => {
   await expect.element(option).toHaveAttribute("aria-checked", "false");
   await option.click();
   await expect.element(option).toHaveAttribute("aria-checked", "true");
+});
+
+it("returns from a message match to the search query and result scroll position", async () => {
+  setup();
+  const environmentId = EnvironmentId.make("local");
+  const projectId = ProjectId.make("project");
+  const threadId = ThreadId.make("message-match");
+  const messageId = MessageId.make("matching-message");
+  scopes.threads = [
+    ...Array.from({ length: 20 }, (_, index) =>
+      makeThreadFixture({
+        environmentId,
+        projectId,
+        id: ThreadId.make(`title-${index}`),
+        title: `pnpm test ${index}`,
+      }),
+    ),
+    makeThreadFixture({ environmentId, projectId, id: threadId, title: "Release checks" }),
+  ];
+  scopes.matches = [
+    {
+      environmentId,
+      projectId,
+      threadId,
+      messageId,
+      source: "assistant",
+      messageCreatedAt: null,
+      snippet: "Before deploying, run pnpm test and review the report.",
+    },
+  ];
+  await using screen = await render(
+    <CommandPalette>
+      <style>{`[data-command-palette] .overscroll-y-contain { max-height: 240px; overflow-y: auto; }`}</style>
+    </CommandPalette>,
+  );
+
+  await act(() => openCommandPalette({ query: "pnpm test" }));
+  const listbox = page.getByRole("listbox");
+  const getScrollContainer = () =>
+    listbox.element().querySelector<HTMLElement>(".overscroll-y-contain")!;
+  await vi.waitFor(() => {
+    const viewport = getScrollContainer();
+    expect(viewport.scrollHeight - viewport.clientHeight).toBeGreaterThan(100);
+  });
+  await act(() => {
+    const viewport = getScrollContainer();
+    viewport.scrollTop = viewport.scrollHeight;
+  });
+
+  const result = page.getByRole("option", { name: /Release checks/ });
+  await expect.element(result).toBeVisible();
+  const position = getScrollContainer().scrollTop;
+  expect(position).toBeGreaterThan(100);
+  await result.click();
+  await vi.waitFor(() => {
+    expect(screen.router?.state.location.pathname).toBe("/local/message-match");
+    expect(useThreadFindStore.getState().start?.entryId).toBe(messageId);
+  });
+
+  const returnToResults = useThreadFindStore.getState().onBackToResults;
+  expect(returnToResults).toBeTypeOf("function");
+  await act(() => returnToResults?.());
+  await expect.element(page.getByRole("combobox")).toHaveValue("pnpm test");
+  await vi.waitFor(() =>
+    expect(Math.abs(getScrollContainer().scrollTop - position)).toBeLessThan(2),
+  );
 });

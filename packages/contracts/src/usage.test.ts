@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-import { HeaderUsageCounters } from "./usage.ts";
+import { ConversationUsageTurn, HeaderUsageCounters } from "./usage.ts";
 
 describe("header request samples", () => {
   it("accepts legacy counters and bounds same-request details to five rows with nullable measurements", () => {
@@ -28,4 +28,21 @@ describe("header request samples", () => {
       decode({ ...legacy, recentRequestSamples: [{ ...samples[0], totalTokens: -1 }] }),
     ).toThrow();
   });
+});
+
+it("decodes replies from servers with or without a per-turn count", () => {
+  const decode = Schema.decodeUnknownSync(ConversationUsageTurn);
+  const legacy = {
+    runId: "old-run",
+    cumulativeTokens: 12_400,
+    tokensPerSecond: 48,
+    estimatedTokensPerSecond: null,
+    costUsd: null,
+    costPartial: false,
+    cacheRate: null,
+  };
+  expect(decode(legacy)).not.toHaveProperty("turnTokens");
+  expect(decode({ ...legacy, turnTokens: 860 }).turnTokens).toBe(860);
+  expect(decode({ ...legacy, turnTokens: 0 }).turnTokens).toBe(0);
+  expect(decode({ ...legacy, turnTokens: null }).turnTokens).toBeNull();
 });

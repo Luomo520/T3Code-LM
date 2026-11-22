@@ -1,6 +1,6 @@
 import { useIsFocused } from "@react-navigation/native";
 import { nativeApplicationVersion, nativeBuildVersion } from "expo-application";
-import { supportedCpuArchitectures } from "expo-device";
+import { deviceName, modelName, supportedCpuArchitectures } from "expo-device";
 import * as Network from "expo-network";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Platform, View } from "react-native";
@@ -46,9 +46,14 @@ function taskDescription(task: AppUpdateDownload): string {
   }
 }
 
-export function AndroidAppUpdateSection() {
+export function AndroidAppUpdateSection({
+  checkOnOpen = false,
+}: {
+  readonly checkOnOpen?: boolean;
+}) {
   const focused = useIsFocused();
   const [checking, setChecking] = useState(false);
+  const [checkComplete, setCheckComplete] = useState(false);
   const [working, setWorking] = useState(false);
   const [asset, setAsset] = useState<AndroidUpdateAsset | null>(null);
   const [task, setTask] = useState<AppUpdateDownload | null>(null);
@@ -57,6 +62,7 @@ export function AndroidAppUpdateSection() {
   const mounted = useRef(true);
   const readGeneration = useRef(0);
   const busy = useRef(false);
+  const initialCheckStarted = useRef(false);
   const activeTask =
     task?.status === "pending" || task?.status === "downloading" || task?.status === "paused";
   const fraction =
@@ -105,9 +111,7 @@ export function AndroidAppUpdateSection() {
     return () => clearInterval(timer);
   }, [activeTask, focused]);
 
-  if (Platform.OS !== "android") return null;
-
-  const check = async () => {
+  const check = useCallback(async () => {
     if (busy.current) return;
     busy.current = true;
     setChecking(true);
@@ -125,7 +129,7 @@ export function AndroidAppUpdateSection() {
       );
       if (!mounted.current) return;
       setAsset(result);
-      setNotice(result ? null : "未发现适用于此设备的更新。可继续使用当前版本。");
+      setCheckComplete(true);
     } catch (error) {
       if (mounted.current)
         setNotice(request.signal.aborted ? "检查更新超时，请重试。" : messageOf(error));
@@ -134,7 +138,29 @@ export function AndroidAppUpdateSection() {
       busy.current = false;
       if (mounted.current) setChecking(false);
     }
-  };
+  }, []);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 首次打开关于页时读取发布信息，下载仍由用户触发。
+  useEffect(() => {
+    if (Platform.OS !== "android" || !checkOnOpen || !focused || initialCheckStarted.current)
+      return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active || initialCheckStarted.current) return;
+      initialCheckStarted.current = true;
+      void check();
+    });
+    return () => {
+      active = false;
+    };
+  }, [check, checkOnOpen, focused]);
+
+  if (Platform.OS !== "android") return null;
+
+  const availableVersion = asset ? `${asset.productVersion}-${asset.build}` : task?.version;
+  const availableVersionLabel = checking
+    ? "正在检查"
+    : (availableVersion ?? (checkComplete ? "无适用于此设备的新版" : "未确认"));
 
   const run = async (action: () => Promise<unknown>) => {
     if (busy.current) return;
@@ -182,13 +208,13 @@ export function AndroidAppUpdateSection() {
 
   return (
     <SettingsSection
-      title="更新 App"
+      title={`Android 客户端 · ${deviceName?.trim() || modelName?.trim() || "未知设备"}`}
       footer={notice ?? "更新包保存到 Download/t3code，下载完成后可确认安装。"}
     >
       <ListActionRow
         icon="arrow.clockwise"
-        label={checking ? "正在检查更新…" : "检查 App 更新"}
-        description={`当前 ${nativeApplicationVersion ?? "未知版本"} · 构建 ${nativeBuildVersion ?? "未知"}`}
+        label={checking ? "正在检查更新…" : "检查客户端更新"}
+        description={`运行版本 ${nativeApplicationVersion ?? "未知"} · 构建 ${nativeBuildVersion ?? "未知"}\n可更新版本 ${availableVersionLabel}`}
         loading={checking}
         disabled={working}
         onPress={() => {

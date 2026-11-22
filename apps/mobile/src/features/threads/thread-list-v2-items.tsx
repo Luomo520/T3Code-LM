@@ -57,6 +57,7 @@ import { copyThreadReference } from "../../lib/copyThreadReference";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useEnvironmentScope } from "../../state/session";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { PendingMessageDelivery } from "./PendingMessageDelivery";
 import {
   pendingDraftBranchNeedsRefs,
   resolvePendingDraftBranch,
@@ -521,16 +522,20 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
       </View>
       {!isDraft ? (
         <View className="mt-1" style={{ paddingLeft: titleTextInset }}>
-          <Text
-            className={cn(
-              "text-xs",
-              selected
-                ? selectedThreadRowColors.foregroundClassName
-                : rowAppearance.tertiaryForegroundClassName,
-            )}
-          >
-            {"重新连接后发送"}
-          </Text>
+          {pendingTask.message.deliveryUnconfirmed ? (
+            <PendingMessageDelivery message={pendingTask.message} />
+          ) : (
+            <Text
+              className={cn(
+                "text-xs",
+                selected
+                  ? selectedThreadRowColors.foregroundClassName
+                  : rowAppearance.tertiaryForegroundClassName,
+              )}
+            >
+              重新连接后发送
+            </Text>
+          )}
         </View>
       ) : null}
       {branch || props.environmentLabel ? (

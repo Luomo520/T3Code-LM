@@ -107,12 +107,16 @@ export interface DesktopAppBranding {
   baseName: string;
   stageLabel: DesktopAppStageLabel;
   displayName: string;
+  deviceName?: string;
+  appVersion?: string;
 }
 
 export const DesktopAppBrandingSchema = Schema.Struct({
   baseName: Schema.String,
   stageLabel: DesktopAppStageLabelSchema,
   displayName: Schema.String,
+  deviceName: Schema.optionalKey(Schema.String),
+  appVersion: Schema.optionalKey(Schema.String),
 });
 
 export const DesktopSnapShotMode = Schema.Literals(["direct", "portal", "unavailable"]);

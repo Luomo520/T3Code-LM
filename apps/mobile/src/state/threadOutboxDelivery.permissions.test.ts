@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
     readonly dispose: () => void;
   } | null,
   start: vi.fn(),
+  getDelivery: vi.fn(),
   metadata: vi.fn(),
   runtime: vi.fn(),
   interaction: vi.fn(),
@@ -90,6 +91,7 @@ vi.mock("./threads", async () => {
   return {
     threadEnvironment: {
       startTurn: state.start,
+      getMessageDelivery: state.getDelivery,
       updateMetadata: state.metadata,
       setRuntimeMode: state.runtime,
       setInteractionMode: state.interaction,
@@ -163,6 +165,7 @@ import { appAtomRegistry } from "./atom-registry";
 import { environmentSession } from "./session";
 import { dispatchingQueuedMessageIdAtom, editingQueuedMessageIdsAtom } from "./use-thread-outbox";
 import { createThreadOutboxDelivery } from "./threadOutboxDelivery";
+import { retryThreadMessageDelivery, threadMessageDeliveryStates } from "./thread-message-delivery";
 
 const message = (overrides: Partial<QueuedThreadMessage> = {}): QueuedThreadMessage => ({
   environmentId: EnvironmentId.make("secondary"),
@@ -183,11 +186,12 @@ function setOperateGrant(environmentId: string, granted: boolean): void {
   appAtomRegistry.set(sessionAtom as unknown as Atom.Writable<boolean>, granted);
 }
 
-function runDrain() {
+function runDrain(beforeDrain?: () => void) {
   const settled = Promise.withResolvers<void>();
   const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdAtom, (id) => {
     if (id === null) settled.resolve();
   });
+  beforeDrain?.();
   startDelivery();
   return settled.promise.finally(release);
 }
@@ -227,6 +231,8 @@ beforeEach(() => {
     command.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   }
   state.start.mockResolvedValue(AsyncResult.success({}));
+  state.getDelivery.mockReset().mockResolvedValue(AsyncResult.success({ status: "missing" }));
+  appAtomRegistry.set(threadMessageDeliveryStates, {});
   state.prepare.mockReset().mockImplementation(async ({ attachments }) => ({
     status: "ready",
     attachments: [],
@@ -446,11 +452,13 @@ describe("queued task operation access", () => {
       );
       await drained;
 
-      expect(remaining()).toEqual(accepted ? [] : [queued]);
+      expect(remaining()).toEqual(accepted ? [] : [{ ...queued, deliveryUnconfirmed: true }]);
       expect(state.draftText).toBe("Keep this draft separate");
       if (!accepted) {
         setOperateGrant("secondary", true);
         await runDrain();
+        expect(state.start).toHaveBeenCalledOnce();
+        await runDrain(() => retryThreadMessageDelivery(queued.messageId));
         expect(state.start).toHaveBeenCalledTimes(2);
         expect(remaining()).toEqual([]);
         expect(state.draftText).toBe("Keep this draft separate");
@@ -541,16 +549,23 @@ describe("queued task whose launch reply is lost", () => {
     await settled.promise.finally(release);
   }
 
-  it("resends an unedited launch instead of handing its text back", async () => {
-    await loseLaunchReply(queuedTask());
+  it("accepts the server receipt for a lost launch reply without sending again", async () => {
+    const queued = queuedTask();
+    state.getDelivery.mockResolvedValue(AsyncResult.success({ status: "accepted", sequence: 12 }));
+    await loseLaunchReply(queued);
+    expect(remaining()[0]?.deliveryUnconfirmed).toBe(true);
     await fireRetry();
 
+    expect(state.getDelivery).toHaveBeenCalledWith({
+      environmentId: queued.environmentId,
+      input: {
+        commandId: queued.commandId,
+        threadId: queued.threadId,
+        messageId: queued.messageId,
+      },
+    });
+    expect(state.start).toHaveBeenCalledOnce();
     expect(state.draftText).toBe("Keep this draft separate");
-    // The resend reuses the launch's command and message ids, so the server replays it.
-    const [first, resent] = state.start.mock.calls.map(([call]) => call.input);
-    expect(state.start).toHaveBeenCalledTimes(2);
-    expect(resent.commandId).toBe(first.commandId);
-    expect(resent.message.messageId).toBe(first.message.messageId);
     expect(remaining()).toEqual([]);
   });
 
@@ -573,6 +588,11 @@ describe("queued task whose launch reply is lost", () => {
 
     setOperateGrant("secondary", true);
     await runDrain();
+    expect(state.start).toHaveBeenCalledOnce();
+    expect(appAtomRegistry.get(threadMessageDeliveryStates)[MessageId.make("message")]).toBe(
+      "resend",
+    );
+    await runDrain(() => retryThreadMessageDelivery(MessageId.make("message")));
     expect(state.start).toHaveBeenCalledTimes(2);
     expect(state.draftText).toBe("Keep this draft separate");
     expect(remaining()).toEqual([]);
@@ -594,11 +614,15 @@ describe("queued task whose launch reply is lost", () => {
       }),
     );
     await fireRetry();
+    expect(state.start).toHaveBeenCalledOnce();
+    await runDrain(() => retryThreadMessageDelivery(MessageId.make("message")));
 
     expect(state.checkout).toHaveBeenCalledOnce();
     const [first, resent] = state.start.mock.calls.map(([call]) => call.input);
     expect(resent.bootstrap.createThread.worktreePath).toBe("/repo/.t3/worktrees/pr-123");
     expect(resent.bootstrap).toEqual(first.bootstrap);
+    expect(resent.commandId).toBe(first.commandId);
+    expect(resent.message.messageId).toBe(first.message.messageId);
     expect(remaining()).toEqual([]);
   });
 });
@@ -624,11 +648,13 @@ describe("compaction before a queued send", () => {
       .mockResolvedValueOnce(AsyncResult.success({}))
       .mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("Socket is not connected"))));
     await runDrain();
-    expect(remaining()).toEqual([queued]);
+    expect(remaining()).toEqual([{ ...queued, deliveryUnconfirmed: true }]);
 
-    // A restarted app delivers the persisted message again.
+    // 重启后必须先查回执，只有手动重发才再次调用发送流程。
     state.cleanups.splice(0).forEach((cleanup) => cleanup());
     await runDrain();
+    expect(state.start).toHaveBeenCalledTimes(2);
+    await runDrain(() => retryThreadMessageDelivery(queued.messageId));
     expect(state.start.mock.calls.map(([call]) => call.input)).toEqual([
       expect.objectContaining(compactTurn),
       expect.objectContaining({ commandId: "command", dispatchMode: "queue" }),

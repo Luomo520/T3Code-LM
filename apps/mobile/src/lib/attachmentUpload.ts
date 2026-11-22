@@ -182,7 +182,7 @@ async function composerImageAttachmentDataUrl(
     return attachment.dataUrl;
   }
   if (!isFileBackedComposerAttachment(attachment)) {
-    throw new Error(`'${attachment.name}' is no longer available. Attach the image again.`);
+    throw new Error(`附件「${attachment.name}」已不可用，请重新选择文件。`);
   }
   const release = retainComposerAttachmentFileForPreview(attachment);
   try {
@@ -190,7 +190,9 @@ async function composerImageAttachmentDataUrl(
     const uri =
       resolveOwnedComposerAttachmentFileUri(attachment.fileUri, Paths.document.uri) ??
       attachment.fileUri;
-    const base64 = await new File(uri).base64();
+    const file = new File(uri);
+    if (!file.exists) throw new Error(`附件「${attachment.name}」已不可用，请重新选择文件。`);
+    const base64 = await file.base64();
     return `data:${attachment.mimeType};base64,${base64}`;
   } finally {
     release();
@@ -211,15 +213,18 @@ async function uploadFileBytes(
   }
   const fileUri = attachment.fileUri;
   const inlineDataUrl = attachment.type === "image" ? attachment.dataUrl : undefined;
-  if (fileUri === undefined && inlineDataUrl === undefined) {
-    throw new Error(`'${attachment.name}' is no longer available. Attach the image again.`);
-  }
-  const file =
+  const source =
     fileUri === undefined
-      ? new File(Paths.cache, `t3-upload-${uuidv4()}`)
+      ? null
       : new File(resolveOwnedComposerAttachmentFileUri(fileUri, Paths.document.uri) ?? fileUri);
+  // 本地缓存可能被系统回收。若草稿仍有图片原文，可以从它恢复上传。
+  const needsStaging = !source?.exists;
+  if (needsStaging && inlineDataUrl === undefined) {
+    throw new Error(`附件「${attachment.name}」已不可用，请重新选择文件。`);
+  }
+  const file = needsStaging ? new File(Paths.cache, `t3-upload-${uuidv4()}`) : source;
   try {
-    if (fileUri === undefined && inlineDataUrl !== undefined) {
+    if (needsStaging && inlineDataUrl !== undefined) {
       file.create();
       await file.write(inlineDataUrl.slice(inlineDataUrl.indexOf(",") + 1), {
         encoding: "base64",
@@ -244,7 +249,7 @@ async function uploadFileBytes(
       throw new Error(`Upload failed for '${attachment.name}' (${result.status}).`);
     }
   } finally {
-    if (fileUri === undefined && file.exists) file.delete();
+    if (needsStaging && file.exists) file.delete();
   }
 }
 

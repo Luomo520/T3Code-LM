@@ -55,13 +55,14 @@ function request(ref: HeaderTurnRef, override: Partial<HeaderRequest> = {}): Hea
   };
 }
 
-it("keeps each run's cumulative count and speed through a provider switch without including other threads", () => {
+it("keeps each run's own count and speed through a provider switch and a gap in records", () => {
   const first = row("one", "provider-a", "session-a", "turn-a");
+  const missing = row("missing", "provider-a", "session-a", "unrecorded-turn");
   const second = row("two", "provider-b", "session-b", "turn-b");
   const other = row("unrelated", "provider-b", "session-b", "other-turn");
   const usage = aggregateConversationUsage({
     threadId: "thread",
-    rows: [first, first, second],
+    rows: [first, first, missing, second],
     refs: [ref(first), ref(second), ref(other, "other")],
     recordsByInstance: new Map([
       ["provider-a", [request(ref(first), { reportedCostUsd: 0.005 })]],
@@ -73,16 +74,22 @@ it("keeps each run's cumulative count and speed through a provider switch withou
     requestTiming: () => null,
   });
   expect(
-    usage.turns.map((turn) => [turn.runId, turn.cumulativeTokens, turn.tokensPerSecond]),
+    usage.turns.map((turn) => [
+      turn.runId,
+      turn.turnTokens,
+      turn.cumulativeTokens,
+      turn.tokensPerSecond,
+    ]),
   ).toEqual([
-    ["one", 170, 10],
-    ["two", 340, 20],
+    ["one", 170, 170, 10],
+    ["missing", null, null, null],
+    ["two", 170, 340, 20],
   ]);
   expect(usage.turns[0]?.costUsd).toBe(0.005);
-  expect(usage.turns[1]?.costUsd).toBeCloseTo(0.00033, 10);
-  expect(usage.turns[1]?.cacheRate).toBeCloseTo(40 / 150);
+  expect(usage.turns[2]?.costUsd).toBeCloseTo(0.00033, 10);
+  expect(usage.turns[2]?.cacheRate).toBeCloseTo(40 / 150);
   expect(usage.costUsd).toBeCloseTo(0.00533, 10);
-  expect(usage.costPartial).toBe(false);
+  expect(usage.costPartial).toBe(true);
   expect(usage.categoryCostUsd?.cacheWrite).toBeGreaterThan(0);
 });
 
@@ -136,8 +143,15 @@ it("retains known provider fees and exposes missing prices and per-run timing in
   expect(usage.categoryCostUsd).toBeNull();
   expect(usage.costPartial).toBe(true);
   expect(usage.turns).toMatchObject([
-    { cumulativeTokens: 260, costUsd: 0.023, costPartial: false, estimatedTokensPerSecond: null },
     {
+      turnTokens: 260,
+      cumulativeTokens: 260,
+      costUsd: 0.023,
+      costPartial: false,
+      estimatedTokensPerSecond: null,
+    },
+    {
+      turnTokens: 170,
       cumulativeTokens: 430,
       costUsd: null,
       costPartial: true,

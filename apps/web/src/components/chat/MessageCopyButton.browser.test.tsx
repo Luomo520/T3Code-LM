@@ -28,3 +28,16 @@ it("explains a denied clipboard write and lets the same message be copied again"
   await expect.element(page.getByText("Copied!", { exact: true })).not.toBeInTheDocument();
   await expect.element(copy).toBeDisabled();
 });
+
+it("offers plain text and original Markdown for an assistant reply", async () => {
+  const markdown = "# Result\n\n- **done**";
+  await using screen = await render(<MessageCopyButton text={markdown} markdown={markdown} />);
+  using write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+  const trigger = screen.getByRole("button", { name: "Copy message" });
+  await trigger.click();
+  await page.getByRole("menuitem", { name: "复制正文" }).click();
+  await vi.waitFor(() => expect(write).toHaveBeenLastCalledWith("Result\n\n• done"));
+  await trigger.click();
+  await page.getByRole("menuitem", { name: "复制 Markdown" }).click();
+  await vi.waitFor(() => expect(write).toHaveBeenLastCalledWith(markdown));
+});

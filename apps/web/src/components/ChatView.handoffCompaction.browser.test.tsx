@@ -15,6 +15,7 @@ import { AppRoot } from "~/AppRoot";
 // The route loads ChatView lazily, and its first transform (React Compiler over ~4k lines)
 // takes 6-11s; importing it here keeps that out of the test's timeout.
 import "~/components/ChatView";
+import "~/index.css";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter } from "~/router";
 import {
@@ -42,6 +43,16 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   ...(await original()),
   trackRpcRequestSent: () => {},
 }));
+
+vi.mock(import("~/components/usage/useConversationUsage"), () => {
+  const sessionUsage = {
+    costUsd: 123_456_789.12,
+    costPartial: false,
+    categoryCostUsd: null,
+    turns: [],
+  };
+  return { useConversationUsage: () => sessionUsage };
+});
 
 const CLAUDE = ProviderInstanceId.make("claudeAgent");
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
@@ -77,11 +88,21 @@ function coldClaudeThread() {
   return { ...thread, providerThreads: [providerThread] };
 }
 
-it("sends a Codex follow-up on a cold Claude thread without compacting first", async () => {
+it("keeps usage readable in a narrow composer and sends a cross-provider follow-up", async () => {
+  await page.viewport(680, 800);
   const thread = coldClaudeThread();
   using _environment = installFakeEnvironment([thread], {
     acceptCommands: true,
-    providers: [CLAUDE_PROVIDER, CODEX_PROVIDER],
+    providers: [
+      {
+        ...CLAUDE_PROVIDER,
+        models: CLAUDE_PROVIDER.models.map((model) => ({
+          ...model,
+          name: "Claude Opus 4.6 with a long custom model name",
+        })),
+      },
+      CODEX_PROVIDER,
+    ],
   });
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
@@ -99,9 +120,28 @@ it("sends a Codex follow-up on a cold Claude thread without compacting first", a
   const compactAndSend = page.getByRole("button", { name: "Compact and send" });
   await expect.element(compactAndSend).toBeVisible();
 
-  await page.getByRole("button", { name: "Claude Opus 4.6", exact: true }).click();
-  // The picker lists only the active provider's models until you search.
-  await userEvent.type(page.getByPlaceholder("Search models..."), "GPT-5.4");
+  const model = page.getByRole("button", { name: /Claude Opus 4\.6/ });
+  const sessionUsage = page.getByRole("button", { name: /会话费用.*上下文占用 25\.0%/ });
+  const amount = sessionUsage.getByText("$123,456,789.12");
+  await expect.element(amount).toBeVisible();
+  await vi.waitFor(() => {
+    const amountElement = amount.element();
+    const modelBounds = model.element().getBoundingClientRect();
+    const usageBounds = sessionUsage.element().getBoundingClientRect();
+    const actionBounds = compactAndSend.element().getBoundingClientRect();
+    expect(modelBounds.right).toBeLessThanOrEqual(usageBounds.left);
+    expect(usageBounds.right).toBeLessThanOrEqual(actionBounds.left);
+    expect(usageBounds.top).toBeLessThan(actionBounds.bottom);
+    expect(usageBounds.bottom).toBeGreaterThan(actionBounds.top);
+    expect(actionBounds.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(amountElement.scrollWidth).toBeLessThanOrEqual(amountElement.clientWidth);
+  });
+  await sessionUsage.click();
+  await expect.element(page.getByText("250,000 / 1,000,000 Token")).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await model.click();
+  await page.getByRole("button", { name: "搜索模型" }).click();
+  await userEvent.type(page.getByPlaceholder("查找模型"), "GPT-5.4");
   await page.getByRole("option", { name: "GPT-5.4", exact: false }).click();
   await expect.element(page.getByRole("button", { name: "GPT-5.4", exact: true })).toBeVisible();
   await expect.element(compactAndSend).not.toBeInTheDocument();
@@ -111,7 +151,7 @@ it("sends a Codex follow-up on a cold Claude thread without compacting first", a
   const editor = page.getByTestId("composer-editor");
   await userEvent.click(editor);
   await userEvent.type(editor, "keep going");
-  await userEvent.keyboard("{Enter}");
+  await page.getByRole("button", { name: "Submit message" }).click();
 
   const messages = () =>
     dispatchedCommands().flatMap((command) =>
