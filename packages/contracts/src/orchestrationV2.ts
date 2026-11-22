@@ -11,6 +11,9 @@ import {
   CheckpointId,
   CheckpointRef,
   CheckpointScopeId,
+  ClientDeviceType,
+  ClientOs,
+  ClientSurface,
   CommandId,
   ContextHandoffId,
   ContextTransferId,
@@ -106,6 +109,15 @@ const OrchestrationV2CreationFields = {
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
 } as const;
+
+export const OrchestrationV2MessageClientOrigin = Schema.Struct({
+  /** 同一认证设备密钥或会话的公开别名，可用于比较消息来源。 */
+  clientAlias: TrimmedNonEmptyString,
+  surface: Schema.optionalKey(ClientSurface),
+  os: Schema.optionalKey(ClientOs),
+  deviceType: Schema.optionalKey(ClientDeviceType),
+});
+export type OrchestrationV2MessageClientOrigin = typeof OrchestrationV2MessageClientOrigin.Type;
 
 /**
  * The linked environment whose agent started this work here: the MCP client
@@ -1394,6 +1406,8 @@ export type OrchestrationV2IdleCompaction = typeof OrchestrationV2IdleCompaction
 export const OrchestrationV2ConversationMessage = Schema.Struct({
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
+  /** 服务器记录实际提交消息的已认证连接所报告的客户端类型。 */
+  clientOrigin: Schema.optionalKey(OrchestrationV2MessageClientOrigin),
   scheduledTaskId: Schema.optional(ScheduledTaskId),
   /** A scheduled delivery that named no model; it runs on the thread's selection at start. */
   followsThreadSelection: Schema.optional(Schema.Literal(true)),

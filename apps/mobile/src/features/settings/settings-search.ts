@@ -13,6 +13,7 @@ const SETTINGS_SEARCH_TERMS = {
     "remote",
     "tailscale",
   ],
+  SettingsCrossDevice: ["设备授权", "配对设备", "多端控制", "cross-device", "device access"],
   SettingsNotifications: ["push", "alerts", "live activity", "agent activity"],
   SettingsAppearance: [
     "theme",

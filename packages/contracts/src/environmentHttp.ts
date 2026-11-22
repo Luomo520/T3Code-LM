@@ -1063,6 +1063,141 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.patch("webhookPatch", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
 
+const CompanionIdentifier = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+const CompanionName = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+const CompanionCode = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+const CompanionInfo = Schema.Record(
+  TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  Schema.String.check(Schema.isMaxLength(512)),
+).check(Schema.isMaxProperties(16));
+const CompanionDeviceToken = Schema.Struct({
+  authorization: Schema.optionalKey(Schema.String),
+});
+const CompanionDeviceParams = Schema.Struct({ deviceId: CompanionIdentifier });
+const CompanionSuccess = Schema.Struct({ ok: Schema.Literal(true) });
+const CompanionProblem = Schema.Struct({ error: Schema.String });
+const CompanionProblems = [400, 401, 403, 404, 409, 413, 415, 429].map((status) =>
+  CompanionProblem.pipe(HttpApiSchema.status(status)),
+);
+const CompanionAdminErrors = [...EnvironmentScopedOperationErrors, ...CompanionProblems] as const;
+
+export const COMPANION_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+export const COMPANION_MAX_IMAGE_BASE64_LENGTH = 4 * Math.ceil(COMPANION_MAX_IMAGE_BYTES / 3);
+
+export const CompanionRenameInput = Schema.Struct({ name: CompanionName });
+export const CompanionEnrollInput = Schema.Struct({
+  code: CompanionCode,
+  name: CompanionName,
+  info: CompanionInfo,
+});
+export const CompanionPollInput = Schema.Struct({
+  name: CompanionName,
+  info: CompanionInfo,
+});
+export const CompanionResultInput = Schema.Struct({
+  id: CompanionIdentifier,
+  status: Schema.Literals(["done", "failed"]),
+  message: Schema.String.check(Schema.isMaxLength(4096)),
+  imageBase64: Schema.optionalKey(
+    Schema.NonEmptyString.check(
+      Schema.isMaxLength(COMPANION_MAX_IMAGE_BASE64_LENGTH),
+      Schema.isBase64(),
+    ),
+  ),
+});
+export const CompanionUnbindInput = Schema.Struct({});
+
+export const CompanionDevice = Schema.Struct({
+  deviceId: CompanionIdentifier,
+  name: CompanionName,
+  info: CompanionInfo,
+  lastSeen: Schema.String,
+  online: Schema.Boolean,
+  recentTasks: Schema.Array(
+    Schema.Struct({
+      id: CompanionIdentifier,
+      action: Schema.String,
+      status: Schema.Literals(["queued", "running", "done", "failed", "canceled"]),
+      updatedAt: Schema.String,
+    }),
+  ).check(Schema.isMaxLength(10)),
+});
+export type CompanionDevice = typeof CompanionDevice.Type;
+
+class EnvironmentCompanionsHttpApi extends HttpApiGroup.make("companions")
+  .add(
+    HttpApiEndpoint.post("pair", "/api/companions/pair", {
+      headers: OptionalBearerHeaders,
+      success: Schema.Struct({ code: CompanionCode, expiresAt: Schema.String }),
+      error: CompanionAdminErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("list", "/api/companions", {
+      headers: OptionalBearerHeaders,
+      success: Schema.Struct({ devices: Schema.Array(CompanionDevice) }),
+      error: CompanionAdminErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("rename", "/api/companions/:deviceId/rename", {
+      params: CompanionDeviceParams,
+      headers: OptionalBearerHeaders,
+      payload: CompanionRenameInput,
+      success: CompanionSuccess,
+      error: CompanionAdminErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("revoke", "/api/companions/:deviceId/revoke", {
+      params: CompanionDeviceParams,
+      headers: OptionalBearerHeaders,
+      success: CompanionSuccess,
+      error: CompanionAdminErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("enroll", "/api/companions/enroll", {
+      payload: CompanionEnrollInput,
+      success: Schema.Struct({ deviceId: CompanionIdentifier, token: Schema.String }),
+      error: [...CompanionProblems, EnvironmentInternalError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("poll", "/api/companions/poll", {
+      headers: CompanionDeviceToken,
+      payload: CompanionPollInput,
+      success: Schema.Struct({
+        name: CompanionName,
+        job: Schema.NullOr(
+          Schema.Struct({
+            id: CompanionIdentifier,
+            action: Schema.String,
+            threadId: Schema.String,
+            params: Schema.Record(Schema.String, Schema.Unknown),
+          }),
+        ),
+      }),
+      error: [...CompanionProblems, EnvironmentInternalError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("result", "/api/companions/result", {
+      headers: CompanionDeviceToken,
+      payload: CompanionResultInput,
+      success: CompanionSuccess,
+      error: [...CompanionProblems, EnvironmentInternalError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("unbind", "/api/companions/revoke", {
+      headers: CompanionDeviceToken,
+      payload: CompanionUnbindInput,
+      success: CompanionSuccess,
+      error: [...CompanionProblems, EnvironmentInternalError],
+    }),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
@@ -1072,4 +1207,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentConnectHttpApi)
+  .add(EnvironmentCompanionsHttpApi)
   .add(EnvironmentWebhooksHttpApi) {}

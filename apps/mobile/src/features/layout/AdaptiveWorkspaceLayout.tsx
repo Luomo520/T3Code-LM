@@ -589,6 +589,10 @@ function AdaptiveWorkspaceLayoutContent(
   const projects = useProjects();
   const compactAndroidSettings =
     Platform.OS === "android" && androidSettingsOpen && !layout.usesSplitView;
+  const compactAndroidDock =
+    Platform.OS === "android" &&
+    !layout.usesSplitView &&
+    (compactAndroidSettings || props.workspaceRouteName === "Home");
   // Reads the open page when pressed, so the layout context doesn't change on every navigation.
   const handleStartNewTask = () => {
     const state = rootStackState(navigation);
@@ -1112,8 +1116,9 @@ function AdaptiveWorkspaceLayoutContent(
                   </PaneContext>
                 </DockGlassCapture>
               </SafeAreaInsetsContext>
+              {/* 紧凑布局让首页和设置共用当前选中块，路由切换时保留正在运行的动画。 */}
               {floatingTabsEnabled &&
-              (compactAndroidSettings || (layout.usesSplitView && workspacePage)) ? (
+              (compactAndroidDock || (layout.usesSplitView && workspacePage)) ? (
                 <FloatingWorkspaceTabs
                   paneWidth={layout.usesSplitView ? (layout.listPaneWidth ?? undefined) : undefined}
                   onNewThread={handleStartNewTask}

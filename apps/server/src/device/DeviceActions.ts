@@ -182,8 +182,13 @@ export const runDeviceAction = Effect.fn("DeviceActions.run")(function* (
   ready: DeviceHostReady,
   platform: DevicePlatform,
   input: DeviceActionInput,
+  physical = false,
 ) {
-  if (!supportsAction(platform, input)) {
+  const emulatorLocation = input.type === "setLocation" || input.type === "clearLocation";
+  if (
+    !supportsAction(platform, input) ||
+    (platform === "android" && physical && emulatorLocation)
+  ) {
     return yield* new DeviceActionUnavailableError({
       operation: input.type,
       platform,

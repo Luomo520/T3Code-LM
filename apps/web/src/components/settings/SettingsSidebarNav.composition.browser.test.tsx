@@ -114,7 +114,7 @@ it.each([1280, 390])("names each group by a heading outside it at %ipx wide", as
   expect(page.getByRole("tree").query()).toBeNull();
 });
 
-it("opens the translated settings search and About page at 390px", async () => {
+it("opens the translated settings search and section navigation at 390px", async () => {
   await page.viewport(390, 800);
   await using screen = await render(
     <GTProvider locale="zh" translations={{ zh }}>
@@ -128,4 +128,8 @@ it("opens the translated settings search and About page at 390px", async () => {
   await expect.element(page.getByRole("combobox", { name: "搜索设置" })).toBeVisible();
   await userEvent.click(page.getByRole("button", { name: "关于", exact: true }));
   await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/settings/about"));
+  await userEvent.click(page.getByRole("button", { name: "多端互控", exact: true }));
+  await vi.waitFor(() =>
+    expect(screen.router?.state.location.pathname).toBe("/settings/cross-device"),
+  );
 });

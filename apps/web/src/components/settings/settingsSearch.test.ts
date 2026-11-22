@@ -168,6 +168,12 @@ describe("searchSettings", () => {
         filterAvailableSettingsSearchItems({ ...availability, hasPeerLinkHost }),
       );
     expect(results(false).map((item) => item.id)).not.toContain("linked-environments");
+    expect(results(false)).toContainEqual(
+      expect.objectContaining({
+        id: "linked-environments-beta",
+        to: "/settings/cross-device",
+      }),
+    );
     expect(results(true)).toContainEqual(
       expect.objectContaining({
         id: "linked-environments",
@@ -385,6 +391,9 @@ describe("movedSettingsPath", () => {
     expect(movedSettingsPath("/settings/storage", "")).toBe("/settings/maintenance");
     expect(movedSettingsPath("/settings/integrations", "devices")).toBe("/settings/devices");
     expect(movedSettingsPath("/settings/beta", "")).toBe("/settings/labs");
+    expect(movedSettingsPath("/settings/labs", "linked-environments-beta")).toBe(
+      "/settings/cross-device",
+    );
   });
 
   it("leaves current pages alone", () => {
@@ -392,5 +401,6 @@ describe("movedSettingsPath", () => {
     expect(movedSettingsPath("/settings/projects", "project-defaults")).toBeNull();
     expect(movedSettingsPath("/settings/connections", "remote-environments")).toBeNull();
     expect(movedSettingsPath("/settings/appearance", "theme")).toBeNull();
+    expect(movedSettingsPath("/settings/labs", "simlock-hosts")).toBeNull();
   });
 });

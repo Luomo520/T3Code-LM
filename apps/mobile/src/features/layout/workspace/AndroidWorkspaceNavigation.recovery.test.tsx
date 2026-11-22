@@ -1,4 +1,4 @@
-import { act, type ReactNode } from "react";
+import { act, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
@@ -9,6 +9,9 @@ const state = vi.hoisted(() => ({
   leftInset: 0,
   rightInset: 0,
   connected: true,
+  reduceMotion: false,
+  spring: vi.fn((target: number) => target),
+  timing: vi.fn((target: number) => target),
   dispatch: vi.fn(),
   navigate: vi.fn(),
   nativeRenders: vi.fn(),
@@ -23,6 +26,7 @@ vi.mock("expo", () => ({
   },
 }));
 vi.mock("react-native", () => ({
+  I18nManager: { isRTL: false },
   Keyboard: { dismiss: state.dismiss },
   processColor: () => 1,
   useWindowDimensions: () => ({ width: state.width, height: 844 }),
@@ -35,6 +39,8 @@ vi.mock("react-native", () => ({
   Pressable: (props: {
     children?: ReactNode;
     onPress?: () => void;
+    onPressIn?: () => void;
+    onPressOut?: () => void;
     accessibilityLabel?: string;
     accessibilityState?: { selected?: boolean };
     readonly style?: unknown;
@@ -44,6 +50,8 @@ vi.mock("react-native", () => ({
       aria-label={props.accessibilityLabel}
       aria-selected={props.accessibilityState?.selected}
       onClick={props.onPress}
+      onMouseDown={props.onPressIn}
+      onMouseUp={props.onPressOut}
       data-style={JSON.stringify(
         typeof props.style === "function" ? props.style({ pressed: false }) : props.style,
       )}
@@ -54,12 +62,30 @@ vi.mock("react-native", () => ({
   ),
 }));
 vi.mock("react-native-reanimated", () => ({
-  default: { View: ({ children }: { readonly children?: ReactNode }) => <div>{children}</div> },
+  default: {
+    View: ({ style }: { readonly style?: unknown }) => (
+      <div data-animated-style={JSON.stringify(style)} />
+    ),
+  },
   Easing: { out: () => undefined, cubic: () => undefined },
-  useAnimatedStyle: () => ({}),
-  useReducedMotion: () => false,
-  useSharedValue: () => ({ get: () => 0, set: () => undefined }),
-  withTiming: () => undefined,
+  ReduceMotion: { Never: "never" },
+  useAnimatedStyle: (style: () => unknown) => style(),
+  useReducedMotion: () => state.reduceMotion,
+  useSharedValue: (initial = 0) =>
+    useState(() => {
+      let value = initial;
+      return {
+        get: () => value,
+        set: (next: number) => {
+          value = next;
+        },
+      };
+    })[0],
+  withSpring: state.spring,
+  withTiming: state.timing,
+}));
+vi.mock("../../../lib/appState", () => ({
+  useReduceMotionEnabled: () => state.reduceMotion,
 }));
 vi.mock("@tabler/icons-react-native/IconMessages", () => ({ default: () => <svg /> }));
 vi.mock("@tabler/icons-react-native/IconGitPullRequest", () => ({ default: () => <svg /> }));
@@ -156,6 +182,7 @@ beforeEach(() => {
   state.leftInset = 0;
   state.rightInset = 0;
   state.connected = true;
+  state.reduceMotion = false;
   state.settingsOpen = false;
   state.focusEffects.clear();
   vi.clearAllMocks();
@@ -216,6 +243,74 @@ it("preserves tab selection and root navigation reset", async () => {
   expect(onSelect).toHaveBeenCalledOnce();
   expect(state.dismiss).toHaveBeenCalledOnce();
 });
+it("retargets the same indicator when the workspace changes from threads to usage to settings", async () => {
+  const element = () => <FloatingWorkspaceTabs onNewThread={() => {}} />;
+  const { container, root } = await mount(element());
+  const dock = container.querySelector('[role="tablist"]')!;
+  const indicator = dock.querySelector("[data-animated-style]");
+  expect(dock.querySelectorAll("[data-animated-style]")).toHaveLength(1);
+  state.spring.mockClear();
+
+  state.selected = "usage";
+  await act(async () => root.render(element()));
+  state.settingsOpen = true;
+  await act(async () => root.render(element()));
+
+  expect(dock.querySelector("[data-animated-style]")).toBe(indicator);
+  expect(state.spring.mock.calls.map(([target]) => target)).toEqual([2, 3]);
+  expect(dock.querySelector('[aria-label="设置"]')?.getAttribute("aria-selected")).toBe("true");
+});
+
+it("keeps a new tab press compressed when the previous tab releases late", async () => {
+  const { container } = await mount(<FloatingWorkspaceTabs onNewThread={() => {}} />);
+  const usage = container.querySelector('[aria-label="用量"]')!;
+  const settings = container.querySelector('[aria-label="设置"]')!;
+  state.timing.mockClear();
+  state.spring.mockClear();
+
+  await act(async () => {
+    usage.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    settings.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    usage.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  expect(state.timing).toHaveBeenCalledTimes(2);
+  expect(state.spring).not.toHaveBeenCalled();
+
+  await act(async () => {
+    settings.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  expect(state.spring.mock.calls.map(([target]) => target)).toEqual([0]);
+});
+
+it("honors a live reduced-motion change during selection and still accepts further presses", async () => {
+  const element = () => <FloatingWorkspaceTabs onNewThread={() => {}} />;
+  const { container, root } = await mount(element());
+  state.selected = "usage";
+  await act(async () => root.render(element()));
+
+  state.reduceMotion = true;
+  state.settingsOpen = true;
+  await act(async () => root.render(element()));
+  await act(async () => root.render(element()));
+  expect(state.spring.mock.calls.map(([target]) => target).slice(-1)).toEqual([2]);
+  const style = JSON.parse(
+    container.querySelector("[data-animated-style]")!.getAttribute("data-animated-style")!,
+  );
+  expect(style.at(-1).transform).toEqual([{ translateX: 192 }, { scaleX: 1 }, { scaleY: 1 }]);
+
+  const threads = container.querySelector('[aria-label="会话"]') as HTMLButtonElement;
+  state.spring.mockClear();
+  state.timing.mockClear();
+  await act(async () => {
+    threads.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    threads.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    threads.click();
+  });
+  expect(state.timing).not.toHaveBeenCalled();
+  expect(state.spring).not.toHaveBeenCalled();
+  expect(state.dispatch).toHaveBeenCalledWith({ type: "select", tab: "threads" });
+});
+
 it("opens settings without changing the selected workspace tab", async () => {
   state.settingsOpen = true;
   const { container } = await mount(<FloatingWorkspaceTabs onNewThread={() => {}} />);

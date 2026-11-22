@@ -225,6 +225,7 @@ export const make = Effect.gen(function* () {
       serverRestart: launcher.restart || (serverConfig.mode === "desktop" && serverConfig.desktopBootstrapToken !== undefined),
       repositoryIdentity: true,
       connectionProbe: true,
+      windowsCompanion: true,
       attachmentUploads: true,
       questionAttachments: true,
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },

@@ -76,6 +76,10 @@ export const makeDeviceHubOperations = (options: {
   readonly run: DeviceHostReady["run"];
   /** Android gates listing AVDs, which the hub does not report until they boot. */
   readonly platformAvailable: (platform: DevicePlatform) => Effect.Effect<boolean>;
+  readonly listPhysicalAndroid?: (
+    hubDevices: ReadonlyArray<HostDevice>,
+  ) => Effect.Effect<{ readonly devices: ReadonlyArray<HostDevice>; readonly detail: string }>;
+  readonly screenshotPhysicalAndroid?: DeviceOperations["screenshot"];
 }): DeviceOperations => {
   const { hostId, origin, run } = options;
   const httpClient = options.http.pipe(HttpClient.withScope);
@@ -145,7 +149,7 @@ export const makeDeviceHubOperations = (options: {
     const androidAvailable = yield* options.platformAvailable("android");
     const warnings = hubList.errors?.filter(
       (error) =>
-        // The host summary already explains a missing Android SDK; the hub's failed probes are noise.
+        // 没有模拟器工具时，由 ADB 检查提供 Android 真机的诊断信息。
         !(!androidAvailable && error.message.startsWith("[android-utils] ")) &&
         // CoreSimulator can retain deleted devices; their optional usage timestamps are absent.
         !(
@@ -159,6 +163,11 @@ export const makeDeviceHubOperations = (options: {
         const head = errorHead(error.error ?? "");
         return boundDiagnostics(head ? `${error.message} ${head}` : error.message);
       }) ?? [];
+    const physical = yield* options.listPhysicalAndroid?.(devices) ?? Effect.undefined;
+    if (physical) {
+      devices.push(...physical.devices);
+      if (physical.detail) details.push(physical.detail);
+    }
     let androidDiscoveryIncomplete = false;
     if (androidAvailable) {
       const avds = yield* run("emulator", ["-list-avds"]);
@@ -173,7 +182,11 @@ export const makeDeviceHubOperations = (options: {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean)) {
-        if (!devices.some((device) => device.platform === "android" && device.name === name)) {
+        if (
+          !devices.some(
+            (device) => device.platform === "android" && !device.physical && device.name === name,
+          )
+        ) {
           devices.push({
             id: name,
             name,
@@ -289,38 +302,41 @@ export const makeDeviceHubOperations = (options: {
   );
 
   const screenshot: DeviceOperations["screenshot"] = (device) =>
-    httpClient
-      .execute(
-        HttpClientRequest.post(
-          `${origin}${vendorPrefix(device.platform)}/api/screenshot?device=${encodeURIComponent(device.id)}`,
-        ),
-      )
-      .pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.flatMap((response) => response.arrayBuffer),
-        Effect.map((buffer) => new Uint8Array(buffer)),
-        Effect.scoped,
-        Effect.timeout(SCREENSHOT_TIMEOUT),
-        Effect.mapError(
-          (cause) =>
-            new DeviceOperationError({
-              operation: "screenshot",
-              reason:
-                HttpClientError.isHttpClientError(cause) && cause.reason._tag === "StatusCodeError"
-                  ? "hub_rejected"
-                  : "request_failed",
-              cause,
-            }),
-        ),
-        Effect.catchIf(
-          (error) =>
-            device.platform === "ios" &&
-            runsOnXcode26Runtime(device.version) &&
-            error.reason === "hub_rejected",
-          () => defaultDisplayScreenshot(device.id),
-        ),
-        Effect.withSpan("DeviceHubOperations.screenshot"),
-      );
+    device.platform === "android" && device.physical && options.screenshotPhysicalAndroid
+      ? options.screenshotPhysicalAndroid(device)
+      : httpClient
+          .execute(
+            HttpClientRequest.post(
+              `${origin}${vendorPrefix(device.platform)}/api/screenshot?device=${encodeURIComponent(device.id)}`,
+            ),
+          )
+          .pipe(
+            Effect.flatMap(HttpClientResponse.filterStatusOk),
+            Effect.flatMap((response) => response.arrayBuffer),
+            Effect.map((buffer) => new Uint8Array(buffer)),
+            Effect.scoped,
+            Effect.timeout(SCREENSHOT_TIMEOUT),
+            Effect.mapError(
+              (cause) =>
+                new DeviceOperationError({
+                  operation: "screenshot",
+                  reason:
+                    HttpClientError.isHttpClientError(cause) &&
+                    cause.reason._tag === "StatusCodeError"
+                      ? "hub_rejected"
+                      : "request_failed",
+                  cause,
+                }),
+            ),
+            Effect.catchIf(
+              (error) =>
+                device.platform === "ios" &&
+                runsOnXcode26Runtime(device.version) &&
+                error.reason === "hub_rejected",
+              () => defaultDisplayScreenshot(device.id),
+            ),
+            Effect.withSpan("DeviceHubOperations.screenshot"),
+          );
 
   return { list, boot, attach, shutdown, screenshot };
 };

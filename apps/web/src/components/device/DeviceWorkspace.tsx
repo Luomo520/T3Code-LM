@@ -33,6 +33,7 @@ export function DeviceWorkspace(props: {
   // A capture always finishes, even if the panel hides or closes meanwhile; the user asked for it.
   const capturing = useRef(false);
   const access = useDeviceHubAccess(props.environmentId, props.device.hostId);
+  const isPhysicalAndroid = props.device.platform === "android" && props.device.physical;
   // Settings and tools run commands on the device's own machine, which EAS and Simlock do not expose.
   const runsHostCommands = props.hostKind === "local" || props.hostKind === "ssh";
   const controls = useDeviceControls({
@@ -86,7 +87,7 @@ export function DeviceWorkspace(props: {
             environmentId={props.environmentId}
             platform={props.device.platform}
             deviceName={props.device.name}
-            deviceDescription={`${props.hostLabel} · ${props.device.version}`}
+            deviceDescription={`${props.hostLabel} · ${props.device.version}${isPhysicalAndroid ? " · Physical device" : ""}`}
             deviceId={props.device.id}
             hostId={props.device.hostId}
             visible={props.visible}
@@ -97,6 +98,8 @@ export function DeviceWorkspace(props: {
               <DeviceControlsRail
                 platform={props.device.platform}
                 hostKind={props.hostKind}
+                physicalAndroid={isPhysicalAndroid}
+                screenshotAvailable={access !== null && (isPhysicalAndroid || view.streaming)}
                 handle={view.handle}
                 view={view}
                 controls={controls}

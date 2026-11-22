@@ -11,6 +11,8 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
+import { FileHandoffError } from "@t3tools/contracts";
+import { readFileHandoff, startFileHandoff } from "./fileExchange/FileHandoff.ts";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -121,6 +123,7 @@ import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
+import { MessageClientOrigin } from "./orchestration-v2/MessageClientOrigin.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
@@ -1444,6 +1447,20 @@ export const layerWsRpc = (
   Layer.effectContext(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const { surface, clientOs, clientDeviceType } = clientAnalyticsProps;
+      const clientOrigin = {
+        // DPoP 设备重连后保留别名。旧凭据只能标识会话，使用独立摘要避免发送认证标识。
+        clientAlias: NodeCrypto.createHash("sha256")
+          .update(
+            currentSession.proofKeyThumbprint === undefined
+              ? `t3-message-origin:session:${currentSessionId}`
+              : `t3-message-origin:device:${currentSession.proofKeyThumbprint}`,
+          )
+          .digest("base64url"),
+        ...(isClientSurface(surface) ? { surface } : {}),
+        ...(isClientOs(clientOs) ? { os: clientOs } : {}),
+        ...(isClientDeviceType(clientDeviceType) ? { deviceType: clientDeviceType } : {}),
+      };
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const intakeContext = yield* Effect.context<
@@ -2001,7 +2018,15 @@ export const layerWsRpc = (
                             "creationSource" in command ? command.creationSource : "web",
                         }),
                       )
-                  ).pipe(Effect.provide(intakeContext)),
+                  ).pipe(
+                    Effect.provide(intakeContext),
+                    Effect.provideService(
+                      MessageClientOrigin,
+                      command.type === "message.dispatch" || command.type === "runtime-request.respond"
+                        ? clientOrigin
+                        : undefined,
+                    ),
+                  ),
                 )
                 .pipe(
                   Effect.tap((result) =>
@@ -2218,6 +2243,7 @@ export const layerWsRpc = (
                         }),
                       ),
                       Effect.provide(intakeContext),
+                      Effect.provideService(MessageClientOrigin, clientOrigin),
                     ),
                 )
                 .pipe(
@@ -3036,6 +3062,24 @@ export const layerWsRpc = (
                   cause,
                 }),
             ),
+          ),
+        [WS_METHODS.fileHandoffRead]: (input) =>
+          threadManagement.getThreadShell(input.threadId).pipe(
+            Effect.filterOrFail(
+              (thread) => thread !== null,
+              () => new FileHandoffError({ message: "会话已不可用。" }),
+            ),
+            Effect.mapError(() => new FileHandoffError({ message: "会话已不可用。" })),
+            Effect.andThen(readFileHandoff(input, currentSession)),
+          ),
+        [WS_METHODS.fileHandoffStart]: (input) =>
+          threadManagement.getThreadShell(input.threadId).pipe(
+            Effect.filterOrFail(
+              (thread) => thread !== null,
+              () => new FileHandoffError({ message: "会话已不可用。" }),
+            ),
+            Effect.mapError(() => new FileHandoffError({ message: "会话已不可用。" })),
+            Effect.andThen(startFileHandoff(input, currentSession)),
           ),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => deletePendingAttachment(input.attachmentId),

@@ -2,6 +2,7 @@ import { pruneLocalDeviceTools } from "./deviceToolMaintenance.ts";
 import { deviceToolInstallMessage } from "@t3tools/contracts";
 // The hub runs at origin root; T3 strips its prefix and the Device panel derives stream URLs from it.
 import {
+  DeviceOperationError,
   type DeviceHostSummary,
   type DevicePlatform,
   type DevicePlatformAvailability,
@@ -37,6 +38,7 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { releaseAgentDeviceSession } from "./AgentDeviceTarget.ts";
+import { listPhysicalAndroidDevices } from "./AndroidPhysicalDevice.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { makeDeviceHubOperations } from "./DeviceHubOperations.ts";
 import {
@@ -288,12 +290,36 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const platformAvailability = Effect.fn("LocalDeviceHost.platformAvailability")(function* (
     platform: DevicePlatform,
   ): Effect.fn.Return<DevicePlatformAvailability> {
+    if (platform === "android" && (yield* adbAvailable)) {
+      return { platform, available: true };
+    }
     const reason = yield* platformReason(platform).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
     );
     return reason === null ? { platform, available: true } : { platform, available: false, reason };
   });
+
+  const adbAvailable = currentSdk.pipe(
+    Effect.flatMap((sdk) =>
+      sdk.adb
+        ? Effect.succeed(true)
+        : isCommandAvailable("adb").pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(HostProcess.Environment, environment),
+            Effect.provideService(HostProcess.Platform, hostPlatform),
+          ),
+    ),
+  );
+
+  const androidEmulatorAvailable = platformReason("android").pipe(
+    Effect.map((reason) => reason === null),
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Path.Path, path),
+    Effect.provideService(HostProcess.Environment, environment),
+    Effect.provideService(HostProcess.Platform, hostPlatform),
+  );
 
   const summary: Effect.Effect<DeviceHostSummary> = Effect.gen(function* () {
     const [platforms, hubInstalled, agentDeviceInstalled] = yield* Effect.all([
@@ -849,6 +875,41 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       Effect.catch((cause) => Effect.succeed({ stdout: "", stderr: String(cause), code: 127 })),
     );
 
+  const screenshotPhysicalAndroid = Effect.fn("LocalDeviceHost.screenshotPhysicalAndroid")(
+    function* (device: DeviceHost.HostDevice) {
+      const chunks: Uint8Array[] = [];
+      const result = yield* runner
+        .run({
+          command: "adb",
+          args: ["-s", device.id, "exec-out", "screencap", "-p"],
+          cwd: workingDirectory,
+          env: yield* currentHostEnvironment,
+          timeout: Duration.seconds(15),
+          maxOutputBytes: 32 * 1024 * 1024,
+          onStdoutChunk: (chunk) => chunks.push(chunk),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new DeviceOperationError({
+                operation: "screenshot",
+                reason: "command_failed",
+                cause,
+              }),
+          ),
+        );
+      if (result.code !== 0) {
+        return yield* new DeviceOperationError({
+          operation: "screenshot",
+          reason: "command_failed",
+          ...(result.code === null ? {} : { exitCode: Number(result.code) }),
+          cause: result.stderr,
+        });
+      }
+      return Buffer.concat(chunks);
+    },
+  );
+
   const toReady = (running: RunningHost): DeviceHost.DeviceHostReady => ({
     hub: { origin: running.hub.origin } satisfies DeviceHost.DeviceHubEndpoint,
     devices: makeDeviceHubOperations({
@@ -857,7 +918,20 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       http: httpClient,
       run,
       platformAvailable: (platform) =>
-        platformAvailability(platform).pipe(Effect.map((availability) => availability.available)),
+        platform === "android"
+          ? androidEmulatorAvailable
+          : platformAvailability(platform).pipe(
+              Effect.map((availability) => availability.available),
+            ),
+      listPhysicalAndroid: (devices) =>
+        adbAvailable.pipe(
+          Effect.flatMap((available) =>
+            available
+              ? listPhysicalAndroidDevices(run, devices)
+              : Effect.succeed({ devices: [], detail: "" }),
+          ),
+        ),
+      screenshotPhysicalAndroid,
     }),
     nodePath: running.hub.nodePath,
     run,

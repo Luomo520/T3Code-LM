@@ -31,6 +31,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
+import * as FileExchange from "../fileExchange/FileExchange.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as PullRequestWatchService from "../pullRequest/PullRequestWatchService.ts";
@@ -85,6 +86,16 @@ import {
   DeviceScreenshotToolkit,
   DeviceStandardToolkit,
 } from "./toolkits/device/tools.ts";
+import * as CompanionHandlers from "./toolkits/companion/handlers.ts";
+import {
+  CompanionResultTool,
+  CompanionResultToolkit,
+  CompanionStandardToolkit,
+} from "./toolkits/companion/tools.ts";
+import { FileExchangeToolkit } from "./toolkits/fileExchange/tools.ts";
+import * as FileExchangeHandlers from "./toolkits/fileExchange/handlers.ts";
+import * as LinuxDeviceStatusHandlers from "./toolkits/linuxDeviceStatus/handlers.ts";
+import { LinuxDeviceStatusToolkit } from "./toolkits/linuxDeviceStatus/tools.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { MessageToolkit } from "./toolkits/message/tools.ts";
 import * as MessageHandlers from "./toolkits/message/handlers.ts";
@@ -722,7 +733,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
 });
 
 interface ImageToolResult {
-  readonly screenshot: {
+  readonly screenshot?: {
     readonly mimeType: "image/png";
     readonly data: string;
     readonly width: number;
@@ -827,25 +838,32 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
             onFailure: imageToolFailure(tool.name, operation, failureText),
             onSuccess: ({ encodedResult }) => {
               const { screenshot, ...rest } = encodedResult as ImageToolResult;
-              const metadata = {
-                ...rest,
-                screenshot: {
-                  mimeType: screenshot.mimeType,
-                  width: screenshot.width,
-                  height: screenshot.height,
-                },
-              };
+              const metadata =
+                screenshot === undefined
+                  ? rest
+                  : {
+                      ...rest,
+                      screenshot: {
+                        mimeType: screenshot.mimeType,
+                        width: screenshot.width,
+                        height: screenshot.height,
+                      },
+                    };
               return Effect.succeed(
                 new McpSchema.CallToolResult({
                   isError: false,
                   structuredContent: metadata,
                   content: [
                     { type: "text", text: JSON.stringify(metadata) },
-                    {
-                      type: "image" as const,
-                      data: new Uint8Array(Buffer.from(screenshot.data, "base64")),
-                      mimeType: screenshot.mimeType,
-                    },
+                    ...(screenshot === undefined
+                      ? []
+                      : [
+                          {
+                            type: "image" as const,
+                            data: new Uint8Array(Buffer.from(screenshot.data, "base64")),
+                            mimeType: screenshot.mimeType,
+                          },
+                        ]),
                   ],
                 }),
               );
@@ -882,6 +900,29 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
         ? `${error.message} Call device_list to check the device state, and device_open if it needs to be reopened.`
         : error.message;
     },
+  );
+});
+
+const registerCompanionResult = Effect.fn("McpHttpServer.registerCompanionResult")(function* () {
+  const services = yield* Effect.context<
+    | ServerConfig.ServerConfig
+    | ServerSettings.ServerSettingsService
+    | ThreadManagementService.ThreadManagementService
+    | FileSystem.FileSystem
+  >();
+  const built = yield* decodeAsAdvertised(CompanionResultToolkit);
+  yield* registerImageTool(
+    CompanionResultTool,
+    (payload) =>
+      built
+        .handle("t3_companion_result", payload)
+        .pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption)),
+    (effect) => Effect.provide(effect, services),
+    "companion result",
+    (error) =>
+      isOrchestratorMcpFailure(error)
+        ? error.message
+        : (parameterValidationMessage(error) ?? "Companion result failed."),
   );
 });
 
@@ -1292,6 +1333,16 @@ export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceScreenshotRegistration,
 );
 
+export const layerCompanionToolkit = Layer.mergeAll(
+  toolkitRegistration(CompanionStandardToolkit, CompanionHandlers.layerStandard),
+  imageToolRegistration(registerCompanionResult(), CompanionHandlers.layerResult),
+);
+
+const layerLinuxDeviceTools = Layer.mergeAll(
+  toolkitRegistration(FileExchangeToolkit, FileExchangeHandlers.layer),
+  toolkitRegistration(LinuxDeviceStatusToolkit, LinuxDeviceStatusHandlers.layer),
+).pipe(Layer.provide(FileExchange.layer));
+
 /**
  * `McpServer` for in-process calls, which provide `McpInvocationContext`
  * around `callTool` as the auth middleware does for each /mcp request.
@@ -1335,6 +1386,8 @@ export const layerTools = Layer.mergeAll(
   layerWorktreeToolkitRegistration,
   layerPullRequestsToolkit,
   layerDeviceToolkit,
+  layerCompanionToolkit,
+  layerLinuxDeviceTools,
   layerHtmlToolkit,
   layerMessageToolkit,
 );

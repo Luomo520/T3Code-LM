@@ -164,6 +164,33 @@ describe("offline pull request cache", () => {
       ),
   );
 
+  it.effect("keeps usage ranges isolated and prunes old cached windows for each environment", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* Effect.promise(() => sqliteDatabase());
+        const database = yield* MobileDatabase.make;
+        yield* database.saveCache(otherEnvironment, "usage-summary", "UTC:30", 1, "other");
+        yield* database.saveCache(environmentId, "usage-summary", "UTC:30", 1, "30 days");
+        yield* database.saveCache(environmentId, "usage-summary", "UTC:90", 1, "90 days");
+        expect(yield* database.loadCache(environmentId, "usage-summary", "UTC:30")).toEqual(
+          Option.some("30 days"),
+        );
+        expect(yield* database.loadCache(environmentId, "usage-summary", "UTC:90")).toEqual(
+          Option.some("90 days"),
+        );
+        expect(yield* database.loadCache(environmentId, "usage-summary", "UTC:7")).toEqual(
+          Option.none(),
+        );
+        for (let index = 0; index < 18; index++) {
+          yield* database.saveCache(environmentId, "usage-summary", `hour:${index}`, 1, "{}");
+        }
+        expect(yield* database.listCache("usage-summary")).toHaveLength(17);
+        yield* database.clearEnvironmentCache(environmentId);
+        expect(yield* database.listCache("usage-summary")).toEqual(["other"]);
+      }),
+    ),
+  );
+
   it.effect("bounds total header history rows and bytes across environments", () =>
     Effect.scoped(
       Effect.gen(function* () {

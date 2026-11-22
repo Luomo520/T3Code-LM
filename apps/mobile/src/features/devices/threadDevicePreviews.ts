@@ -9,11 +9,15 @@ export function threadDevicePreviews(state: DeviceServiceState | null, threadId:
         (device) => device.hostId === session.hostId && device.id === session.deviceId,
       );
       const host = state?.hosts.find((host) => host.id === session.hostId);
+      const physicalAndroid = device?.platform === "android" && device.physical;
       return {
         key: JSON.stringify([session.hostId, session.deviceId]),
         session,
-        name: device?.name ?? (session.platform === "ios" ? "iOS Simulator" : "Android Emulator"),
-        description: [device?.version, host?.label].filter(Boolean).join(" · "),
+        name: device?.name ?? (session.platform === "ios" ? "iOS Simulator" : "Android device"),
+        description: [device?.version, host?.label, physicalAndroid ? "Android 真机" : null]
+          .filter(Boolean)
+          .join(" · "),
+        canShutdown: device !== undefined && !physicalAndroid,
         serveSimOnly: host?.kind === "simlock",
       };
     });

@@ -3,6 +3,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  FILE_HANDOFF_ROUTE_PREFIX,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
@@ -32,7 +33,12 @@ import { OtlpTracer, OtlpSerialization } from "effect/observability";
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
 import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
-import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
+import {
+  openMediaFile,
+  statMediaFile,
+  streamMediaFile,
+  type OpenMediaFile,
+} from "./assets/MediaFile.ts";
 import { externalDownloadMaxBytes, permitsFileDownload } from "./assets/downloadNetworkPolicy.ts";
 import {
   ATTACHMENT_UPLOAD_ROUTE_PREFIX,
@@ -56,6 +62,7 @@ import {
   DESKTOP_RENDERER_ORIGINS,
 } from "./httpCors.ts";
 import { requestUrl } from "./requestUrl.ts";
+import { receiveFileHandoffChunk, resolveFileHandoff } from "./fileExchange/FileHandoff.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -167,6 +174,7 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     readonly fileName?: string;
     readonly mimeType?: string;
     readonly file?: OpenMediaFile;
+    readonly sha256?: string;
     readonly renderIntent?: "mcp-app";
   },
   rangeHeader?: string,
@@ -209,6 +217,7 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     // Opaque file-version validator, not a content checksum. All range requests
     // also revalidate the signed canonical identity and nanosecond timestamps.
     downloadValidator = `"${mediaInfo.dev}-${mediaInfo.ino}-${mediaInfo.size}-${mediaInfo.mtimeNs}-${mediaInfo.ctimeNs}"`;
+    if (asset.sha256) downloadValidator = `"sha256-${asset.sha256}"`;
     headers.ETag = downloadValidator;
     headers["Cache-Control"] = "private, no-store";
   }
@@ -418,7 +427,8 @@ const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((
     UNTRACED_REQUEST_PATHS.has(path) ||
     path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) ||
     path.startsWith(`${ASSET_ROUTE_PREFIX}/`) ||
-    path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`)
+    path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`) ||
+    path.startsWith(`${FILE_HANDOFF_ROUTE_PREFIX}/`)
   );
 });
 
@@ -502,6 +512,73 @@ export const layerAssetRoute = HttpRouter.add(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
   }),
+);
+
+const handoffHttpResponse = Effect.fn("handoffHttpResponse")(
+  function* (mode: "upload" | "receive") {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = Option.getOrNull(requestUrl(request));
+    const token = url?.pathname.slice(FILE_HANDOFF_ROUTE_PREFIX.length + 1);
+    if (!token) return HttpServerResponse.empty({ status: 404 });
+    const transfer = yield* resolveFileHandoff(token, mode);
+    if (!transfer) return HttpServerResponse.empty({ status: 404 });
+    if (mode === "upload") {
+      const offset = url?.searchParams.get("offset");
+      if (!offset || !/^\d+$/.test(offset) || !Number.isSafeInteger(Number(offset))) {
+        return HttpServerResponse.empty({ status: 400 });
+      }
+      const bodyPull = yield* Stream.toPull(request.stream);
+      return yield* receiveFileHandoffChunk(
+        transfer,
+        Number(offset),
+        Stream.fromPull(Effect.succeed(bodyPull)),
+      );
+    }
+    if (transfer.record.sha256 === null) return HttpServerResponse.empty({ status: 404 });
+    const configuredLimit = yield* Config.String("T3CODE_EXTERNAL_DOWNLOAD_MAX_MIB").pipe(
+      Config.withDefault(""),
+    );
+    if (
+      !permitsFileDownload({
+        sizeBytes: BigInt(transfer.record.sizeBytes),
+        source: request.source,
+        headers: request.headers,
+        externalMaxBytes: externalDownloadMaxBytes(configuredLimit),
+      })
+    ) {
+      return HttpServerResponse.empty({
+        status: 403,
+        headers: { "cache-control": "private, no-store" },
+      });
+    }
+    const file = yield* openMediaFile(transfer.path);
+    if (file === null || file.info.size !== BigInt(transfer.record.sizeBytes))
+      return HttpServerResponse.empty({ status: 409 });
+    const response = yield* assetFileResponse(
+      {
+        path: transfer.path,
+        download: true,
+        fileName: transfer.record.name,
+        sha256: transfer.record.sha256,
+        mimeType: "application/octet-stream",
+        file,
+      },
+      request.method === "GET" ? request.headers.range : undefined,
+      request.headers["if-range"],
+      request.method === "HEAD" ? "HEAD" : "GET",
+    );
+    return HttpServerResponse.setHeader(
+      response,
+      "Repr-Digest",
+      `sha-256=:${Buffer.from(transfer.record.sha256, "hex").toString("base64")}:`,
+    );
+  },
+  Effect.orElseSucceed(() => HttpServerResponse.empty({ status: 500 })),
+);
+
+export const layerFileHandoffRoutes = Layer.mergeAll(
+  HttpRouter.add("POST", `${FILE_HANDOFF_ROUTE_PREFIX}/*`, handoffHttpResponse("upload")),
+  HttpRouter.add("GET", `${FILE_HANDOFF_ROUTE_PREFIX}/*`, handoffHttpResponse("receive")),
 );
 
 export const layerAttachmentUploadRoute = HttpRouter.add(

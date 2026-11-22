@@ -360,6 +360,7 @@ describe("device targeting across hosts", () => {
     physical: false,
   };
   const macPixel = { ...localPixel, hostId: "mac-mini" };
+  const physicalPhone = { ...localPixel, id: "USB-PHONE", booted: true, physical: true };
   const multiHostState = {
     ...state,
     hosts: [...state.hosts, macHost],
@@ -367,7 +368,7 @@ describe("device targeting across hosts", () => {
       local: { status: "ready" as const },
       "mac-mini": { status: "ready" as const },
     },
-    devices: [device, macIphone, localPixel, macPixel],
+    devices: [device, macIphone, physicalPhone, localPixel, macPixel],
   };
   const session = (hostId: string, deviceId: string, platform: "ios" | "android") => ({
     threadId,
@@ -478,6 +479,28 @@ describe("device targeting across hosts", () => {
   };
   const text = (result: McpSchema.CallToolResult) =>
     result.content.flatMap((entry) => (entry.type === "text" ? [entry.text] : [])).join("\n");
+
+  it.effect("keeps a manually opened physical phone out of agent list, open and screenshots", () =>
+    run(
+      [session("mac-mini", "MAC-UDID", "ios"), session("local", "USB-PHONE", "android")],
+      ({ opened, call }) =>
+        Effect.gen(function* () {
+          const listed = yield* call("device_list", {});
+          expect(JSON.stringify(listed.structuredContent)).not.toContain("USB-PHONE");
+          const explicit = yield* call("device_open", { deviceId: "USB-PHONE" });
+          expect(explicit.isError).toBe(true);
+          expect(text(explicit)).toContain("manual use in the Device panel");
+          expect(opened).toEqual([]);
+          expect((yield* call("device_open", { platform: "android" })).isError).toBe(false);
+          expect(opened).toEqual([{ hostId: "local", deviceId: "Pixel_10" }]);
+          const shot = yield* call("device_screenshot", {});
+          expect(shot.structuredContent).toMatchObject({ device: { id: "MAC-UDID" } });
+          const privateShot = yield* call("device_screenshot", { deviceId: "USB-PHONE" });
+          expect(privateShot.isError).toBe(true);
+          expect(privateShot.content.map((entry) => entry.type)).toEqual(["text"]);
+        }),
+    ),
+  );
 
   it.effect("opens a device id that exists only on another host", () =>
     run([], ({ opened, call }) =>

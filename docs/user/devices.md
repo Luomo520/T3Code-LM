@@ -127,6 +127,49 @@ installation, and connectivity to development servers such as Metro separately.
 A simulator on another machine cannot reach Metro through your environment's
 localhost without forwarding or another reachable address.
 
+## Linux file exchange (beta)
+
+An agent in a live Full access thread can send or receive one file at a time through SFTP. Ask for
+the direction, the configured device ID, and the filename. The agent can use a different filename at
+the destination. Transfers accept ordinary files up to 8 MiB and require a new destination name.
+The receipt shows the byte count and SHA-256, and the agent can check an expected SHA-256 before
+publishing the file.
+
+### Set up a Linux SFTP device
+
+1. On the remote Linux device, provision an OpenSSH account dedicated to SFTP. Confine it to a
+   dedicated jail using `ChrootDirectory` and `ForceCommand internal-sftp`. Give the account
+   access to a writable directory inside the jail, such as `/exchange`, on a filesystem that
+   supports hard links. Keep the jail and the exchange directory's parent under administrator
+   ownership.
+2. On the Linux machine running T3 Code server, configure an OpenSSH alias for that account.
+   Set up non-interactive authentication and verify the host key in the T3 server account's
+   SSH configuration. Create the local exchange directory as a direct child of the configured
+   project root or worktree.
+3. Add the device to the T3 server's `T3CODE_FILE_EXCHANGE_TARGETS` environment variable and
+   restart the server. Use absolute project and remote paths, with the remote path as seen
+   inside the SFTP jail. Configure worktrees individually by absolute path.
+
+```sh
+export T3CODE_FILE_EXCHANGE_TARGETS='[{"deviceId":"build-box","sshAlias":"build-box-sftp","workspaceRoot":"/srv/projects/example","localDirectory":"exchange","remoteDirectory":"/exchange"}]'
+```
+
+A connection loss can interrupt cleanup and leave a hidden `.t3-file-exchange-*` directory.
+After a failed transfer, check whether the destination already exists before retrying. The
+administrator can remove an abandoned staging directory after confirming the transfer has ended.
+
+### Read Linux device status
+
+In a live thread, ask for the device's kernel version, available space on its root filesystem, or
+time since boot. Include the configured device ID in your request.
+
+To enable these checks, add a separate OpenSSH alias for a diagnostics account on that device.
+Configure non-interactive authentication and verify the host key for each alias in the T3 server
+account's SSH configuration. Add the diagnostics alias to the same target entry as
+`"diagnosticsSshAlias":"build-box-status"`, then restart the T3 server. The diagnostics account
+needs to run `/bin/uname -sr`, `/bin/df -Pk /`, and `/bin/cat /proc/uptime` without elevated
+privileges.
+
 ## Simlock hosts (alpha)
 
 [Simlock](https://incubator.callstack.com/simlock/) pools iOS simulators and

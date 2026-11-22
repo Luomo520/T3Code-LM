@@ -44,6 +44,7 @@ const agentFixture = Effect.fn("agentFixture")(function* (
   avdOutput: ProcessRunner.ProcessRunOutput = processOutput(0),
   previousDaemon?: typeof LocalDeviceHost.__testing.AgentDeviceDaemonFile.Type,
   environment?: NodeJS.ProcessEnv,
+  runAdb?: (input: ProcessRunner.ProcessRunInput) => ProcessRunner.ProcessRunOutput,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -106,6 +107,7 @@ const agentFixture = Effect.fn("agentFixture")(function* (
     Effect.provideService(ProcessRunner.ProcessRunner, {
       run: (input) => {
         runs.push(input);
+        if (input.command === "adb" && runAdb) return Effect.sync(() => runAdb(input));
         return input.args.includes("devices")
           ? startup(stateDir)
           : input.args.includes("daemon")
@@ -120,9 +122,15 @@ const agentFixture = Effect.fn("agentFixture")(function* (
           Effect.map((healthy) =>
             HttpClientResponse.fromWeb(
               request,
-              new Response("ok", {
-                status: request.url.endsWith("/health") && !healthy ? 503 : 200,
-              }),
+              request.url.endsWith("/api/devices")
+                ? Response.json({
+                    simulators: [],
+                    emulators: [],
+                    errors: [{ message: "[android-utils] Failed to run avdmanager" }],
+                  })
+                : new Response("ok", {
+                    status: request.url.endsWith("/health") && !healthy ? 503 : 200,
+                  }),
             ),
           ),
         ),
@@ -458,6 +466,89 @@ const diagnose = (
   );
 
 describe("Android SDK availability", () => {
+  it.effect("opens discovery and captures physical Android with only Platform-Tools", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sdk = yield* fs.makeTempDirectoryScoped({ prefix: "t3-adb-only-" });
+      yield* fs.makeDirectory(`${sdk}/platform-tools`);
+      yield* fs.writeFileString(`${sdk}/platform-tools/adb`, "");
+      const png = Uint8Array.of(
+        137,
+        80,
+        78,
+        71,
+        13,
+        10,
+        26,
+        10,
+        0,
+        0,
+        0,
+        0,
+        73,
+        69,
+        78,
+        68,
+        174,
+        66,
+        96,
+        130,
+      );
+      const { host, runs } = yield* agentFixture(
+        () => Effect.die("Discovery should not start agent-device"),
+        processOutput(0),
+        undefined,
+        { ANDROID_HOME: sdk, PATH: "" },
+        (input) => {
+          if (input.args[0] === "devices")
+            return processOutput(
+              0,
+              [
+                "List of devices attached",
+                "usb-test device usb:1-3 model:Pixel_8",
+                "denied no permissions (missing USB permissions); usb:1-4",
+                "prompt unauthorized usb:1-5",
+                "emulator-5554 device product:sdk model:Pixel_9",
+                "tcp-emulator:5555 device product:sdk model:Pixel_9",
+              ].join("\n"),
+            );
+          if (input.args.includes("getprop"))
+            return processOutput(
+              0,
+              input.args[1] === "usb-test"
+                ? "[ro.product.model]: [Pixel 8]\n[ro.build.version.release]: [15]"
+                : "[ro.kernel.qemu]: [1]",
+            );
+          expect(input.args).toEqual(["-s", "usb-test", "exec-out", "screencap", "-p"]);
+          input.onStdoutChunk?.(png.slice(0, 5));
+          input.onStdoutChunk?.(png.slice(5));
+          return processOutput(0);
+        },
+      );
+      expect((yield* host.summary).platforms).toContainEqual({
+        platform: "android",
+        available: true,
+      });
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const listing = yield* ready.devices.list;
+      expect(listing.devices).toEqual([
+        {
+          id: "usb-test",
+          name: "Pixel 8",
+          version: "Android 15",
+          platform: "android",
+          booted: true,
+          physical: true,
+        },
+      ]);
+      expect(listing.detail).toContain("does not have permission");
+      expect(listing.detail).toContain("accept its USB debugging prompt");
+      expect(listing.detail).not.toContain("avdmanager");
+      expect(runs.some((run) => run.args.includes("-list-avds"))).toBe(false);
+      expect(Uint8Array.from(yield* ready.devices.screenshot(listing.devices[0]!))).toEqual(png);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("uses the standard Windows SDK without probing PATH", () =>
     Effect.gen(function* () {
       const root = "C:\\Users\\test\\AppData\\Local\\Android\\Sdk";

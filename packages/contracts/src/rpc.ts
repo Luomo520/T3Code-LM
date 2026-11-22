@@ -112,6 +112,13 @@ import {
   AttachmentUploadLimitError,
 } from "./assets.ts";
 import {
+  FileHandoffError,
+  FileHandoffReply,
+  FileHandoffRequest,
+  FileHandoffStart,
+  FileHandoffUpload,
+} from "./fileHandoff.ts";
+import {
   PersistChatAttachmentsError,
   PersistChatAttachmentsInput,
   PersistChatAttachmentsResult,
@@ -443,6 +450,8 @@ export const WS_METHODS = {
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
   assetsPersistChatAttachments: "assets.persistChatAttachments",
+  fileHandoffRead: "fileHandoff.read",
+  fileHandoffStart: "fileHandoff.start",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
 
@@ -1492,6 +1501,18 @@ const WsAssetsPersistChatAttachmentsRpc = Rpc.make(WS_METHODS.assetsPersistChatA
   error: Schema.Union([PersistChatAttachmentsError, EnvironmentAuthorizationError]),
 });
 
+const WsFileHandoffReadRpc = Rpc.make(WS_METHODS.fileHandoffRead, {
+  payload: FileHandoffRequest,
+  success: FileHandoffReply,
+  error: Schema.Union([FileHandoffError, EnvironmentAuthorizationError]),
+});
+
+const WsFileHandoffStartRpc = Rpc.make(WS_METHODS.fileHandoffStart, {
+  payload: FileHandoffStart,
+  success: FileHandoffUpload,
+  error: Schema.Union([FileHandoffError, EnvironmentAuthorizationError]),
+});
+
 const WsAttachmentsCreateUploadUrlRpc = Rpc.make(WS_METHODS.attachmentsCreateUploadUrl, {
   payload: AttachmentCreateUploadUrlInput,
   success: AttachmentCreateUploadUrlResult,
@@ -2278,6 +2299,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
   WsAssetsPersistChatAttachmentsRpc,
+  WsFileHandoffReadRpc,
+  WsFileHandoffStartRpc,
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,
   WsMcpAppsCallToolRpc,

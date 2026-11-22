@@ -127,7 +127,7 @@ export function platformSetupStatus(state: DeviceServiceState, platform: DeviceP
       message:
         platform === "ios"
           ? "Xcode is installed, but no iOS Simulator is available. Install a runtime in Xcode Settings → Components."
-          : "The Android SDK is installed, but no virtual device exists. Create one in Android Studio → Device Manager.",
+          : "Connect an Android device with USB debugging enabled or create an emulator in Android Studio → Device Manager.",
     };
   }
   const remoteHost = supportingHosts.every((host) => host.kind !== "local")
@@ -141,7 +141,7 @@ export function platformSetupStatus(state: DeviceServiceState, platform: DeviceP
         ? `${remoteHost.label} starts ${platform === "ios" ? "iOS Simulators" : "Android emulators"} in the cloud with EAS Simulator.`
         : platform === "ios"
           ? `Xcode and iOS Simulator are available${location}.`
-          : `The Android SDK and Emulator are available${location}.`,
+          : `Android device support is available${location}.`,
   };
 }
 

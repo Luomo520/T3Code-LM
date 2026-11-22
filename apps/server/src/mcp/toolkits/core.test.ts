@@ -8,6 +8,7 @@ import {
   ChatImageAttachment,
   CommandId,
   EnvironmentId,
+  MessageId,
   NodeId,
   OrchestratorMcpThreadReadResult,
   ProjectId,
@@ -24,6 +25,7 @@ import {
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
@@ -61,6 +63,8 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { dispatchFailure } from "../threadAccess.ts";
 import * as EnvironmentHandlers from "./environment/handlers.ts";
 import * as AttachmentHandlers from "./attachment/handlers.ts";
+import * as MessageHandlers from "./message/handlers.ts";
+import { MessageToolkit } from "./message/tools.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
 import * as PeerForwarding from "../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
@@ -115,6 +119,72 @@ const client = McpSchema.McpServerClient.of({
     clientInfo: { name: "mcp-core", version: "1" },
   },
   getClient: Effect.die("unused"),
+});
+
+it.effect("reports the exact message origin only within the calling thread", () => {
+  const messageId = MessageId.make("user-message-with-origin");
+  const oldMessageId = MessageId.make("user-message-before-origin");
+  const createdAt = DateTime.makeUnsafe("2026-09-13T00:00:00.000Z");
+  const origin = { clientAlias: "client-1", surface: "mobile", os: "Android" } as const;
+  const common = {
+    threadId,
+    runId: null,
+    nodeId: null,
+    role: "user" as const,
+    createdBy: "user" as const,
+    creationSource: "mobile" as const,
+    createdAt,
+    updatedAt: createdAt,
+    attachments: [],
+    text: "Do not include the text in the source result",
+    streaming: false,
+  };
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const lookup = (caller: McpInvocationContext.McpInvocationScope, id: MessageId) =>
+      server
+        .callTool({ name: "get_message_origin", arguments: { messageId: id } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, caller),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const found = yield* lookup(scope, messageId);
+    expect(found.structuredContent).toEqual({ status: "recorded", messageId, origin });
+    const historical = yield* lookup(scope, oldMessageId);
+    expect(historical.structuredContent).toEqual({ status: "unknown", messageId: oldMessageId });
+    const fromAnotherThread = yield* lookup(
+      { ...scope, thread: { ...scope.thread!, threadId: ThreadId.make("other-thread") } },
+      messageId,
+    );
+    expect(fromAnotherThread.structuredContent).toEqual({ status: "missing" });
+    const fromOutside = yield* lookup({ ...scope, thread: undefined }, messageId);
+    expect(declaredFailure(fromOutside)).toMatchObject({ code: "thread_credential_required" });
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.toolkitRegistration(MessageToolkit, MessageHandlers.layer).pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getMessagesById: (target, ids) =>
+              Effect.succeed(
+                new Map(
+                  (target === threadId
+                    ? [
+                        { ...common, id: messageId, clientOrigin: origin },
+                        { ...common, id: oldMessageId },
+                      ]
+                    : []
+                  )
+                    .filter((message) => ids.includes(message.id))
+                    .map((message) => [message.id, message]),
+                ),
+              ),
+          }),
+        ),
+      ),
+    ),
+  );
 });
 
 it.effect("checks capability through the production registration", () =>

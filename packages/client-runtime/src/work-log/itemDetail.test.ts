@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { isJsonToolText, turnItemOutputImages, turnItemOutputText } from "./itemDetail.ts";
+import {
+  companionScreenshotOutput,
+  isJsonToolText,
+  turnItemOutputImages,
+  turnItemOutputText,
+} from "./itemDetail.ts";
 
 describe("isJsonToolText", () => {
   it.each([
@@ -23,7 +28,10 @@ describe("isJsonToolText", () => {
   });
 });
 
-function toolItem(output: unknown): OrchestrationV2TurnItem {
+function toolItem(
+  output: unknown,
+  toolName = "screenshots",
+): Extract<OrchestrationV2TurnItem, { readonly type: "dynamic_tool" }> {
   return {
     id: TurnItemId.make("images"),
     threadId: ThreadId.make("thread"),
@@ -40,11 +48,44 @@ function toolItem(output: unknown): OrchestrationV2TurnItem {
     completedAt: null,
     updatedAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
     type: "dynamic_tool",
-    toolName: "screenshots",
+    toolName,
     input: {},
     output,
   };
 }
+
+describe("companion screenshot output", () => {
+  const summary = "书房 PC · 主显示器 · 上报时间 2026-11-23T01:23:45Z";
+  const metadata = { status: "done", captureScope: "primary-display", summary };
+  const image = { type: "image", mimeType: "image/png" };
+  const content = [{ type: "text", text: JSON.stringify(metadata) }, image];
+
+  it.each([
+    ["t3-code-direct.t3_companion_result", { content, structuredContent: metadata }],
+    ["mcp__t3-code__t3_companion_result", content],
+    ["t3-code-thread_123_t3_companion_result", content],
+  ])("shows the summary for a stored PNG from %s", (name, output) => {
+    const item = toolItem(output, name);
+    expect(companionScreenshotOutput(item)).toEqual({
+      summary,
+      fileName: "截图-images.png",
+    });
+    expect(turnItemOutputImages(item)).toEqual([
+      { _tag: "tool-output-image", threadId: "thread", itemId: "images", index: 0 },
+    ]);
+  });
+
+  it("only offers an original PNG for a result with image bytes available", () => {
+    expect(companionScreenshotOutput(toolItem(content, "t3.other_tool"))).toBeNull();
+    expect(companionScreenshotOutput(toolItem(metadata, "t3-code.t3_companion_result"))).toBeNull();
+    expect(
+      companionScreenshotOutput({
+        ...toolItem(content, "t3-code.t3_companion_result"),
+        outputOmitted: true,
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("tool image output parsing", () => {
   it.each(["image-only", "summary", "json"] as const)(

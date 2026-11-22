@@ -174,6 +174,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.agentSessionsImport]: "workspace",
   [WS_METHODS.assetsCreateUrl]: "workspace",
   [WS_METHODS.assetsPersistChatAttachments]: "orchestration",
+  [WS_METHODS.fileHandoffRead]: "workspace",
+  [WS_METHODS.fileHandoffStart]: "workspace",
   [WS_METHODS.attachmentsCreateUploadUrl]: "workspace",
   [WS_METHODS.attachmentsDelete]: "workspace",
   [WS_METHODS.providerUploadFeedback]: "provider",

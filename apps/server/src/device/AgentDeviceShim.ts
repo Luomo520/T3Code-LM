@@ -184,6 +184,26 @@ if (!informational && name === "device") {
   process.exit(1);
 }
 const skip = refused.get(name) ?? [];
+if (!informational && bound.length > 0) {
+  const targetFlags = new Map();
+  for (let index = 0; index + 1 < bound.length; index += 2) {
+    targetFlags.set(bound[index], bound[index + 1]);
+  }
+  const overrides = new Set([
+    "--platform", "--serial", "--udid", "--device", "--target", "--session", "--config",
+    "--daemon-base-url", "--daemon-auth-token", "--android-device-allowlist",
+  ]);
+  for (let index = 0; index < options.length; index++) {
+    const arg = options[index];
+    const separator = arg.indexOf("=");
+    const flag = separator < 0 ? arg : arg.slice(0, separator);
+    const value = separator < 0 && valued.has(flag) ? options[++index] : arg.slice(separator + 1);
+    if (overrides.has(flag) && (!targetFlags.has(flag) || targetFlags.get(flag) !== value)) {
+      console.error("This command is bound to the device and session selected by device_open.");
+      process.exit(1);
+    }
+  }
+}
 if (!informational) for (let index = 0; index + 1 < bound.length; index += 2) if (!skip.includes(bound[index]) && !options.some(arg => arg === bound[index] || arg.startsWith(bound[index] + "="))) options.push(bound[index], bound[index + 1]);
 const command = end < 0 ? options : [...options, ...args.slice(end)];
 const hasValue = flag => { const index = options.indexOf(flag); return options.some(arg => arg.startsWith(flag + "=") && arg.length > flag.length + 1) || (index >= 0 && !!options[index + 1] && !options[index + 1].startsWith("--")); };

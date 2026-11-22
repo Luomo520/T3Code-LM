@@ -34,6 +34,7 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/worktrees"
   | "/settings/connections"
+  | "/settings/cross-device"
   | "/settings/access"
   | "/settings/secrets"
   | "/settings/maintenance"
@@ -109,6 +110,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": msg("Source control"),
   "/settings/worktrees": msg("Worktrees"),
   "/settings/connections": msg("Environments"),
+  "/settings/cross-device": msg("Cross-device control"),
   "/settings/access": msg("Sharing & access"),
   "/settings/secrets": msg("Secrets"),
   "/settings/maintenance": msg("Maintenance"),
@@ -155,6 +157,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     heading: msg("Connections"),
     paths: [
       "/settings/connections",
+      "/settings/cross-device",
       "/settings/access",
       ...(isSecretsFeatureEnabled ? (["/settings/secrets"] as const) : []),
     ],
@@ -519,10 +522,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "linked-environments-beta",
-    title: "Linked environments",
-    to: "/settings/labs",
+    title: msg("Linked environments"),
+    to: "/settings/cross-device",
     scope: "environment",
-    searchTerms: ["beta link another machine vps peer agents work there delegate"],
+    searchTerms: ["beta link another machine vps peer agents work there delegate 关联环境"],
   },
   {
     id: "prompt-suggestions-beta",
@@ -1334,6 +1337,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "cross-device-control",
+    title: msg("Cross-device control"),
+    to: "/settings/cross-device",
+    searchTerms: ["multi-device agent device panel browser preview 多端互控 设备面板 浏览器预览"],
+  },
+  {
+    id: "windows-companion",
+    title: msg("Windows companion (Beta)"),
+    to: "/settings/cross-device",
+    searchTerms: ["pair add device windows companion beta 受控端 配对"],
+  },
+  {
     id: "linked-environments",
     peerLinksOnly: true,
     title: "Linked environments",
@@ -1407,6 +1422,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",
+  "/settings/cross-device": null,
   "/settings/access": "connections",
   "/settings/secrets": null,
   "/settings/scheduled-tasks": null,
@@ -1426,6 +1442,7 @@ const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "/settings/appearance",
   "/settings/source-control",
   "/settings/connections",
+  "/settings/labs",
   ...Object.keys(RENAMED_SETTINGS_PATHS),
 ]);
 // Section anchors that moved but are not search results themselves.

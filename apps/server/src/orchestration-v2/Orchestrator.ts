@@ -161,6 +161,7 @@ import {
   runtimeModeCeilingRefusal,
   threadsStartingWork,
 } from "./DispatchModeLimit.ts";
+import { MessageClientOrigin } from "./MessageClientOrigin.ts";
 import {
   applyToProjection,
   emptyProjection,
@@ -5881,6 +5882,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
+    readonly clientOrigin?: OrchestrationV2ConversationMessage["clientOrigin"];
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly linkedSender?: OrchestrationV2ConversationMessage["linkedSender"];
@@ -6020,6 +6022,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const message: OrchestrationV2ConversationMessage = {
           createdBy: input.createdBy,
           creationSource: input.creationSource,
+          ...(input.clientOrigin === undefined ? {} : { clientOrigin: input.clientOrigin }),
           ...(input.delegatedCompletion === undefined
             ? {}
             : { delegatedCompletion: input.delegatedCompletion }),
@@ -6644,6 +6647,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
+    const existingMessage = projection.messages.find((message) => message.id === command.messageId);
+    const clientOrigin =
+      existingMessage !== undefined
+        ? existingMessage.clientOrigin
+        : command.createdBy === "user" && command.guestMessageId === undefined
+          ? yield* MessageClientOrigin
+          : undefined;
+    const sourceFields = clientOrigin === undefined ? {} : { clientOrigin };
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
       if (
@@ -7287,6 +7298,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         attachments: command.attachments,
         createdBy: command.createdBy,
         creationSource: command.creationSource,
+        ...sourceFields,
         ...(command.scheduledTaskId === undefined
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
@@ -7582,6 +7594,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const message: OrchestrationV2ConversationMessage = {
         createdBy: command.createdBy,
         creationSource: command.creationSource,
+        ...sourceFields,
         ...(command.scheduledTaskId === undefined
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
@@ -8000,6 +8013,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const message: OrchestrationV2ConversationMessage = {
         createdBy: command.createdBy,
         creationSource: command.creationSource,
+        ...sourceFields,
         ...(command.scheduledTaskId === undefined
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
@@ -8794,6 +8808,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const message: OrchestrationV2ConversationMessage = {
       createdBy: command.createdBy,
       creationSource: command.creationSource,
+      ...sourceFields,
       ...(command.scheduledTaskId === undefined
         ? {}
         : { scheduledTaskId: command.scheduledTaskId }),
@@ -10807,6 +10822,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const requestNode = context.node;
       if (command.feedback !== undefined) {
         const messageId = MessageId.make(`approval-feedback:${command.requestId}`);
+        const clientOrigin = yield* MessageClientOrigin;
         // Record the reply for every client without dispatching a prompt to the parent agent.
         yield* emitEvent({
           type: "message.updated",
@@ -10822,6 +10838,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             role: "user",
             text: command.feedback,
             attachments: [],
+            ...(clientOrigin === undefined ? {} : { clientOrigin }),
             streaming: false,
             createdBy: "user",
             creationSource: "server",
@@ -11364,6 +11381,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
       createdBy: queuedMessage.createdBy,
       creationSource: queuedMessage.creationSource,
+      ...(queuedMessage.clientOrigin === undefined
+        ? {}
+        : { clientOrigin: queuedMessage.clientOrigin }),
       ...(queuedMessage.scheduledTaskId === undefined
         ? {}
         : { scheduledTaskId: queuedMessage.scheduledTaskId }),

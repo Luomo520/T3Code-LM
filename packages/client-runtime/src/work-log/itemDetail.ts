@@ -1,5 +1,6 @@
 import type { AssetResource, OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
+import { resolveT3McpToolId } from "@t3tools/shared/t3McpToolPresentation";
 import {
   mcpToolResultOutput,
   toolOutputImageBlocks,
@@ -246,6 +247,24 @@ export function turnItemOutputImages(
     itemId: item.id,
     index,
   }));
+}
+
+export function companionScreenshotOutput(item: OrchestrationV2TurnItem) {
+  if (
+    item.type !== "dynamic_tool" ||
+    resolveT3McpToolId(item.toolName) !== "t3_companion_result" ||
+    item.outputOmitted === true ||
+    toolOutputImages(item.output)[0]?.mimeType !== "image/png"
+  ) {
+    return null;
+  }
+
+  const formatted = dynamicToolOutputText(item);
+  const metadata = formatted ? parseJson(formatted) : undefined;
+  const summary =
+    isRecord(metadata) && typeof metadata.summary === "string" ? metadata.summary : null;
+  const suffix = item.id.replace(/[^a-z0-9_-]/gi, "_").slice(-16);
+  return { summary, fileName: `截图-${suffix}.png` };
 }
 
 export function turnItemHasDetail(item: OrchestrationV2TurnItem): boolean {

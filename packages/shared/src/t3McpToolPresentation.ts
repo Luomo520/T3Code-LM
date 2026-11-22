@@ -289,6 +289,11 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "device",
   ),
   device_close: tool(["Close", "Closing", "Closed", "a device"], "device", "device"),
+  t3_companion_result: tool(
+    ["查看", "正在读取", "已读取", "Windows 设备任务结果"],
+    "device",
+    "device",
+  ),
   run_scheduled_task_now: tool(
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",

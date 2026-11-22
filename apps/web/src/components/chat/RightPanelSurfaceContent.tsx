@@ -24,6 +24,7 @@ import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
+import { FileHandoffPanel } from "../files/FileHandoffPanel";
 
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -206,36 +207,45 @@ export function RightPanelSurfaceContent(props: {
       const attachment = surface.kind === "file" ? surface.attachment : undefined;
       if (!attachment && (files.projectName === null || !files.workspaceRoot)) return null;
       return (
-        <Suspense fallback={null}>
-          <FilePreviewPanel
-            key={`${props.environmentId}:${
-              attachment ? `attachment:${attachment.id}` : files.workspaceRoot
-            }`}
-            environmentId={props.environmentId}
-            cwd={files.workspaceRoot ?? ""}
-            projectName={files.projectName ?? ""}
-            projectId={files.projectId}
-            threadRef={threadRef}
-            composerDraftTarget={props.composerDraftTarget}
-            keybindings={props.keybindings}
-            availableEditors={files.availableEditors}
-            openInShortcutEnabled={visible}
-            relativePath={surface.kind === "file" ? surface.relativePath : null}
-            {...(attachment ? { attachment } : {})}
-            revealLine={surface.kind === "file" ? (surface.revealLine ?? null) : null}
-            revealRequestId={surface.kind === "file" ? surface.revealRequestId : 0}
-            onOpenFile={files.onOpenFile}
-            onNavigateFolder={(relativePath, folderTrail, keepSource) =>
-              useRightPanelStore
-                .getState()
-                .navigateFolder(threadRef, surface.id, relativePath, folderTrail, keepSource)
-            }
-            folderTrail={surface.folderTrail}
-            onPendingChange={files.onPendingChange}
-            selectedFilePending={surface.kind === "file" && files.pendingSurfaceIds.has(surface.id)}
-            workspaceMutationId={props.workspaceMutationId}
-          />
-        </Suspense>
+        <div className="flex h-full min-h-0 flex-col">
+          {surface.kind === "files" && (
+            <FileHandoffPanel key={scopedThreadKey(threadRef)} thread={threadRef} />
+          )}
+          <div className="min-h-0 flex-1">
+            <Suspense fallback={null}>
+              <FilePreviewPanel
+                key={`${props.environmentId}:${
+                  attachment ? `attachment:${attachment.id}` : files.workspaceRoot
+                }`}
+                environmentId={props.environmentId}
+                cwd={files.workspaceRoot ?? ""}
+                projectName={files.projectName ?? ""}
+                projectId={files.projectId}
+                threadRef={threadRef}
+                composerDraftTarget={props.composerDraftTarget}
+                keybindings={props.keybindings}
+                availableEditors={files.availableEditors}
+                openInShortcutEnabled={visible}
+                relativePath={surface.kind === "file" ? surface.relativePath : null}
+                {...(attachment ? { attachment } : {})}
+                revealLine={surface.kind === "file" ? (surface.revealLine ?? null) : null}
+                revealRequestId={surface.kind === "file" ? surface.revealRequestId : 0}
+                onOpenFile={files.onOpenFile}
+                onNavigateFolder={(relativePath, folderTrail, keepSource) =>
+                  useRightPanelStore
+                    .getState()
+                    .navigateFolder(threadRef, surface.id, relativePath, folderTrail, keepSource)
+                }
+                folderTrail={surface.folderTrail}
+                onPendingChange={files.onPendingChange}
+                selectedFilePending={
+                  surface.kind === "file" && files.pendingSurfaceIds.has(surface.id)
+                }
+                workspaceMutationId={props.workspaceMutationId}
+              />
+            </Suspense>
+          </div>
+        </div>
       );
     }
   }

@@ -312,6 +312,11 @@ describe("settings mutation authorization", () => {
             patch: { requireConnectDeviceApproval: false },
           }).pipe(Effect.flip),
         ).toMatchObject({ requiredPermission: AuthAccessWriteScope });
+        expect(
+          yield* client[WS_METHODS.serverUpdateSettings]({
+            patch: { windowsCompanionEnabled: true },
+          }).pipe(Effect.flip),
+        ).toMatchObject({ requiredPermission: AuthAccessWriteScope });
         expect(handled).toBe(false);
       }),
   );

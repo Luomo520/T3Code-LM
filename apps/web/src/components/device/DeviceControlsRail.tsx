@@ -37,10 +37,12 @@ import type { DeviceControls } from "./useDeviceControls";
 export function DeviceControlsRail(props: {
   platform: DevicePlatform;
   hostKind: DeviceHostSummary["kind"] | undefined;
+  physicalAndroid: boolean;
   handle: DeviceStreamHandle | null;
   view: DeviceViewControls;
   controls: DeviceControls;
   screenshotPending: boolean;
+  screenshotAvailable: boolean;
   onScreenshot: () => void;
   toolsOpen: boolean;
   onTools: () => void;
@@ -198,7 +200,7 @@ export function DeviceControlsRail(props: {
           <RailButton
             tooltipSide={popupSide}
             label={props.screenshotPending ? "Capturing screenshot" : "Save screenshot"}
-            disabled={!view.streaming || props.screenshotPending}
+            disabled={!props.screenshotAvailable || props.screenshotPending}
             onClick={props.onScreenshot}
           >
             <Camera />
@@ -226,11 +228,15 @@ export function DeviceControlsRail(props: {
               <X />
               Close device panel
             </MenuItem>
-            <MenuSeparator />
-            <MenuItem variant="destructive" onClick={props.onPowerOff}>
-              <Power />
-              {props.hostKind === "simlock" ? "Return device to the pool" : "Power off device"}
-            </MenuItem>
+            {props.physicalAndroid ? null : (
+              <>
+                <MenuSeparator />
+                <MenuItem variant="destructive" onClick={props.onPowerOff}>
+                  <Power />
+                  {props.hostKind === "simlock" ? "Return device to the pool" : "Power off device"}
+                </MenuItem>
+              </>
+            )}
           </MenuPopup>
         </Menu>
         <RailDivider />

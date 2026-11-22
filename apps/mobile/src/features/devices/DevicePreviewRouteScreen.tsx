@@ -236,13 +236,17 @@ export function DevicePreviewScreen({
           },
         ]
       : []),
-    {
-      id: "shutdown",
-      title: shuttingDown ? "正在关闭…" : "关闭设备",
-      icon: "power",
-      disabled: !preview || shuttingDown,
-      onPress: () => void shutDownDevice(),
-    },
+    ...(preview?.canShutdown
+      ? [
+          {
+            id: "shutdown",
+            title: shuttingDown ? "正在关闭…" : "关闭设备",
+            icon: "power" as const,
+            disabled: shuttingDown,
+            onPress: () => void shutDownDevice(),
+          },
+        ]
+      : []),
   ];
   const pressHome = () => streamRef.current?.home();
   const menuItems: AppBarMenuItem[] = [

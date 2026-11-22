@@ -164,7 +164,7 @@ export function DeviceToolsPanel(props: {
           />
         </Section>
 
-        <Section title={isIos ? "Simulator" : "Emulator"}>
+        <Section title={isIos ? "Simulator" : device.physical ? "Device" : "Emulator"}>
           <Row label="Appearance">
             <ToggleGroup
               aria-label="Appearance"
@@ -286,12 +286,14 @@ export function DeviceToolsPanel(props: {
           />
         </Section>
 
-        <LocationSection
-          disabled={disabled}
-          canClear={isIos}
-          onSet={(latitude, longitude) => act({ type: "setLocation", latitude, longitude })}
-          onClear={() => act({ type: "clearLocation" })}
-        />
+        {isIos || !device.physical ? (
+          <LocationSection
+            disabled={disabled}
+            canClear={isIos}
+            onSet={(latitude, longitude) => act({ type: "setLocation", latitude, longitude })}
+            onClear={() => act({ type: "clearLocation" })}
+          />
+        ) : null}
 
         <PermissionsSection
           permissions={isIos ? IOS_PERMISSIONS : ANDROID_PERMISSIONS}

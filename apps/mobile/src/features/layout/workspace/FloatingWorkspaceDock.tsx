@@ -3,16 +3,18 @@ import IconGitPullRequest from "@tabler/icons-react-native/IconGitPullRequest";
 import IconChartBar from "@tabler/icons-react-native/IconChartBar";
 import IconEdit from "@tabler/icons-react-native/IconEdit";
 import IconSettings from "@tabler/icons-react-native/IconSettings";
-import { Pressable, StyleSheet, View } from "react-native";
+import { useLayoutEffect, useRef } from "react";
+import { I18nManager, Pressable, View } from "react-native";
 import Animated, {
-  Easing,
+  ReduceMotion,
   useAnimatedStyle,
-  useReducedMotion,
   useSharedValue,
+  withSpring,
   withTiming,
 } from "react-native-reanimated";
 
 import { DockGlassBackdrop, type DockGlassScope } from "../../../components/ui/DockGlass";
+import { useReduceMotionEnabled } from "../../../lib/appState";
 import { FLOATING_TABS } from "./floating-workspace-tabs";
 import type { AndroidWorkspaceNavigationTab } from "./android-workspace-tabs";
 
@@ -23,67 +25,15 @@ const destinations = {
   settings: { label: "设置", Icon: IconSettings },
 };
 
-function FloatingWorkspaceTab(props: {
-  readonly tab: AndroidWorkspaceNavigationTab;
-  readonly selected: boolean;
-  readonly diameter: number;
-  readonly iconSize: number;
-  readonly selectedColor: string;
-  readonly unselectedColor: string;
-  readonly indicatorColor: string;
-  readonly onSelect: (tab: AndroidWorkspaceNavigationTab) => void;
-}) {
-  const { label, Icon } = destinations[props.tab];
-  const radius = props.diameter / 2;
-  const reducedMotion = useReducedMotion();
-  const scale = useSharedValue(0.35);
-  const opacity = useSharedValue(0);
-  const ripple = useAnimatedStyle(() => ({
-    opacity: opacity.get(),
-    transform: [{ scale: scale.get() }],
-  }));
-  return (
-    <Pressable
-      accessibilityRole="tab"
-      accessibilityLabel={label}
-      accessibilityState={{ selected: props.selected }}
-      onPress={() => props.onSelect(props.tab)}
-      onPressIn={() => {
-        scale.set(reducedMotion ? 1 : 0.35);
-        opacity.set(0.18);
-        if (!reducedMotion)
-          scale.set(withTiming(1, { duration: 220, easing: Easing.out(Easing.cubic) }));
-      }}
-      onPressOut={() => {
-        opacity.set(reducedMotion ? 0 : withTiming(0, { duration: 180 }));
-      }}
-      style={{
-        width: props.diameter,
-        height: props.diameter,
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: radius,
-        overflow: "hidden",
-        backgroundColor: props.selected ? props.indicatorColor : "transparent",
-      }}
-    >
-      {/* 高亮和选中底色共用圆形边界，避免 Android 原生涟漪的矩形遮罩。 */}
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          StyleSheet.absoluteFill,
-          { borderRadius: radius, backgroundColor: props.selectedColor },
-          ripple,
-        ]}
-      />
-      <Icon
-        size={props.iconSize}
-        strokeWidth={2}
-        color={props.selected ? props.selectedColor : props.unselectedColor}
-      />
-    </Pressable>
-  );
-}
+// 减少动态效果由系统订阅统一处理，允许设置在应用运行期间切换。
+const indicatorSpring = {
+  mass: 0.82,
+  damping: 27,
+  stiffness: 380,
+  reduceMotion: ReduceMotion.Never,
+};
+const releaseSpring = { mass: 0.48, damping: 16, stiffness: 380, reduceMotion: ReduceMotion.Never };
+const pressTiming = { duration: 90, reduceMotion: ReduceMotion.Never };
 
 export function FloatingWorkspaceDock(props: {
   readonly tabs: readonly AndroidWorkspaceNavigationTab[];
@@ -105,6 +55,51 @@ export function FloatingWorkspaceDock(props: {
   readonly primaryForeground: string;
 }) {
   const iconSize = Math.min(28, Math.max(24, 24 * props.scale));
+  const reducedMotion = useReduceMotionEnabled();
+  const selectedIndex = props.tabs.indexOf(props.selectedTab);
+  const position = useSharedValue(selectedIndex);
+  const deformation = useSharedValue(0);
+  const pressedTab = useRef<AndroidWorkspaceNavigationTab | null>(null);
+  const slot =
+    Math.max(0, props.width - 2 * FLOATING_TABS.innerPadding) / Math.max(1, props.tabs.length);
+  const direction = I18nManager.isRTL ? -1 : 1;
+  const diameter = props.diameter;
+  const radius = diameter / 2;
+
+  // 位置用标签序号表示，变宽或旋转后，正在移动的选中块仍和图标共用当前槽距。
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 同步原生动画目标与当前路由选中项
+  useLayoutEffect(() => {
+    if (reducedMotion) {
+      position.set(selectedIndex);
+      deformation.set(0);
+    } else {
+      position.set(withSpring(selectedIndex, indicatorSpring));
+    }
+  }, [deformation, position, reducedMotion, selectedIndex]);
+
+  function pressIn(tab: AndroidWorkspaceNavigationTab) {
+    pressedTab.current = tab;
+    if (!reducedMotion) deformation.set(withTiming(1, pressTiming));
+  }
+
+  function pressOut(tab: AndroidWorkspaceNavigationTab) {
+    // Pressable 可能延迟派发松手。前一个标签的事件不应结束新标签的按压反馈。
+    if (pressedTab.current !== tab) return;
+    pressedTab.current = null;
+    if (!reducedMotion) deformation.set(withSpring(0, releaseSpring));
+  }
+
+  const indicatorStyle = useAnimatedStyle(() => {
+    const press = reducedMotion ? 0 : deformation.get();
+    const index = reducedMotion ? selectedIndex : position.get();
+    return {
+      transform: [
+        { translateX: index * slot * direction },
+        { scaleX: 1 - press * 0.1 },
+        { scaleY: 1 + press * 0.04 },
+      ],
+    };
+  });
   return (
     <View
       pointerEvents="box-none"
@@ -152,19 +147,54 @@ export function FloatingWorkspaceDock(props: {
           contentRevision={props.selectedTab}
           borderRadius={props.height / 2}
         />
-        {props.tabs.map((tab) => (
-          <FloatingWorkspaceTab
-            key={tab}
-            tab={tab}
-            selected={props.selectedTab === tab}
-            diameter={props.diameter}
-            iconSize={iconSize}
-            selectedColor={props.selectedColor}
-            unselectedColor={props.unselectedColor}
-            indicatorColor={props.indicatorColor}
-            onSelect={props.onSelect}
+        {selectedIndex >= 0 && diameter > 0 ? (
+          <Animated.View
+            pointerEvents="none"
+            importantForAccessibility="no"
+            style={[
+              {
+                position: "absolute",
+                start: FLOATING_TABS.innerPadding + (slot - diameter) / 2,
+                top: (props.height - diameter) / 2,
+                width: diameter,
+                height: diameter,
+                borderRadius: radius,
+                backgroundColor: props.indicatorColor,
+              },
+              indicatorStyle,
+            ]}
           />
-        ))}
+        ) : null}
+        {props.tabs.map((tab) => {
+          const { label, Icon } = destinations[tab];
+          const selected = props.selectedTab === tab;
+          return (
+            <Pressable
+              key={tab}
+              accessibilityRole="tab"
+              accessibilityLabel={label}
+              accessibilityState={{ selected }}
+              onPress={() => props.onSelect(tab)}
+              onPressIn={() => pressIn(tab)}
+              onPressOut={() => pressOut(tab)}
+              style={({ pressed }) => ({
+                width: diameter,
+                height: diameter,
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: radius,
+                overflow: "hidden",
+                opacity: pressed ? 0.65 : 1,
+              })}
+            >
+              <Icon
+                size={iconSize}
+                strokeWidth={2}
+                color={selected ? props.selectedColor : props.unselectedColor}
+              />
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );

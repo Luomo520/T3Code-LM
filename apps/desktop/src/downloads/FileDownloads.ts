@@ -5,7 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
 import * as Electron from "electron";
-import type { DesktopFileDownloadEvent } from "@t3tools/contracts";
+import { FILE_HANDOFF_ROUTE_PREFIX, type DesktopFileDownloadEvent } from "@t3tools/contracts";
 import { downloadKey, downloadToFile } from "./ResumableDownload.ts";
 
 const active = new Map<string, { cancel: () => void; senderId: number }>();
@@ -87,28 +87,40 @@ function startBuiltinDownload(
   const source = new URL(url);
   // Asset URLs rotate per request. The strong ETag identifies the file version within its origin.
   send("progressing");
-  void downloadToFile({
-    fetch: (input, options) => sender.session.fetch(input, options),
-    url,
-    destination: path,
-    stagingDirectory: NodePath.join(
-      NodePath.dirname(path),
-      `.t3-download-${downloadKey(destinationKey).slice(0, 32)}`,
-    ),
-    source: source.origin,
-    signal: controller.signal,
-    onProgress: (progress) => {
-      receivedBytes = progress.receivedBytes;
-      totalBytes = progress.totalBytes;
-      const current =
-        totalBytes > 0
-          ? Math.floor((100 * receivedBytes) / totalBytes)
-          : Math.floor(receivedBytes / 1048576);
-      if (current === previousProgress) return;
-      previousProgress = current;
-      send("progressing");
-    },
-  })
+  const fetch = (input: string, options: RequestInit) => sender.session.fetch(input, options);
+  const transfer = async () => {
+    let checksums: readonly { algorithm: "sha256"; expectedHex: string }[] | undefined;
+    if (source.pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/")) {
+      const head = await fetch(url, { method: "HEAD", signal: controller.signal });
+      const expectedHex = /^"sha256-([0-9a-f]{64})"$/.exec(head.headers.get("etag") ?? "")?.[1];
+      if (!head.ok || !expectedHex) throw new Error("下载文件缺少有效的 SHA-256。");
+      checksums = [{ algorithm: "sha256", expectedHex }];
+    }
+    await downloadToFile({
+      fetch,
+      ...(checksums ? { checksums } : {}),
+      url,
+      destination: path,
+      stagingDirectory: NodePath.join(
+        NodePath.dirname(path),
+        `.t3-download-${downloadKey(destinationKey).slice(0, 32)}`,
+      ),
+      source: source.origin,
+      signal: controller.signal,
+      onProgress: (progress) => {
+        receivedBytes = progress.receivedBytes;
+        totalBytes = progress.totalBytes;
+        const current =
+          totalBytes > 0
+            ? Math.floor((100 * receivedBytes) / totalBytes)
+            : Math.floor(receivedBytes / 1048576);
+        if (current === previousProgress) return;
+        previousProgress = current;
+        send("progressing");
+      },
+    });
+  };
+  void transfer()
     .then(
       () => send("completed"),
       () => send(controller.signal.aborted ? "cancelled" : "interrupted"),

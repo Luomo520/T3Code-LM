@@ -10,7 +10,7 @@ import {
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
   shouldRecommendDatabaseCompaction,
-  type UsageSummary,
+  UsageSummary,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -28,6 +28,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+
+import { persistQuery } from "./queryPersistence.ts";
 
 import {
   createAtomCommandScheduler,
@@ -866,6 +868,11 @@ export function recordFetchedWorkspaceSnapshot(
   );
 }
 
+export const USAGE_SUMMARY_QUERY_LABEL = "environment-data:server:usage-summary";
+
+const isSettledUsageSummary = (summary: UsageSummary) =>
+  !summary.sources.some((source) => source.refreshing === true);
+
 export function createServerEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<
     EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore | R,
@@ -878,6 +885,7 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly environmentThemes?: boolean;
     readonly usageLimitSources?: boolean;
     readonly usageLimitsCommand?: boolean;
+    readonly persistUsageSummary?: boolean;
     readonly providerCatalogsOnDemand?: boolean;
     readonly providerCatalogDigests?: boolean;
     readonly providerStatusDeltas?: boolean;
@@ -885,6 +893,7 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly omitRefreshedProviders?: boolean;
   },
 ) {
+  const usageSummaryPersistence = options.persistUsageSummary ? persistQuery(UsageSummary) : null;
   const configScheduler = createAtomCommandScheduler();
   const updateScheduler = createAtomCommandScheduler();
   const configConcurrency = {
@@ -1596,16 +1605,29 @@ export function createServerEnvironmentAtoms<R, E>(
     // long enough that switching windows or re-rendering does not rescan. With
     // nothing to show yet, the server's last scan answers first, then a plain
     // read, then a read that waits for slow sources.
-    usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:usage-summary",
+    usageSummary: createEnvironmentRpcQueryAtomFamily<
+      R | Persistence.EnvironmentCacheStore,
+      E,
+      typeof WS_METHODS.serverGetUsageSummary
+    >(runtime, {
+      label: USAGE_SUMMARY_QUERY_LABEL,
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
+      ...(usageSummaryPersistence === null
+        ? {}
+        : {
+            persistence: {
+              load: usageSummaryPersistence.load,
+              save: (environmentId, key, summary) =>
+                isSettledUsageSummary(summary)
+                  ? usageSummaryPersistence.save(environmentId, key, summary)
+                  : Effect.void,
+            },
+          }),
       refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
       execute: (input, emit, previous) => {
-        const settled = (summary: UsageSummary) =>
-          !summary.sources.some((source) => source.refreshing === true);
         const read = request(WS_METHODS.serverGetUsageSummary, input).pipe(
-          Effect.filterOrElse(settled, (summary) =>
+          Effect.filterOrElse(isSettledUsageSummary, (summary) =>
             emit(summary).pipe(
               Effect.andThen(
                 request(WS_METHODS.serverGetUsageSummary, { ...input, awaitRefresh: true }),
@@ -1625,7 +1647,9 @@ export function createServerEnvironmentAtoms<R, E>(
             // The saved answer only speeds things up; without it the plain read still answers.
             onFailure: () => read,
             onSuccess: (saved) =>
-              settled(saved) ? Effect.succeed(saved) : emit(saved).pipe(Effect.andThen(read)),
+              isSettledUsageSummary(saved)
+                ? Effect.succeed(saved)
+                : emit(saved).pipe(Effect.andThen(read)),
           }),
         );
       },

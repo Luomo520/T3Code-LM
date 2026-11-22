@@ -27,7 +27,7 @@ import {
   makeWindow,
   usageSourceMessages,
 } from "@t3tools/shared/usageFormat";
-import { useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { View } from "react-native";
 import { RefreshControl } from "../../components/ui/RefreshControl";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
@@ -100,42 +100,54 @@ function UsageScreen(props: {
   const isPast24Hours = windowDays === 1;
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
+  const showingLimits = view === "limits";
   const { merged, environments, selectedEnvironments, isPending, refresh } = useUsage(
     window,
     selectedEnvironmentIds,
+    !showingLimits,
   );
   const isFocused = useIsFocused();
-  const limits = useRefreshLimits(selectedEnvironmentIds, isFocused && view === "limits");
-  const sourceMessages = usageSourceMessages(
-    selectedEnvironments.flatMap((environment) => environment.summary?.sources ?? []),
+  const limits = useRefreshLimits(selectedEnvironmentIds, isFocused && showingLimits);
+  const sourceMessages = useMemo(
+    () =>
+      usageSourceMessages(
+        selectedEnvironments.flatMap((environment) => environment.summary?.sources ?? []),
+      ),
+    [selectedEnvironments],
   );
   const canReadDiagnostics = selectedEnvironments.some(
     (environment) => environment.canReadDiagnostics,
   );
 
-  const days = enumerateDays(window.sinceDay, window.untilDay);
-  const chartDays =
-    isPast24Hours && window.sinceTime !== undefined && window.untilTime !== undefined
-      ? enumerateHourStarts(window.sinceTime, window.untilTime)
-      : days;
-  const chartTotals: readonly DailyTotals[] = isPast24Hours
-    ? merged.hourly.map((hour) => ({
-        day: hour.hourStart,
-        costUsd: hour.costUsd,
-        totalTokens: hour.totalTokens,
-        byProvider: hour.byProvider,
-      }))
-    : merged.daily;
+  const chartDays = useMemo(
+    () =>
+      isPast24Hours && window.sinceTime !== undefined && window.untilTime !== undefined
+        ? enumerateHourStarts(window.sinceTime, window.untilTime)
+        : enumerateDays(window.sinceDay, window.untilDay),
+    [isPast24Hours, window],
+  );
+  const chartTotals = useMemo<readonly DailyTotals[]>(
+    () =>
+      isPast24Hours
+        ? merged.hourly.map((hour) => ({
+            day: hour.hourStart,
+            costUsd: hour.costUsd,
+            totalTokens: hour.totalTokens,
+            byProvider: hour.byProvider,
+          }))
+        : merged.daily,
+    [isPast24Hours, merged.daily, merged.hourly],
+  );
 
   const [refreshingUsage, setRefreshingUsage] = useState(false);
   const refreshingRef = useRef(false);
-  const showingLimits = view === "limits";
   const metric: UsageChartMetric = view === "tokens" ? "tokens" : "cost";
   const progress = usageProgress(selectedEnvironments, {
     refreshing: refreshingUsage,
     providerLabel,
   });
   const selectWindow = (days: number) => {
+    if (days === windowDays) return;
     setWindowSelection({
       days,
       window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
@@ -197,7 +209,9 @@ function UsageScreen(props: {
       ...environments.map((environment) => ({
         id: environment.environmentId,
         title: environment.label,
-        subtitle: usageEnvironmentStatus(environment, refreshingUsage),
+        ...(showingLimits
+          ? {}
+          : { subtitle: usageEnvironmentStatus(environment, refreshingUsage) }),
         selected:
           selectedEnvironmentIds === null || selectedEnvironmentIds.has(environment.environmentId),
         onPress: () => selectEnvironment(environment.environmentId),

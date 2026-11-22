@@ -19,10 +19,13 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
+import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.ProxySelector
 import java.net.URL
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -50,6 +53,7 @@ internal class DownloadTask(
   val allowCellular: Boolean,
   updateBytes: Long? = null,
   fileBytes: Long? = null,
+  val expectedSha256: String? = null,
   private val saveUpdate: ((String, Uri) -> Unit)? = null,
 ) {
   val id = UUID.randomUUID().toString()
@@ -120,6 +124,12 @@ internal object T3Downloads {
       tasks.remove(task.id)
       throw error
     }
+  }
+
+  @Synchronized
+  fun findVerified(url: URL) = tasks.values.firstOrNull {
+    it.expectedSha256 != null && it.url.toExternalForm() == url.toExternalForm() &&
+      it.state.status !in listOf("failed", "cancelled")
   }
 
   @Synchronized
@@ -232,8 +242,7 @@ class T3DownloadService : Service() {
     try {
       task.checkRunning()
       wake.acquire()
-      T3DownloadDestination.create(this, task.fileName, task.isUpdate).use { destination ->
-        T3HttpDownload(
+      val downloader = T3HttpDownload(
           connect = { url ->
             // Network.openConnection(URL) supplies the proxy directly, without the per-host
             // exclusions or PAC choice used by the app's default HTTP client.
@@ -251,9 +260,16 @@ class T3DownloadService : Service() {
           observeResponse = { phase, status ->
             if (!task.isUpdate) Log.i(LOG_TAG, "${task.id} $phase HTTP $status")
           },
-        ).transfer(task.url, destination.channel, task.expectedBytes)
-        task.checkRunning()
-        task.complete(this, destination.publish())
+      )
+      val sha256 = task.expectedSha256
+      if (sha256 != null) {
+        downloadVerified(task, downloader, sha256)
+      } else {
+        T3DownloadDestination.create(this, task.fileName, task.isUpdate).use { destination ->
+          downloader.transfer(task.url, destination.channel, task.expectedBytes)
+          task.checkRunning()
+          task.complete(this, destination.publish())
+        }
       }
     } catch (_: InterruptedException) {
       task.transition(DownloadState("cancelled", total = task.expectedBytes))
@@ -271,6 +287,54 @@ class T3DownloadService : Service() {
     } finally {
       if (wake.isHeld) wake.release()
     }
+  }
+
+  private fun downloadVerified(task: DownloadTask, downloader: T3HttpDownload, sha256: String) {
+    val expected = task.expectedBytes ?: throw DownloadFailure("文件缺少预期大小。")
+    val folder = File(cacheDir, "file-handoff-downloads")
+    if (!folder.isDirectory && !folder.mkdirs()) throw DownloadFailure("无法创建下载缓存。")
+    val key = MessageDigest.getInstance("SHA-256")
+      .digest(task.url.toExternalForm().toByteArray(Charsets.UTF_8))
+      .joinToString("") { "%02x".format(it) }
+    val partial = File(folder, "$key.part")
+    val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+    folder.listFiles()?.filter { it != partial && it.lastModified() < cutoff }?.forEach { it.delete() }
+    RandomAccessFile(partial, "rw").use { file ->
+      try {
+        downloader.transferVerified(task.url, file.channel, expected, sha256)
+      } finally {
+        file.channel.force(true)
+      }
+    }
+
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(128 * 1024)
+    partial.inputStream().use { input ->
+      while (true) {
+        task.checkRunning()
+        val count = input.read(buffer)
+        if (count < 0) break
+        digest.update(buffer, 0, count)
+      }
+    }
+    if (partial.length() != expected || digest.digest().joinToString("") { "%02x".format(it) } != sha256) {
+      partial.delete()
+      throw DownloadFailure("文件 SHA-256 与发送记录不一致，请重试。", retryable = true)
+    }
+    T3DownloadDestination.create(this, task.fileName, false).use { destination ->
+      partial.inputStream().use { input ->
+        while (true) {
+          task.checkRunning()
+          val count = input.read(buffer)
+          if (count < 0) break
+          val bytes = java.nio.ByteBuffer.wrap(buffer, 0, count)
+          while (bytes.hasRemaining()) destination.channel.write(bytes)
+        }
+      }
+      task.checkRunning()
+      task.complete(this, destination.publish())
+    }
+    partial.delete()
   }
 
   override fun onTimeout(startId: Int, fgsType: Int) {

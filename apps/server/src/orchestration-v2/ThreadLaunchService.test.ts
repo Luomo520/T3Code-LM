@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../config.ts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
+import { MessageClientOrigin } from "./MessageClientOrigin.ts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
@@ -2213,7 +2214,10 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
         attachments: [attachment],
       },
     };
+    const mobileOrigin = { clientAlias: "first", surface: "mobile", os: "Android" } as const;
+    const desktopOrigin = { clientAlias: "second", surface: "desktop", os: "Windows" } as const;
     const failed = yield* ThreadMessageIntake.launchThread(input).pipe(
+      Effect.provideService(MessageClientOrigin, mobileOrigin),
       Effect.provideService(ThreadLaunch.ThreadLaunchService, {
         launch: (request) =>
           launches.launch(request).pipe(
@@ -2238,6 +2242,7 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
       (message) => message.id === input.initialMessage.messageId,
     );
     assert.isDefined(stored);
+    assert.deepEqual(stored.clientOrigin, mobileOrigin);
     assert.notEqual(stored.attachments[0]?.id, attachment.id);
     const record = stored.context?.records[0];
     assert.isDefined(record);
@@ -2260,11 +2265,14 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
       commandId: input.commandId,
     });
     assert.equal(delivery.status, "accepted");
-    const replayed = yield* ThreadMessageIntake.launchThread(input);
+    const replayed = yield* ThreadMessageIntake.launchThread(input).pipe(
+      Effect.provideService(MessageClientOrigin, desktopOrigin),
+    );
     assert.equal(replayed.projection.messages[0]?.id, stored.id);
     assert.lengthOf(replayed.projection.messages, 1);
     assert.lengthOf(replayed.projection.runs, 1);
     assert.deepEqual(replayed.projection.messages[0]?.attachments, stored.attachments);
+    assert.deepEqual(replayed.projection.messages[0]?.clientOrigin, mobileOrigin);
     const claimedFiles = Effect.map(fs.readDirectory(config.attachmentsDir), (files) =>
       files.filter((name) => !name.startsWith("pending-")),
     );
@@ -2315,8 +2323,8 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
       createdBy: "user",
       creationSource: "web",
     });
-    yield* dispatch;
-    yield* dispatch;
+    yield* dispatch.pipe(Effect.provideService(MessageClientOrigin, desktopOrigin));
+    yield* dispatch.pipe(Effect.provideService(MessageClientOrigin, mobileOrigin));
     const queuedProjection = yield* threads.getThreadProjection(input.threadId);
     const queuedRun = queuedProjection.runs.find(
       (run) => run.userMessageId === MessageId.make("intake-second"),
@@ -2327,6 +2335,7 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
       (message) => message.id === queuedRun.userMessageId,
     );
     assert.isDefined(queuedMessage);
+    assert.deepEqual(queuedMessage.clientOrigin, desktopOrigin);
     const file: ChatAttachment = {
       type: "file",
       id: ChatAttachmentId.make(createPendingAttachmentId("pdf")),
@@ -2355,6 +2364,7 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
       (message) => message.id === queuedRun.userMessageId,
     );
     assert.isDefined(editedMessage);
+    assert.deepEqual(editedMessage.clientOrigin, desktopOrigin);
     assert.equal(editedMessage.attachments.length, 2);
     assert.deepEqual(editedMessage.attachments[0], queuedMessage.attachments[0]);
     assert.notEqual(editedMessage.attachments[1]?.id, file.id);
@@ -2393,6 +2403,9 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
     assert.equal((yield* claimedFiles).length, 4);
     const final = yield* threads.getThreadProjection(input.threadId);
     assert.equal(final.messages.length, 3);
+    const third = final.messages.find((message) => message.id === MessageId.make("intake-third"));
+    assert.isDefined(third);
+    assert.isUndefined(third.clientOrigin);
     for (const message of final.messages) {
       const path = resolveAttachmentPath({
         attachmentsDir: config.attachmentsDir,

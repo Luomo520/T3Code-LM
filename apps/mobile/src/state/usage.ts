@@ -29,7 +29,7 @@ export interface EnvironmentUsageStatus {
 
 const usageByWindowAtom = Atom.family((windowKey: string) =>
   Atom.make((get): readonly EnvironmentUsageStatus[] => {
-    const input = JSON.parse(windowKey) as UsageSummaryInput;
+    const input = JSON.parse(windowKey) as UsageSummaryInput | null;
     const presentations = get(environmentPresentations.presentationsAtom);
 
     const statuses: EnvironmentUsageStatus[] = [];
@@ -40,7 +40,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         session: AsyncResult.getOrElse(sessionResult, () => null),
         hasSessionError: sessionResult._tag === "Failure",
       });
-      if (!access.canReadDiagnostics) {
+      if (input === null || !access.canReadDiagnostics) {
         statuses.push({
           environmentId,
           label: presentation.entry.target.label,
@@ -88,6 +88,7 @@ export interface UsageView {
 export function useUsage(
   input: UsageSummaryInput,
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
+  enabled = true,
 ): UsageView {
   const windowKey = useMemo(
     () =>
@@ -108,7 +109,7 @@ export function useUsage(
       input.untilTime,
     ],
   );
-  const atom = usageByWindowAtom(windowKey);
+  const atom = usageByWindowAtom(enabled ? windowKey : "null");
   const environments = useAtomValue(atom);
   const selectedEnvironments = useMemo(
     () =>

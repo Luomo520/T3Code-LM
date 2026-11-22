@@ -522,6 +522,42 @@ describe("Codex usage history", () => {
 });
 
 describe("UsageService", () => {
+  it.effect("reports scanned tokens before fetching prices on a cold provisional read", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
+      let fetches = 0;
+      yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        const first = yield* service.readSummary({ ...WINDOW, provisional: true });
+        assert.strictEqual(totalOutputTokens(first), 5);
+        assert.strictEqual(first.pricing.status, "unavailable");
+        assert.strictEqual(fetches, 0);
+        assert.isTrue(
+          first.sources.find((source) => source.fingerprint.provider === "claude")?.refreshing,
+        );
+
+        const final = yield* service.readSummary(WINDOW);
+        assert.strictEqual(totalOutputTokens(final), 5);
+        assert.strictEqual(final.pricing.status, "fresh");
+        assert.strictEqual(fetches, 1);
+        assert.isUndefined(
+          final.sources.find((source) => source.fingerprint.provider === "claude")?.refreshing,
+        );
+      }).pipe(
+        Effect.provide(
+          layerService({
+            prefix: "cold-provisional-prices",
+            home,
+            settings,
+            onRatesFetch: () => fetches++,
+            ratesDocument: COPY_RATES,
+          }),
+        ),
+      );
+    }),
+  );
+
   it.effect("keeps pricing metadata paired with the rates used during a concurrent refresh", () =>
     Effect.gen(function* () {
       const { home, settings } = yield* setup;
@@ -2662,6 +2698,7 @@ describe("UsageService", () => {
         yield* Effect.gen(function* () {
           // With nothing persisted, the first answer is a full scan.
           const service = yield* UsageService.make;
+          yield* service.refreshRates;
           const loop = NodePath.join(NodePath.dirname(transcript), "loop.jsonl");
           yield* Effect.promise(() => NodeFSP.symlink(loop, loop, "junction"));
           assert.strictEqual(claude(yield* service.readSummary(provisional))?.status, "partial");
@@ -2714,7 +2751,14 @@ describe("UsageService", () => {
           assert.isUndefined(claude(yield* reloaded.readSummary(provisional))?.refreshing);
         }).pipe(
           Effect.scoped,
-          Effect.provide(layerService({ prefix: "usage-service-provisional", home, settings })),
+          Effect.provide(
+            layerService({
+              prefix: "usage-service-provisional",
+              home,
+              settings,
+              ratesDocument: COPY_RATES,
+            }),
+          ),
         );
       }),
   );

@@ -99,6 +99,48 @@ internal class T3HttpDownload(
     }
   }
 
+  // 单个有序分段保留连续字节，网络或进程中断后从临时文件长度继续。
+  fun transferVerified(url: URL, output: FileChannel, expectedBytes: Long, sha256: String) {
+    val etag = "\"sha256-$sha256\""
+    var offset = output.size()
+    if (offset > expectedBytes) {
+      output.truncate(0)
+      offset = 0
+    }
+    received.set(offset)
+    if (offset == expectedBytes) {
+      response(url, "校验", method = "HEAD") { http, _, status ->
+        if (status != HttpURLConnection.HTTP_OK) reject(status, "校验")
+        if (http.getHeaderField("ETag") != etag) {
+          throw DownloadFailure("下载期间文件已变化，请重新领取。", retryable = true)
+        }
+      }
+      return
+    }
+    val rangeHeader = "bytes=$offset-"
+    response(url, "续传", rangeHeader, etag) { http, _, status ->
+      if (status !in listOf(HttpURLConnection.HTTP_PARTIAL, HttpURLConnection.HTTP_OK)) {
+        reject(status, "续传")
+      }
+      if (http.getHeaderField("ETag") != etag) {
+        throw DownloadFailure("下载期间文件已变化，请重新领取。", retryable = true)
+      }
+      if (status == HttpURLConnection.HTTP_OK) {
+        output.truncate(0)
+        received.set(0)
+        whole(http, output, expectedBytes)
+      } else {
+        val range = parseRange(http.getHeaderField("Content-Range"))
+        if (range != Range(offset, expectedBytes - 1, expectedBytes)) {
+          throw DownloadFailure("服务器返回的续传范围无效，请重试。", retryable = true)
+        }
+        progress(offset, expectedBytes)
+        copy(http, output, offset, expectedBytes - offset, expectedBytes)
+      }
+      output.force(true)
+    }
+  }
+
   private fun transferWhole(url: URL, output: FileChannel, expectedBytes: Long?) {
     try {
       readWholeResponse(url, output, expectedBytes)
@@ -156,6 +198,7 @@ internal class T3HttpDownload(
     phase: String,
     range: String? = null,
     etag: String? = null,
+    method: String = "GET",
     read: (HttpURLConnection, URL, Int) -> T,
   ): T {
     var target = url
@@ -166,6 +209,7 @@ internal class T3HttpDownload(
       try {
         ensureActive()
         http.instanceFollowRedirects = false
+        http.requestMethod = method
         http.connectTimeout = 20_000
         http.readTimeout = 20_000
         http.useCaches = false

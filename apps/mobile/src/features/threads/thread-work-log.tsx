@@ -74,11 +74,13 @@ import {
   workEntryRowLabel,
 } from "../../lib/threadActivity";
 import {
+  companionScreenshotOutput,
   isJsonToolText,
   toolCallLines,
   turnItemOutputImages,
   turnItemOutputText,
 } from "@t3tools/client-runtime/work-log/item-detail";
+import { ScreenshotSaveButton } from "./ScreenshotSaveButton";
 import { useTurnItemDetail } from "../../state/queries";
 import {
   resolveThreadWorkGroupInitialScroll,
@@ -932,7 +934,9 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
               {label}
             </Text>
             {props.copied ? (
-              <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">{"已复制"}</Text>
+              <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">
+                {"已复制"}
+              </Text>
             ) : null}
             <Text
               accessibilityLabel={timestamp.toLocaleString()}
@@ -993,6 +997,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         : row.getFullDetail()
       : null;
   const outputImages = expanded && fetchedItem ? turnItemOutputImages(fetchedItem) : [];
+  const screenshot = expanded && fetchedItem ? companionScreenshotOutput(fetchedItem) : null;
   const viewedImagePath = workEntryViewedImagePath(row.workEntry);
   const fetchedOutput =
     !expanded || streamsOutput
@@ -1000,7 +1005,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
       : shownItem.type === "file_search" || shownItem.type === "web_search"
         ? turnItemOutputText(shownItem)
         : fetchedItem
-          ? (turnItemOutputText(fetchedItem) ??
+          ? ((screenshot?.summary ? null : turnItemOutputText(fetchedItem)) ??
             (outputImages.length > 0 || viewedImagePath ? null : "No output."))
           : fetchedDetail.error
             ? `Couldn't load output: ${fetchedDetail.error}`
@@ -1125,7 +1130,9 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
 
         <View className="shrink-0 flex-row items-center gap-px">
           {props.copied ? (
-            <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">{"已复制"}</Text>
+            <Text className="pr-1 font-t3-medium text-3xs text-adaptive-emerald-600-400">
+              {"已复制"}
+            </Text>
           ) : null}
           {failed && toolIcon !== undefined ? (
             <View
@@ -1186,16 +1193,31 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
               resource,
             }))}
           >
-            {outputImages.map((resource) => (
-              <View key={resource.index} className="pb-1.5">
-                <ThreadMarkdownImage
-                  environmentId={props.environmentId}
-                  resource={resource}
-                  alt={null}
-                  onPressPreview={props.onPressPreview}
-                />
-              </View>
-            ))}
+            {outputImages.map((resource, index) => {
+              const capture = index === 0 ? screenshot : null;
+              return (
+                <View key={resource.index} className="gap-1.5 pb-1.5">
+                  {capture?.summary ? (
+                    <Text selectable className="text-sm text-foreground">
+                      {capture.summary}
+                    </Text>
+                  ) : null}
+                  <ThreadMarkdownImage
+                    environmentId={props.environmentId}
+                    resource={resource}
+                    alt={capture ? "设备截图" : null}
+                    onPressPreview={props.onPressPreview}
+                  />
+                  {capture ? (
+                    <ScreenshotSaveButton
+                      environmentId={props.environmentId}
+                      resource={resource}
+                      fileName={capture.fileName}
+                    />
+                  ) : null}
+                </View>
+              );
+            })}
           </FilePreviewGallery>
           <ScrollView
             nestedScrollEnabled

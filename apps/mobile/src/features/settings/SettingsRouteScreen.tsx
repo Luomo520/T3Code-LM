@@ -188,10 +188,23 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
   const query = workspace?.state.tabs.settings.query ?? "";
   const overflowRows = useOverflowRows();
   const indexSections = useSettingsIndexSections();
+  const connections =
+    Platform.OS === "android"
+      ? [
+          ...props.connections,
+          {
+            id: "SettingsCrossDevice",
+            icon: "link" as const,
+            label: "多端互控",
+            value: "配对环境与设备授权",
+            target: "SettingsCrossDevice" as const,
+          },
+        ]
+      : props.connections;
   const sections = filterSettingsSections(
     [
       { rows: overflowRows },
-      { title: gt("Connections"), rows: props.connections },
+      { title: gt("Connections"), rows: connections },
       ...indexSections,
     ],
     query,

@@ -68,6 +68,7 @@ import { ThreadRouteScreen } from "../threads/ThreadRouteScreen";
 import { FilePreviewLoading, FilePreviewNotice } from "./FilePreviewFeedback";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import { FileTreeBrowser } from "./FileTreeBrowser";
+import { FileHandoffPanel } from "./FileHandoffPanel";
 import { useFileTreeEntries } from "./useFileTreeEntries";
 import { preloadWorkspaceFileContents } from "./preload-workspace-file";
 import { SourceFileSurface } from "./SourceFileSurface";
@@ -573,16 +574,25 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
     }
     navigation.navigate("ThreadFile", params);
   };
+  const handoff =
+    environmentId && threadId ? (
+      <FileHandoffPanel key={threadId} environmentId={environmentId} threadId={threadId} />
+    ) : null;
   const renderInspector = () =>
     environmentId !== null && cwd !== null ? (
-      <ThreadFileNavigatorPane
-        cwd={cwd}
-        environmentId={environmentId}
-        projectName={projectName}
-        selectedPath={null}
-        onSelectFile={handleSelectFile}
-      />
-    ) : null;
+      <View className="flex-1">
+        {handoff}
+        <ThreadFileNavigatorPane
+          cwd={cwd}
+          environmentId={environmentId}
+          projectName={projectName}
+          selectedPath={null}
+          onSelectFile={handleSelectFile}
+        />
+      </View>
+    ) : (
+      handoff
+    );
   const handlePreviewFile = (relativePath: string) => {
     if (environmentId === null || cwd === null) {
       return;
@@ -612,14 +622,22 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
       return <LoadingScreen message="Checking file access..." messagePlacement="above-spinner" />;
     }
     return (
-      <FilesUnavailable
-        detail={fileAccess.error ?? "This connection cannot read host files."}
-        onBack={handleReturnToThread}
-      />
+      <View className="flex-1">
+        {handoff}
+        <FilesUnavailable
+          detail={fileAccess.error ?? "This connection cannot read host files."}
+          onBack={handleReturnToThread}
+        />
+      </View>
     );
   }
   if (cwd === null) {
-    return <FilesUnavailable onBack={handleReturnToThread} />;
+    return (
+      <View className="flex-1">
+        {handoff}
+        <FilesUnavailable onBack={handleReturnToThread} />
+      </View>
+    );
   }
 
   if (hasFileInspector) {
@@ -641,6 +659,7 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
         onRefresh={entriesQuery.refresh}
         onBack={handleReturnToThread}
       />
+      {handoff}
       <ScreenContent>
         <FileTreeBrowser
           key={JSON.stringify([environmentId, cwd])}

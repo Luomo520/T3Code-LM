@@ -97,6 +97,10 @@ import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteSc
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { HeaderUsageSettingsRouteScreen } from "./features/usage/HeaderUsageSettingsRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
+import {
+  SettingsCrossDeviceAccessRouteScreen,
+  SettingsCrossDeviceRouteScreen,
+} from "./features/settings/SettingsCrossDeviceRouteScreen";
 import { SettingsFollowUpRouteScreen } from "./features/settings/SettingsFollowUpRouteScreen";
 import { SettingsLanguageRouteScreen } from "./features/settings/SettingsLanguageRouteScreen";
 import {
@@ -176,6 +180,16 @@ const SETTINGS_SCREENS = {
     screen: SettingsEnvironmentsRouteScreen,
     linking: "settings/environments",
     options: settingsPage("Environments"),
+  }),
+  SettingsCrossDevice: createNativeStackScreen({
+    screen: SettingsCrossDeviceRouteScreen,
+    linking: "settings/cross-device",
+    options: settingsPage("多端互控"),
+  }),
+  SettingsCrossDeviceAccess: createNativeStackScreen({
+    screen: SettingsCrossDeviceAccessRouteScreen,
+    linking: "settings/cross-device/:environmentId",
+    options: settingsPage("设备授权"),
   }),
   SettingsHeaderUsage: createNativeStackScreen({
     screen: HeaderUsageSettingsRouteScreen,

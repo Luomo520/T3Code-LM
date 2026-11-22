@@ -1,5 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Playwright 文件选择器测试需要一个真实的本地临时文件。
 import { PreviewAutomationEvaluateInput } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import {
   chromium,
   type Browser,
@@ -355,6 +359,108 @@ describe("server browser element refs", () => {
       "inside iframe",
     );
     expect(await page.getByRole("textbox", { name: "parent" }).inputValue()).toBe("");
+  });
+
+  it("fills a real form, handles validation, and submits once through fresh snapshot refs", async () => {
+    await page.setContent(`
+      <form>
+        <label>Name <input name="name" required></label>
+        <label>Department
+          <select name="department" required>
+            <option value="">Choose a department</option>
+            <option value="engineering">Engineering</option>
+          </select>
+        </label>
+        <label>Attachment <input name="attachment" type="file" required></label>
+        <button type="submit">Send request</button>
+      </form>
+      <p role="alert"></p>
+      <p role="status"></p>
+      <script>
+        const form = document.querySelector("form");
+        const error = document.querySelector('[role="alert"]');
+        const receipt = document.querySelector('[role="status"]');
+        let submits = 0;
+        form.addEventListener("invalid", (event) => {
+          if (event.target.name === "name") error.textContent = "Enter a name.";
+        }, true);
+        form.addEventListener("input", () => { error.textContent = ""; });
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const data = new FormData(form);
+          const submission = ++submits;
+          form.dataset.submits = String(submission);
+          const file = data.get("attachment");
+          receipt.textContent = [
+            "Receipt " + submission,
+            data.get("name"),
+            data.get("department"),
+            file.name,
+            await file.text(),
+          ].join(" · ");
+          form.querySelector("button").replaceWith(form.querySelector("button").cloneNode(true));
+        });
+      </script>`);
+
+    const initial = await takeSnapshot();
+    const submit = buttonLocator(initial.accessibilityTree, "Send request");
+    const field = (tree: unknown, name: string) => {
+      const line = String(tree)
+        .split("\n")
+        .find((entry) => entry.includes(`"${name}"`));
+      const locator = locators(line)[0];
+      expect(locator).toBeDefined();
+      return locator!;
+    };
+    await ServerBrowserPage.click(page, { locator: submit });
+    const invalid = await takeSnapshot();
+    expect(invalid.visibleText).toContain("Enter a name.");
+    expect(invalid.visibleText).not.toContain("Receipt");
+
+    const tempDirectory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-preview-form-"));
+    try {
+      const fixture = NodePath.join(tempDirectory, "preview-form-fixture.txt");
+      await NodeFSP.writeFile(fixture, "verification memo");
+      const tree = invalid.accessibilityTree;
+      await ServerBrowserPage.type(page, {
+        locator: field(tree, "Name"),
+        text: "Ada",
+        clear: true,
+      });
+      await expect(
+        ServerBrowserPage.select(page, {
+          locator: field(tree, "Department"),
+          values: ["Engineering"],
+        }),
+      ).resolves.toEqual({ selected: ["engineering"] });
+      await expect(
+        ServerBrowserPage.setInputFiles(page, {
+          locator: field(tree, "Attachment"),
+          paths: [fixture],
+        }),
+      ).resolves.toBe(true);
+
+      const ready = await takeSnapshot();
+      expect(ready.visibleText).not.toContain("Enter a name.");
+      const send = buttonLocator(ready.accessibilityTree, "Send request");
+      await ServerBrowserPage.click(page, { locator: send });
+      await page
+        .getByText("Receipt 1 · Ada · engineering · preview-form-fixture.txt · verification memo", {
+          exact: true,
+        })
+        .waitFor();
+      const submitted = await takeSnapshot();
+      expect(submitted.visibleText).toContain(
+        "Receipt 1 · Ada · engineering · preview-form-fixture.txt · verification memo",
+      );
+      expect(buttonLocator(submitted.accessibilityTree, "Send request")).not.toBe(send);
+      await expect(
+        ServerBrowserPage.click(page, { locator: send, timeoutMs: 300 }),
+      ).rejects.toThrow(/stale|No element matches/i);
+      expect(await page.locator("form").getAttribute("data-submits")).toBe("1");
+    } finally {
+      await NodeFSP.rm(tempDirectory, { recursive: true, force: true });
+    }
   });
 
   it("shows dotted fields as dots wherever their value appears, keeping text values and refs", async () => {

@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./sha256": {
+      "types": "./src/sha256.ts",
+      "default": "./src/sha256.ts"
+    },
     "./replyClipboard": {
       "types": "./src/replyClipboard.ts",
       "import": "./src/replyClipboard.ts"

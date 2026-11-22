@@ -42,7 +42,7 @@ import { DeviceWorkspace } from "./DeviceWorkspace";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 
 const platformLabel = (platform: DevicePlatform) =>
-  platform === "ios" ? "iOS Simulators" : "Android Emulators";
+  platform === "ios" ? "iOS Simulators" : "Android Devices";
 
 const deviceKey = (device: Pick<DeviceSummary, "hostId" | "id">) =>
   `${device.hostId}\u0000${device.id}`;
@@ -306,7 +306,7 @@ export function DevicePanel(props: {
                     >
                       {state.hostStatus === "failed"
                         ? (state.hostStatusDetail ?? "The device hub failed to start.")
-                        : "No simulators or emulators were found on this environment."}
+                        : "No devices were found in this environment."}
                     </p>
                   </>
                 ) : null}
@@ -332,7 +332,17 @@ export function DevicePanel(props: {
                                   {device.name}
                                 </span>
                                 <span className="truncate text-xs text-muted-foreground">
-                                  {`${state.hosts.find((host) => host.id === device.hostId)?.label} · ${device.version} · ${device.booted ? "Running" : "Stopped"}`}
+                                  {[
+                                    state.hosts.find((host) => host.id === device.hostId)?.label,
+                                    device.version,
+                                    device.physical
+                                      ? "Physical device"
+                                      : device.booted
+                                        ? "Running"
+                                        : "Stopped",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")}
                                 </span>
                               </div>
                               <Button
@@ -363,8 +373,8 @@ export function DevicePanel(props: {
                 !state.devices.some((device) => device.platform === "android") &&
                 !unavailablePlatforms.some((platform) => platform.platform === "android") ? (
                   <p className="max-w-sm text-xs">
-                    No Android virtual devices found. Create one in Android Studio's Device Manager,
-                    then refresh.
+                    Connect an Android phone with USB debugging enabled, or start an emulator, then
+                    refresh.
                   </p>
                 ) : null}
                 {loaded && !hostBusy ? (

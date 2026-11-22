@@ -30,6 +30,11 @@ class T3NativeControlsModule : Module() {
       T3FileDownloads.enqueue(appContext.reactContext ?: error("应用尚未就绪。"), url, fileName,
         sizeBytes?.takeIf { it.isFinite() && it >= 0 }?.toLong())
     }
+    AsyncFunction("enqueueVerifiedFileDownload") { url: String, fileName: String, sizeBytes: Double, sha256: String ->
+      T3FileDownloads.enqueue(appContext.reactContext ?: error("应用尚未就绪。"), url, fileName,
+        sizeBytes.takeIf { it.isFinite() && it in 0.0..9007199254740991.0 && it == it.toLong().toDouble() }?.toLong(),
+        sha256)
+    }
     AsyncFunction("getFileDownload") { id: String -> T3FileDownloads.status(id) }
     AsyncFunction("cancelFileDownload") { id: String -> T3FileDownloads.cancel(id) }
     AsyncFunction("showFileDownloads") {

@@ -167,6 +167,10 @@
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
     },
+    "./state/fileHandoff": {
+      "types": "./src/state/fileHandoff.ts",
+      "default": "./src/state/fileHandoff.ts"
+    },
     "./state/assets": {
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"

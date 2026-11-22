@@ -1,5 +1,5 @@
 import { SettingsGroup } from "./SettingsGroup";
-import { AuthSettingsWriteScope } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, type AuthEnvironmentScope } from "@t3tools/contracts";
 import { usePrimaryEnvironmentId, usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { useServerConfigs } from "../../state/entities";
@@ -310,6 +310,7 @@ export function SettingsRow({
   onResetOverride,
   control,
   serverScoped = false,
+  serverWriteScope = AuthSettingsWriteScope,
   settingKeys = EMPTY_SETTING_KEYS,
   managedPaths = EMPTY_MANAGED_PATHS,
   mixed: mixedOverride,
@@ -325,6 +326,7 @@ export function SettingsRow({
   onResetOverride?: () => void;
   control?: ReactNode;
   serverScoped?: boolean;
+  serverWriteScope?: AuthEnvironmentScope;
   settingKeys?: readonly (keyof ServerSettings)[];
   /** Dot paths inside a setting, such as `storageCleanup.logsAfterDays`, an administrator can lock. */
   managedPaths?: readonly string[];
@@ -338,10 +340,10 @@ export function SettingsRow({
   const context = useOptionalSettingsScope();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const primaryEnvironment = usePrimaryEnvironment();
-  const primaryCanWrite = useEnvironmentScope(primaryEnvironmentId, AuthSettingsWriteScope);
+  const primaryCanWrite = useEnvironmentScope(primaryEnvironmentId, serverWriteScope);
   const writableIds = useEnvironmentsWithScope(
     context?.connectedEnvironments ?? [],
-    AuthSettingsWriteScope,
+    serverWriteScope,
   );
   const canWriteSettings = context
     ? context.connectedEnvironments.length > 0 &&

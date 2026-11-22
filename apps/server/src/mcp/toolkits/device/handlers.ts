@@ -54,7 +54,7 @@ export function agentDeviceQuickStart(
           ? "First use builds an XCTest runner and can take a couple of minutes; later commands are fast."
           : "The Android snapshot helper installs itself on first use.";
   return [
-    `The user is watching ${device.name} (${device.version}) in the Device panel.`,
+    `${device.name} (${device.version}) is open in the Device panel.`,
     target === ""
       ? `Drive it with ${executable}. It is bound to this device and session, so it needs no --platform, --udid, --serial, --config or --session flags. Use this exact path; login shells may reset PATH.`
       : `Drive it with ${executable}. Use this exact path; login shells may reset PATH. Always pass ${target}.`,
@@ -153,6 +153,20 @@ const failedHosts = <H extends { readonly id: DeviceHostId }>(
     return status?.status === "failed" && status.detail ? [{ host, detail: status.detail }] : [];
   });
 
+const isAgentDevice = (
+  devices: ReadonlyArray<DeviceSummary>,
+  target: { readonly hostId: DeviceHostId; readonly deviceId: DeviceId },
+) =>
+  devices.some(
+    (device) =>
+      device.hostId === target.hostId && device.id === target.deviceId && !device.physical,
+  );
+
+const manualDeviceOnly = () =>
+  new DeviceToolUnavailableError({
+    reason: "Physical devices are available for manual use in the Device panel.",
+  });
+
 const pickDevice = Effect.fn("handlers.pickDevice")(function* (
   state: {
     readonly hosts: ReadonlyArray<DeviceHostSummary>;
@@ -169,7 +183,10 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
     const { deviceId, hostId } = input;
     const devices = yield* DeviceService.DeviceService;
     const located = yield* devices.locateDevice({ deviceId, hostId }).pipe(mapLocateErrors);
-    if (Option.isSome(located)) return located.value;
+    if (Option.isSome(located)) {
+      if (located.value.physical) return yield* manualDeviceOnly();
+      return located.value;
+    }
     const target =
       hostId === undefined
         ? undefined
@@ -189,6 +206,7 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
   const candidates = state.devices.filter(
     (device) =>
       device.hostId === hostId &&
+      !device.physical &&
       (input.platform === undefined || device.platform === input.platform),
   );
   if (candidates.length === 0) {
@@ -198,7 +216,7 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
         failure !== undefined
           ? failure.detail
           : input.platform === undefined
-            ? "No simulators or emulators were found. Call device_list to see why."
+            ? "No devices were found. Call device_list to see why."
             : `No ${input.platform} devices were found on host ${hostId}. Call device_list to see why.`,
     });
   }
@@ -227,16 +245,19 @@ const handlers = {
       }
       const hostId = yield* resolveHostId(state.hosts, input?.hostId);
       const open = state.sessions
-        .filter((session) => session.threadId === scope.thread.threadId)
+        .filter(
+          (session) =>
+            session.threadId === scope.thread.threadId && isAgentDevice(state.devices, session),
+        )
         .map((session) => ({ hostId: session.hostId, deviceId: session.deviceId }));
       return {
         hostStatuses: Object.fromEntries(
           Object.entries(state.hostStatuses).filter(([id]) => !hostId || id === hostId),
         ),
         hosts: hostId ? state.hosts.filter((host) => host.id === hostId) : state.hosts,
-        devices: hostId
-          ? state.devices.filter((device) => device.hostId === hostId)
-          : state.devices,
+        devices: state.devices.filter(
+          (device) => !device.physical && (hostId === undefined || device.hostId === hostId),
+        ),
         open,
       };
     }).pipe(Effect.mapError(toolError)),
@@ -268,13 +289,14 @@ const handlers = {
           deviceId: target.id,
           platform: target.platform,
         },
-        { workspaceRoot: yield* threadWorkspaceRoot(scope.thread.threadId) },
+        { workspaceRoot: yield* threadWorkspaceRoot(scope.thread.threadId), forAgent: true },
       );
       const after = yield* devices.state;
       const device =
         after.devices.find(
           (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
         ) ?? target;
+      if (device.physical) return yield* manualDeviceOnly();
       // Target the opened device: an EAS device and its agent-device daemon
       // exist only once its session runs, and Android ids change on boot.
       const opened = {
@@ -322,21 +344,22 @@ const handlers = {
       const scope = yield* requireDeviceAccess;
       const devices = yield* DeviceService.DeviceService;
       const threadId = scope.thread.threadId;
+      const state = yield* devices.state;
       const hostId =
-        input.hostId === undefined
-          ? undefined
-          : yield* resolveHostId((yield* devices.state).hosts, input.hostId);
+        input.hostId === undefined ? undefined : yield* resolveHostId(state.hosts, input.hostId);
       const target =
         input.deviceId === undefined
           ? (yield* devices.sessionsForThread(threadId)).findLast(
-              (session) => hostId === undefined || session.hostId === hostId,
+              (session) =>
+                (hostId === undefined || session.hostId === hostId) &&
+                isAgentDevice(state.devices, session),
             )
           : Option.getOrUndefined(
               yield* devices
                 .locateSession({ threadId, deviceId: input.deviceId, hostId })
                 .pipe(mapLocateErrors),
             );
-      if (!target) {
+      if (!target || !isAgentDevice(state.devices, target)) {
         return yield* new DeviceToolUnavailableError({
           reason:
             input.deviceId === undefined
@@ -344,7 +367,7 @@ const handlers = {
               : `Device ${input.deviceId} is not open in this thread. Call device_open first.`,
         });
       }
-      const shot = yield* devices.screenshot(target);
+      const shot = yield* devices.screenshot({ ...target, forAgent: true });
       return {
         device: shot.device,
         screenshot: {
@@ -371,12 +394,15 @@ const handlers = {
               .locateSession({ threadId: scope.thread.threadId, deviceId, hostId: inputHostId })
               .pipe(mapLocateErrors);
       const hostId = Option.isSome(open) ? open.value.hostId : inputHostId;
-      yield* devices.close({
-        threadId: scope.thread.threadId,
-        ...(hostId === undefined ? {} : { hostId }),
-        ...(deviceId === undefined ? {} : { deviceId }),
-        ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
-      });
+      yield* devices.close(
+        {
+          threadId: scope.thread.threadId,
+          ...(hostId === undefined ? {} : { hostId }),
+          ...(deviceId === undefined ? {} : { deviceId }),
+          ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
+        },
+        true,
+      );
       return {};
     }).pipe(Effect.mapError(toolError)),
   ),

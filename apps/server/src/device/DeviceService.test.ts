@@ -546,6 +546,37 @@ describe("device setup consent", () => {
     }),
   );
 
+  it.effect("reserves physical devices for the manual panel after agent access is enabled", () =>
+    Effect.gen(function* () {
+      const { service, requests, devices } = yield* fixture();
+      const deviceId = DeviceId.make("physical-android");
+      devices.push({
+        id: deviceId,
+        name: "Pixel",
+        platform: "android",
+        version: "Android 15",
+        booted: true,
+        physical: true,
+      });
+      yield* service.configure({ enabled: true, agentAccessEnabled: true });
+      const target = { hostId: "local", deviceId, threadId: ThreadId.make("private-phone") };
+      const input = { ...target, platform: "android" as const };
+      const unavailable = /manual use in the Device panel/;
+      expect((yield* service.open(input, { forAgent: true }).pipe(Effect.flip)).message).toMatch(
+        unavailable,
+      );
+      const manual = yield* service.open(input);
+      expect((yield* service.agentTarget(target).pipe(Effect.flip)).message).toMatch(unavailable);
+      expect(
+        (yield* service.screenshot({ ...target, forAgent: true }).pipe(Effect.flip)).message,
+      ).toMatch(unavailable);
+      expect(requests.some((url) => url.includes("/api/screenshot"))).toBe(false);
+      expect((yield* service.screenshot(target)).device.id).toBe(deviceId);
+      yield* service.close({ threadId: target.threadId }, true);
+      expect(yield* service.sessionsForThread(target.threadId)).toEqual([manual]);
+    }),
+  );
+
   it.effect("blocks only emulator video until ffmpeg is usable, then allows retry", () =>
     Effect.gen(function* () {
       const { service, requests, devices, encoderResult } = yield* fixture();

@@ -1,6 +1,7 @@
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import {
+  companionScreenshotOutput,
   isJsonToolText,
   toolCallLines,
   turnItemDetailRevision,
@@ -10,9 +11,10 @@ import {
 } from "@t3tools/client-runtime/work-log/item-detail";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
-import { ExternalLinkIcon } from "lucide-react";
-import { memo, type ReactNode, Suspense, use } from "react";
+import { Download, ExternalLinkIcon } from "lucide-react";
+import { memo, type ReactNode, Suspense, use, useRef, useState } from "react";
 
+import { useAssetUrlRefresh } from "../../assets/assetUrls";
 import { useRenderedAppearance } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
@@ -20,6 +22,8 @@ import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
 import { useTurnItemDetail } from "../../state/queries";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
+import { downloadMedia } from "../media/mediaContent";
 import ChatMarkdown from "../ChatMarkdown";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
@@ -114,11 +118,13 @@ function useFetchedTurnItem(
   );
   const fetchedItem = detail.data?.item;
   const item = fetchedItem?.type === wireItem.type ? fetchedItem : wireItem;
+  const screenshot = companionScreenshotOutput(item);
   return {
     item,
     output: {
-      output: turnItemOutputText(item),
+      output: screenshot?.summary ? null : turnItemOutputText(item),
       images: turnItemOutputImages(item),
+      screenshot,
       environmentId,
       pending: item === wireItem && detail.isPending,
       error:
@@ -135,6 +141,7 @@ function useFetchedTurnItem(
 interface ToolOutputState {
   readonly output: string | null;
   readonly images: ReturnType<typeof turnItemOutputImages>;
+  readonly screenshot?: ReturnType<typeof companionScreenshotOutput>;
   readonly environmentId: EnvironmentId;
   readonly pending: boolean;
   readonly error: string | null;
@@ -142,17 +149,78 @@ interface ToolOutputState {
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }
 
+function ScreenshotSaveButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly resource: ToolOutputState["images"][number];
+  readonly fileName: string;
+}) {
+  const refresh = useAssetUrlRefresh(props.environmentId, props.resource);
+  const saving = useRef(false);
+  const [pending, setPending] = useState(false);
+  const save = async () => {
+    if (saving.current) return;
+    saving.current = true;
+    setPending(true);
+    try {
+      const url = await refresh();
+      if (!url) throw new Error("截图暂不可用，请重新连接后重试。");
+      await downloadMedia(url, props.fileName);
+      toastManager.add({ type: "info", title: "已交给当前设备下载", description: props.fileName });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "截图保存失败",
+        description: error instanceof Error ? error.message : "请检查连接后重试。",
+      });
+    } finally {
+      saving.current = false;
+      setPending(false);
+    }
+  };
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={pending}
+      aria-busy={pending}
+      onClick={(event) => {
+        event.stopPropagation();
+        void save();
+      }}
+    >
+      <Download aria-hidden="true" />
+      {pending ? "正在下载截图…" : "保存到我的设备"}
+    </Button>
+  );
+}
+
 function ToolOutputImages(props: ToolOutputState) {
-  return props.images.map((resource) => (
-    <ChatMarkdownAssetImage
-      key={resource.index}
-      environmentId={props.environmentId}
-      resource={resource}
-      alt="Tool output image"
-      maxHeightRem={16}
-      onImageExpand={props.onImageExpand}
-    />
-  ));
+  return props.images.map((resource, index) => {
+    const screenshot = index === 0 ? props.screenshot : null;
+    const image = (
+      <ChatMarkdownAssetImage
+        key={resource.index}
+        environmentId={props.environmentId}
+        resource={resource}
+        alt={screenshot ? "设备截图" : "Tool output image"}
+        maxHeightRem={16}
+        onImageExpand={props.onImageExpand}
+      />
+    );
+    return screenshot ? (
+      <figure key={resource.index} className="space-y-2 font-sans">
+        {screenshot.summary ? <figcaption>{screenshot.summary}</figcaption> : null}
+        <div>{image}</div>
+        <ScreenshotSaveButton
+          environmentId={props.environmentId}
+          resource={resource}
+          fileName={screenshot.fileName}
+        />
+      </figure>
+    ) : (
+      image
+    );
+  });
 }
 
 function ToolOutput(props: ToolOutputState) {

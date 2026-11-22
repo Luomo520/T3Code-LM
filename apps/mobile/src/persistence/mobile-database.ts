@@ -18,6 +18,7 @@ export const ClientCacheKind = Schema.Literals([
   "project-favicon",
   "pull-request",
   "header-usage",
+  "usage-summary",
 ]);
 export type ClientCacheKind = typeof ClientCacheKind.Type;
 
@@ -175,7 +176,7 @@ const makeAvailable = Effect.gen(function* () {
             `SELECT payload
                      FROM client_cache
                      WHERE environment_id = ? AND kind = ? AND cache_key = ?
-                       AND (kind != 'pull-request' OR updated_at >= ?)`,
+                       AND (kind NOT IN ('pull-request', 'usage-summary') OR updated_at >= ?)`,
             environmentId,
             kind,
             cacheKey,
@@ -199,14 +200,15 @@ const makeAvailable = Effect.gen(function* () {
       (environmentId, kind, cacheKey, schemaVersion, payload) =>
         Effect.tryPromise({
           try: async () => {
-            // Bound offline PR caches to 32 MiB and 256 responses per environment; reject huge diffs that would evict everything.
-            if (
-              kind === "pull-request" &&
-              new TextEncoder().encode(payload).length > 4 * 1024 * 1024
-            )
-              return;
-            if (kind === "header-usage" && new TextEncoder().encode(payload).length > 65_536)
-              return;
+            // 24 小时用量按分钟键入库。摘要和 PR 都按环境限制体积、条数及保留期限。
+            const limits =
+              kind === "usage-summary"
+                ? { rowBytes: 2 * 1024 * 1024, rows: 16, bytes: 8 * 1024 * 1024 }
+                : kind === "pull-request"
+                  ? { rowBytes: 4 * 1024 * 1024, rows: 256, bytes: 32 * 1024 * 1024 }
+                  : null;
+            const rowBytes = limits?.rowBytes ?? (kind === "header-usage" ? 65_536 : null);
+            if (rowBytes !== null && new TextEncoder().encode(payload).length > rowBytes) return;
             const save = async (transaction: SQLiteDatabase) => {
               await transaction.runAsync(
                 `INSERT INTO client_cache
@@ -223,9 +225,9 @@ const makeAvailable = Effect.gen(function* () {
                 payload,
                 Date.now(),
               );
-              if (kind === "pull-request") {
+              if (limits !== null) {
                 await transaction.runAsync(
-                  `DELETE FROM client_cache WHERE environment_id = ? AND kind = 'pull-request'
+                  `DELETE FROM client_cache WHERE environment_id = ? AND kind = ?
                    AND cache_key IN (
                      SELECT cache_key FROM (
                        SELECT cache_key, updated_at,
@@ -233,11 +235,15 @@ const makeAvailable = Effect.gen(function* () {
                          SUM(LENGTH(CAST(payload AS BLOB))) OVER (
                            ORDER BY updated_at DESC, cache_key
                          ) AS total_bytes
-                       FROM client_cache WHERE environment_id = ? AND kind = 'pull-request'
-                     ) WHERE position > 256 OR total_bytes > 33554432 OR updated_at < ?
+                       FROM client_cache WHERE environment_id = ? AND kind = ?
+                     ) WHERE position > ? OR total_bytes > ? OR updated_at < ?
                    )`,
                   environmentId,
+                  kind,
                   environmentId,
+                  kind,
+                  limits.rows,
+                  limits.bytes,
                   Date.now() - 30 * 24 * 60 * 60_000,
                 );
               }

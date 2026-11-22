@@ -879,7 +879,7 @@ export const make = Effect.gen(function* () {
         );
       const [, scanned] = yield* Effect.all(
         [
-          fromMemory ? loadSavedRates : provisional ? ensureRates(false) : Effect.void,
+          provisional ? loadSavedRates : Effect.void,
           collectDirs(
             resolved,
             windowStartMs,
@@ -898,6 +898,10 @@ export const make = Effect.gen(function* () {
       { concurrency: 2 },
     );
 
+    const pricingNeedsRefresh =
+      provisional &&
+      (ratesFetchedAtMs === null || startedAtMs - ratesFetchedAtMs >= RATES_TTL_MS) &&
+      (ratesLastFailedAtMs === null || startedAtMs - ratesLastFailedAtMs >= RATES_REFRESH_FLOOR_MS);
     const summaryPricing = pricing();
     const aggregator = new UsageAggregator({
       timeZone: input.timeZone,
@@ -1105,9 +1109,9 @@ export const make = Effect.gen(function* () {
                 .filter(Boolean)
                 .join(" ")
             : sourceMessage,
-        // A saved answer misses what changed since its scan, so the client must ask again. An
-        // empty source stays unmarked: it would only flash a loading row.
-        ...(refreshing || (fromMemory && counted && transcriptFormats.has(provider))
+        // 有用量的来源先显示已扫描的数据，再补齐价格或更新历史记录。
+        ...(refreshing ||
+        (counted && (pricingNeedsRefresh || (fromMemory && transcriptFormats.has(provider))))
           ? { refreshing: true }
           : {}),
       });
