@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Animated, Easing, Platform, Pressable, useAnimatedValue, View } from "react-native";
-import Svg, { Defs, LinearGradient, Path, Rect, Stop } from "react-native-svg";
+import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 
@@ -11,12 +11,14 @@ import {
   REASONING_THUMB_DIAMETER,
   reasoningLevelLabel,
   reasoningRailHighlightMode,
-  reasoningRailSweep,
+  REASONING_FLOW_PERIOD,
+  REASONING_FLOW_DURATION,
+  reasoningFlowTileCount,
   reasoningSliderFillWidth,
   reasoningSliderIndex,
 } from "./reasoning-slider-state";
 
-const RAIL_HEIGHT = 48;
+const RAIL_HEIGHT = Platform.OS === "android" ? 36 : 48;
 const TOUCH_HEIGHT = 52;
 
 /** Theme-aware neutral material; purple belongs only to the slider progress. */
@@ -38,38 +40,53 @@ export function useModelPopupColors() {
   };
 }
 
-function ReasoningFillHighlight(props: {
-  readonly filledWidth: number;
+const FLOW_STOPS = [
+  "#cba6f7",
+  "#cba8f7",
+  "#cbb0f8",
+  "#cbbbf9",
+  "#cdc8fb",
+  "#cfd4fc",
+  "#d2defe",
+  "#d4e4ff",
+  "#d5e6ff",
+  "#d4e4ff",
+  "#d2defe",
+  "#cfd4fc",
+  "#cdc8fb",
+  "#cbbbf9",
+  "#cbb0f8",
+  "#cba8f7",
+  "#cba6f7",
+].map((color, index, colors) => ({ color, offset: index / (colors.length - 1) }));
+
+function ReasoningFillHighlight({
+  railWidth,
+  moving,
+}: {
+  readonly railWidth: number;
   readonly moving: boolean;
-  readonly intensity: number;
 }) {
-  const gradientId = `reasoning-highlight-${useId().replaceAll(":", "")}`;
-  const progress = useAnimatedValue(0, { useNativeDriver: true });
-  const sweep = reasoningRailSweep(props.filledWidth);
-  const amplitude = 3 + props.intensity * 5;
-  const duration = Math.round(1_350 - props.intensity * 450);
-  const wave = (y: number, displacement: number) =>
-    `M -5 ${y} Q 8 ${y - displacement} 21 ${y} T 47 ${y} T 73 ${y} T 99 ${y} T 125 ${y}`;
-  const translateX = props.moving
-    ? progress.interpolate({ inputRange: [0, 1], outputRange: [sweep.start, sweep.end] })
-    : undefined;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- restarts the bounded native sweep when the selection changes
+  const gradientId = `reasoning-flow-${useId().replaceAll(":", "")}`;
+  const translateX = useAnimatedValue(0, { useNativeDriver: true });
+  const tileCount = reasoningFlowTileCount(railWidth);
+  const width = tileCount * REASONING_FLOW_PERIOD;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 只在允许动画时运行，切档仅改变外层裁切宽度。
   useEffect(() => {
-    if (!props.moving) return;
-    progress.setValue(0);
+    translateX.setValue(0);
+    if (!moving) return;
     const loop = Animated.loop(
-      Animated.timing(progress, {
-        toValue: 1,
-        duration,
+      Animated.timing(translateX, {
+        toValue: -REASONING_FLOW_PERIOD,
+        duration: REASONING_FLOW_DURATION,
         easing: Easing.linear,
         useNativeDriver: true,
         isInteraction: false,
       }),
-      { iterations: 2 },
     );
     loop.start();
     return () => loop.stop();
-  }, [duration, progress, props.moving]);
+  }, [moving, translateX]);
 
   return (
     <Animated.View
@@ -77,44 +94,30 @@ function ReasoningFillHighlight(props: {
       importantForAccessibility="no-hide-descendants"
       style={{
         position: "absolute",
-        top: 0,
-        bottom: 0,
         left: 0,
-        width: props.moving ? sweep.width : props.filledWidth,
-        transform: translateX ? [{ translateX }] : undefined,
+        top: 0,
+        width,
+        height: RAIL_HEIGHT,
+        transform: [{ translateX }],
       }}
     >
-      <Svg
-        width="100%"
-        height="100%"
-        viewBox={`0 0 100 ${RAIL_HEIGHT}`}
-        preserveAspectRatio="none"
-        accessible={false}
-      >
+      <Svg width={width} height={RAIL_HEIGHT} accessible={false}>
         <Defs>
-          <LinearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="10%">
-            <Stop offset="0%" stopColor="#cba6f7" stopOpacity={0} />
-            <Stop offset="30%" stopColor="#a99cf7" stopOpacity={0.62} />
-            <Stop offset="50%" stopColor="#a9c9ff" stopOpacity={0.96} />
-            <Stop offset="70%" stopColor="#dfc9ff" stopOpacity={0.78} />
-            <Stop offset="100%" stopColor="#cba6f7" stopOpacity={0} />
+          <LinearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
+            {FLOW_STOPS.map(({ color, offset }) => (
+              <Stop key={offset} offset={offset} stopColor={color} />
+            ))}
           </LinearGradient>
         </Defs>
-        <Rect width="100%" height="100%" fill={`url(#${gradientId})`} />
-        <Path
-          d={wave(RAIL_HEIGHT / 2, amplitude)}
-          fill="none"
-          stroke="#f5efff"
-          strokeWidth={4}
-          opacity={0.72}
-        />
-        <Path
-          d={`${wave(3, amplitude / 2)} ${wave(RAIL_HEIGHT - 3, -amplitude / 2)}`}
-          fill="none"
-          stroke="#edf5ff"
-          strokeWidth={2}
-          opacity={0.8}
-        />
+        {Array.from({ length: tileCount }, (_, index) => (
+          <Rect
+            key={index}
+            x={index * REASONING_FLOW_PERIOD}
+            width={REASONING_FLOW_PERIOD}
+            height={RAIL_HEIGHT}
+            fill={`url(#${gradientId})`}
+          />
+        ))}
       </Svg>
     </Animated.View>
   );
@@ -155,7 +158,6 @@ export function ReasoningSlider(props: {
   const defaultLabel = defaultChoice ? reasoningLevelLabel(defaultChoice) : "Auto";
   const disabled = props.disabled || props.choices.length < 2;
   const filledWidth = reasoningSliderFillWidth(index, width, props.choices.length);
-  const intensity = Math.max(0, index) / Math.max(1, props.choices.length - 1);
   const thumbRadius = REASONING_THUMB_DIAMETER / 2;
   const tickDiameter = 6;
   const tickInset = thumbRadius - tickDiameter / 2;
@@ -304,11 +306,7 @@ export function ReasoningSlider(props: {
               }}
             >
               {highlight !== "off" ? (
-                <ReasoningFillHighlight
-                  filledWidth={filledWidth}
-                  moving={highlight === "sweep"}
-                  intensity={intensity}
-                />
+                <ReasoningFillHighlight railWidth={width} moving={highlight === "sweep"} />
               ) : null}
             </View>
           ) : null}
@@ -347,6 +345,11 @@ export function ReasoningSlider(props: {
               height: REASONING_THUMB_DIAMETER,
               borderRadius: thumbRadius,
               backgroundColor: "#fff",
+              ...(Platform.OS === "android" && {
+                borderWidth: 1,
+                borderColor: "#33294216",
+                boxShadow: "0 1px 3px #33294221",
+              }),
             }}
           />
         ) : null}

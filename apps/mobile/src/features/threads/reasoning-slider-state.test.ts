@@ -3,7 +3,9 @@ import {
   REASONING_THUMB_DIAMETER,
   reasoningLevelLabel,
   reasoningRailHighlightMode,
-  reasoningRailSweep,
+  REASONING_FLOW_DURATION,
+  REASONING_FLOW_PERIOD,
+  reasoningFlowTileCount,
   reasoningSliderFillWidth,
   reasoningSliderIndex,
 } from "./reasoning-slider-state";
@@ -51,13 +53,13 @@ describe("reasoning slider touch snapping", () => {
 });
 
 describe("reasoning rail highlight", () => {
-  it("scales the sweep width and its endpoint to the local fill length", () => {
-    const fillWidths = [0, 2, 5].map((index) => reasoningSliderFillWidth(index, 342, 6));
-    expect(fillWidths.map(reasoningRailSweep)).toEqual([
-      { width: 21, start: -21, end: 21 },
-      { width: 90, start: -90, end: 141 },
-      { width: 205, start: -205, end: 321 },
-    ]);
+  it("covers the full rail throughout a seamless 50 dp/s sweep", () => {
+    expect(REASONING_FLOW_PERIOD / (REASONING_FLOW_DURATION / 1000)).toBe(50);
+    for (const width of [42, 180, 342, 360, 361, 768]) {
+      const tileWidth = reasoningFlowTileCount(width) * REASONING_FLOW_PERIOD;
+      expect(tileWidth - REASONING_FLOW_PERIOD).toBeGreaterThanOrEqual(width);
+      expect(tileWidth - 2 * REASONING_FLOW_PERIOD).toBeLessThan(width);
+    }
   });
 
   it("sweeps at every selected stop when multiple levels are available", () => {

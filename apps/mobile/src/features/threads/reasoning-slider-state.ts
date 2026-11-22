@@ -17,10 +17,12 @@ export function reasoningSliderFillWidth(index: number, width: number, count: nu
   return FIRST_STOP + (reasoningSliderTravel(width) * index) / Math.max(1, count - 1);
 }
 
-/** Sweep length follows the filled portion. */
-export function reasoningRailSweep(filledWidth: number) {
-  const width = Math.min(filledWidth, Math.max(FIRST_STOP, Math.round(filledWidth * 0.64)));
-  return { width, start: -width, end: filledWidth };
+export const REASONING_FLOW_PERIOD = 180;
+export const REASONING_FLOW_DURATION = 3600;
+
+// 额外一段用于平移一整个周期，循环接头两侧保持相同颜色。
+export function reasoningFlowTileCount(railWidth: number): number {
+  return Math.ceil(railWidth / REASONING_FLOW_PERIOD) + 1;
 }
 
 export function reasoningRailHighlightMode(
