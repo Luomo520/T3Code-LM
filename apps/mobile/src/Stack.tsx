@@ -1,4 +1,4 @@
-import { I18nProvider, useGT } from "./i18n/I18nProvider";
+import { useGT } from "./i18n/I18nProvider";
 import { isDraftThreadRoute } from "./features/threads/thread-route-state";
 import { ComponentCatalogScreen } from "./features/development/ComponentCatalogScreen";
 import { PullRequestGuideStopScreen } from "./features/pull-requests/guide/PullRequestGuideScreen";
@@ -797,22 +797,20 @@ export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navig
 
   /* oxlint-disable react/no-unstable-nested-components -- React Navigation invokes screenLayout as a render callback. */
   return (
-    <I18nProvider>
-      <Navigator
-        screenLayout={(props) => <GuardedScreenLayout {...props} />}
-        screenOptions={({ route, navigation }) =>
-          Platform.OS === "android"
-            ? {
-                animation: androidWorkspaceDestinationAnimation(
-                  route,
-                  navigation.getState().routes,
-                  usesSplitView,
-                ),
-              }
-            : {}
-        }
-      />
-    </I18nProvider>
+    <Navigator
+      screenLayout={(props) => <GuardedScreenLayout {...props} />}
+      screenOptions={({ route, navigation }) =>
+        Platform.OS === "android"
+          ? {
+              animation: androidWorkspaceDestinationAnimation(
+                route,
+                navigation.getState().routes,
+                usesSplitView,
+              ),
+            }
+          : {}
+      }
+    />
   );
 
   /* oxlint-enable react/no-unstable-nested-components */

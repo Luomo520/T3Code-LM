@@ -1,3 +1,4 @@
+import { I18nProvider } from "./i18n/I18nProvider";
 import { DockGlassProvider } from "./components/ui/DockGlass";
 import { installPermissionUpdateNotice } from "./features/connection/permissionUpdateNotice";
 import { installComposerAttachmentUploads } from "./state/composer-attachment-uploads";
@@ -262,9 +263,11 @@ export default function App() {
     <RegistryContext.Provider value={appAtomRegistry}>
       <CloudAuthProvider>
         <AppearancePreferencesProvider>
-          <DockGlassProvider>
-            <AppContent />
-          </DockGlassProvider>
+          <I18nProvider>
+            <DockGlassProvider>
+              <AppContent />
+            </DockGlassProvider>
+          </I18nProvider>
         </AppearancePreferencesProvider>
       </CloudAuthProvider>
     </RegistryContext.Provider>
