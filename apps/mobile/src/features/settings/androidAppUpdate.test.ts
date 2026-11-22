@@ -54,6 +54,12 @@ describe("Android release selection", () => {
     ).toBeNull();
   });
 
+  it("prefers a newer compatible APK even when an older arm64 build is listed first", () => {
+    const older = asset("arm64", 1, 35);
+    const newest = asset("universal", 3, 37);
+    expect(selectAndroidUpdate([older, newest], 34, ["arm64-v8a"])).toBe(newest);
+  });
+
   it("requires explicit confirmation on mobile and unknown networks", () => {
     for (const type of ["CELLULAR", "UNKNOWN", "OTHER", "NONE"]) {
       expect(requiresMobileDownloadConfirmation(type)).toBe(true);
@@ -126,5 +132,62 @@ describe("Android release selection", () => {
         new AbortController().signal,
       ),
     ).rejects.toThrow("更新清单校验失败");
+  });
+});
+
+describe.each(["v0.1.0", "v0.1.0-2"])("grouped release %s", (tag) => {
+  it("finds the Android build by its own code and uses the grouped manifest before the legacy manifest", async () => {
+    const file = (build: number, code: number, arch: "arm64" | "universal") => {
+      const row = asset(arch, build, code);
+      return {
+        ...row,
+        sourceCommit: "c".repeat(40),
+        url: `https://github.com/Luomo520/T3Code-LM/releases/download/${tag}/${row.fileName}`,
+      };
+    };
+    const legacy = file(2, 36, "arm64");
+    const latest = file(4, 38, "universal");
+    const calls: string[] = [];
+    using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const address = String(url);
+      calls.push(address);
+      if (address.includes("api.github.com")) {
+        return Response.json([
+          {
+            tag_name: tag,
+            assets: [
+              { name: "T3Code-LM-platforms.json" },
+              { name: "T3Code-LM-release.json" },
+              { name: latest.fileName },
+              { name: legacy.fileName },
+            ],
+          },
+        ]);
+      }
+      expect(address).toBe(
+        `https://github.com/Luomo520/T3Code-LM/releases/download/${tag}/T3Code-LM-platforms.json`,
+      );
+      return Response.json({
+        schemaVersion: 2,
+        product: "T3Code-LM",
+        channel: "release",
+        repository: "Luomo520/T3Code-LM",
+        tag,
+        productVersion: "0.1.0",
+        assets: [legacy, latest],
+      });
+    });
+    const find = (installedBuild: number) =>
+      findAndroidAppUpdate(
+        { installedBuild, architectures: ["arm64-v8a"] },
+        new AbortController().signal,
+      );
+    expect(await find(35)).toMatchObject({
+      androidVersionCode: 38,
+      build: 4,
+      fileName: latest.fileName,
+    });
+    expect(await find(38)).toBeNull();
+    expect(calls).toHaveLength(4);
   });
 });

@@ -32,7 +32,23 @@ export interface ForkReleaseAsset {
   readonly url: string;
   /** Android installation compares this independently from the display version. */
   readonly androidVersionCode?: number;
+  readonly sourceCommit?: string;
 }
+export const FORK_RELEASE_PLATFORMS_FILE = "T3Code-LM-platforms.json";
+
+export function isForkReleaseTag(tag: string): boolean {
+  return /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[1-9]\d*)?$/.test(tag);
+}
+
+export const forkReleasePlatformsUrl = (tag: string) =>
+  `https://github.com/${FORK_RELEASE_REPOSITORY}/releases/download/${encodeURIComponent(tag)}/${FORK_RELEASE_PLATFORMS_FILE}`;
+
+export interface ForkReleasePlatforms {
+  readonly tag: string;
+  readonly productVersion: string;
+  readonly assets: readonly (ForkReleaseAsset & { readonly sourceCommit: string })[];
+}
+
 export interface ForkReleaseManifest {
   readonly tag: string;
   readonly assets: readonly ForkReleaseAsset[];
@@ -60,9 +76,42 @@ export function decodeForkReleaseManifest(
     !/^[a-f0-9]{40}$/.test(value.sourceCommit)
   )
     return;
+  const assets = decodeAssets(value.assets, tag);
+  if (assets) return { tag, sourceCommit: value.sourceCommit, assets };
+}
+
+export function decodeForkReleasePlatforms(
+  value: unknown,
+  tag: string,
+): ForkReleasePlatforms | undefined {
+  if (
+    !record(value) ||
+    !isForkReleaseTag(tag) ||
+    value.schemaVersion !== 2 ||
+    value.product !== "T3Code-LM" ||
+    value.channel !== "release" ||
+    value.repository !== FORK_RELEASE_REPOSITORY ||
+    value.tag !== tag ||
+    typeof value.productVersion !== "string" ||
+    value.productVersion !== tag.slice(1).split("-")[0] ||
+    !Array.isArray(value.assets) ||
+    !value.assets.length
+  )
+    return;
+  const assets = decodeAssets(value.assets, tag, value.productVersion);
+  if (assets) return { tag, productVersion: value.productVersion, assets };
+}
+
+function decodeAssets(rows: unknown[], tag: string): ForkReleaseAsset[] | undefined;
+function decodeAssets(
+  rows: unknown[],
+  tag: string,
+  productVersion: string,
+): (ForkReleaseAsset & { readonly sourceCommit: string })[] | undefined;
+function decodeAssets(rows: unknown[], tag: string, productVersion?: string) {
   const assets: ForkReleaseAsset[] = [];
   const seen = new Set<string>();
-  for (const asset of value.assets) {
+  for (const asset of rows) {
     if (
       !record(asset) ||
       typeof asset.productVersion !== "string" ||
@@ -98,9 +147,16 @@ export function decodeForkReleaseManifest(
       )
     )
       return;
+    if (
+      productVersion !== undefined &&
+      (typeof asset.sourceCommit !== "string" || !/^[a-f0-9]{40}$/.test(asset.sourceCommit))
+    )
+      return;
     const expected = `T3Code-LM-${asset.productVersion}-${asset.build}-${asset.platform}-${asset.arch}-${asset.kind}.${extension}`;
     if (
-      tag !== `v${asset.productVersion}-${asset.build}` ||
+      (productVersion === undefined
+        ? tag !== `v${asset.productVersion}-${asset.build}`
+        : asset.productVersion !== productVersion) ||
       asset.fileName !== expected ||
       asset.url !==
         `https://github.com/${FORK_RELEASE_REPOSITORY}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(expected)}`
@@ -119,10 +175,11 @@ export function decodeForkReleaseManifest(
           other.arch === asset.arch &&
           other.kind !== asset.kind &&
           other.productVersion === asset.productVersion &&
-          other.build === asset.build,
+          other.build === asset.build &&
+          (productVersion === undefined || other.sourceCommit === asset.sourceCommit),
       )
     )
       return;
   }
-  return { tag, sourceCommit: value.sourceCommit, assets };
+  return assets;
 }

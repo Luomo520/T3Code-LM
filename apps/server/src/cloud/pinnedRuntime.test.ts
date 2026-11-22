@@ -65,10 +65,13 @@ const validManifest = archiveHex(archiveBytes).pipe(Effect.map(releaseManifest))
 const releaseHttpClient = (manifest: string, requests: string[] = []) =>
   HttpClient.make((request) => {
     requests.push(request.url);
-    const body = new URL(request.url).pathname.endsWith(`/${manifestFile}`)
-      ? manifest
-      : archiveBytes;
-    return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body)));
+    const pathname = new URL(request.url).pathname;
+    const response = pathname.endsWith(`/${manifestFile}`)
+      ? new Response(manifest)
+      : pathname.endsWith(`/${archiveName}`)
+        ? new Response(archiveBytes)
+        : new Response("", { status: 404 });
+    return Effect.succeed(HttpClientResponse.fromWeb(request, response));
   });
 const extractingRunner = (fs: FileSystem.FileSystem, path: Path.Path, commands: string[] = []) =>
   ProcessRunner.ProcessRunner.of({
@@ -127,6 +130,64 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       assert.deepEqual(commands, ["tar"]);
       assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
       assert.isFalse(yield* fs.exists(path.join(paths.versionDir, "t3-runtime-archive")));
+    }),
+  );
+
+  it.effect("resolves an exact build to its verified archive on a grouped public page", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-group-" });
+      const tag = "v1.2.3";
+      const fileName = "T3Code-LM-1.2.3-4-linux-x64-server.tar.gz";
+      const groupFile = "T3Code-LM-platforms.json";
+      const url = `https://github.com/Luomo520/T3Code-LM/releases/download/${tag}/${fileName}`;
+      const group = {
+        schemaVersion: 2,
+        product: "T3Code-LM",
+        repository: "Luomo520/T3Code-LM",
+        channel: "release",
+        tag,
+        productVersion: "1.2.3",
+        assets: [
+          {
+            fileName,
+            url,
+            build: 4,
+            arch: "x64",
+            kind: "server",
+            platform: "linux",
+            productVersion: "1.2.3",
+            sourceCommit: "d".repeat(40),
+            sizeBytes: archiveBytes.byteLength,
+            sha256: yield* archiveHex(archiveBytes),
+          },
+        ],
+      };
+      const requests: string[] = [];
+      const paths = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version: "1.2.3-4",
+        fs,
+        path,
+        runner: extractingRunner(fs, path),
+        platform: "linux",
+        arch: "x64",
+        validate: () => Effect.void,
+        httpClient: HttpClient.make((req) => {
+          requests.push(req.url);
+          const response = req.url.includes("api.github.com")
+            ? Response.json([{ tag_name: tag, assets: [{ name: groupFile }] }])
+            : req.url.endsWith("/" + groupFile)
+              ? Response.json(group)
+              : req.url === url
+                ? new Response(archiveBytes)
+                : new Response("", { status: 404 });
+          return Effect.succeed(HttpClientResponse.fromWeb(req, response));
+        }),
+      });
+      assert.equal(requests.at(-1), url);
+      assert.equal(yield* fs.readFileString(paths.sentinelPath), "1.2.3-4\n");
     }),
   );
 

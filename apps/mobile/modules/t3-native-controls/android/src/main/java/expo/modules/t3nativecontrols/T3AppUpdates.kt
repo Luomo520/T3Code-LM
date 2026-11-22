@@ -15,7 +15,14 @@ import java.security.MessageDigest
 /** Owns one explicitly requested update and keeps a completed package available for installation. */
 object T3AppUpdates {
   private const val STORE = "t3-app-update"
-  private const val REPOSITORY_PATH = "/Luomo520/T3Code-LM/releases/download/"
+  private const val RELEASE_DOWNLOAD = "https://github.com/Luomo520/T3Code-LM/releases/download/"
+
+  internal fun isReleaseAssetUrl(url: String, version: String, fileName: String): Boolean {
+    // 发布页按产品版本归档。过渡期的页面可沿用同一产品的旧构建标签。
+    val product = Regex.escape(version.substringBefore('-'))
+    val tag = "v$product(?:-[1-9][0-9]*)?"
+    return Regex("${Regex.escape(RELEASE_DOWNLOAD)}$tag/${Regex.escape(fileName)}").matches(url)
+  }
 
   private fun preferences(context: Context) = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
 
@@ -31,16 +38,13 @@ object T3AppUpdates {
   @Synchronized
   fun enqueue(context: Context, url: String, fileName: String, version: String,
               versionCode: Int, sizeBytes: Double, sha256: String, allowMetered: Boolean): String {
-    val uri = Uri.parse(url)
     val versionMatch = Regex("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)-([1-9][0-9]*)$").matchEntire(version)
     require(versionMatch != null && versionCode >= 35 && sizeBytes > 0 &&
       sizeBytes.isFinite() && sizeBytes % 1.0 == 0.0 && sizeBytes <= 9007199254740991.0 &&
       Regex("^[a-f0-9]{64}$").matches(sha256)) { "更新包信息不完整，请重新检查更新。" }
     require(fileName == "T3Code-LM-$version-android-arm64-apk.apk" ||
       fileName == "T3Code-LM-$version-android-universal-apk.apk") { "更新包名称与版本不一致。" }
-    require(uri.scheme == "https" && uri.host == "github.com" && uri.port == -1 &&
-      uri.userInfo == null && uri.query == null && uri.fragment == null &&
-      uri.path == "${REPOSITORY_PATH}v$version/$fileName") { "更新地址不属于此项目的 GitHub 发布包。" }
+    require(isReleaseAssetUrl(url, version, fileName)) { "更新地址不属于此项目的 GitHub 发布包。" }
     val installed = context.packageManager.getPackageInfo(context.packageName, 0)
     require(versionCode > code(installed)) { "此更新包的构建号不高于已安装版本，请重新检查更新。" }
     val store = preferences(context)

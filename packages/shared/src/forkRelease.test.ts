@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { decodeForkReleaseManifest, FORK_RELEASE_REPOSITORY } from "./forkRelease.ts";
+import {
+  decodeForkReleaseManifest,
+  decodeForkReleasePlatforms,
+  FORK_RELEASE_REPOSITORY,
+} from "./forkRelease.ts";
 
 const android = () => ({
   platform: "android",
@@ -83,4 +87,37 @@ describe("fork release manifest", () => {
       ),
     ).toBeUndefined();
   });
+});
+
+it("binds each grouped asset to its source commit, actual build, product and published page", () => {
+  for (const tag of ["v0.1.0", "v0.1.0-1"]) {
+    const fileName = "T3Code-LM-0.1.0-2-android-arm64-apk.apk";
+    const asset = {
+      ...android(),
+      build: 2,
+      sourceCommit: "c".repeat(40),
+      fileName,
+      url: `https://github.com/${FORK_RELEASE_REPOSITORY}/releases/download/${tag}/${fileName}`,
+    };
+    const group = {
+      ...manifest(),
+      tag,
+      schemaVersion: 2,
+      productVersion: "0.1.0",
+      assets: [asset],
+    };
+    expect(decodeForkReleasePlatforms(group, tag)?.assets[0]).toEqual(asset);
+    expect(decodeForkReleaseManifest(group, tag)).toBeUndefined();
+    for (const patch of [
+      { sourceCommit: undefined },
+      { build: 3 },
+      { productVersion: "0.2.0" },
+      { url: asset.url.replace(tag + "/", "v0.1.0-2/") },
+    ]) {
+      expect(
+        decodeForkReleasePlatforms({ ...group, assets: [{ ...asset, ...patch }] }, tag),
+      ).toBeUndefined();
+    }
+    expect(decodeForkReleasePlatforms({ ...group, productVersion: "0.2.0" }, tag)).toBeUndefined();
+  }
 });

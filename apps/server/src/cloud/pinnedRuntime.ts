@@ -15,6 +15,9 @@ import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } fr
 import {
   CLI_RELEASE_CHECKSUMS_FILE,
   FORK_RELEASE_MANIFEST_FILE,
+  FORK_RELEASE_PLATFORMS_FILE,
+  decodeForkReleasePlatforms,
+  isForkBuildVersion,
   decodeForkReleaseManifest,
   cliArchiveFileName,
   cliArchivePlatformKey,
@@ -26,6 +29,7 @@ import {
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
+import { findServerRelease } from "./npmRelease.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { isExactServiceVersion, parseServiceState, SERVICE_STATE_FILE } from "./serviceProtocol.ts";
 
@@ -210,10 +214,10 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
   }
   const httpClient = input.httpClient;
   yield* input.onProgress?.({ stage: "download", received: 0, total: undefined }) ?? Effect.void;
-  const { fileName, expected, sizeBytes } = yield* publishedArchive(input, platformKey);
+  const { expected, sizeBytes, downloadUrl } = yield* publishedArchive(input, platformKey);
   const archive = yield* fetchReleaseAsset(
     httpClient,
-    cliReleaseAssetUrl(input.version, fileName, input.releaseBaseUrl),
+    downloadUrl,
     "downloading the t3 release archive",
     input.onProgress,
     sizeBytes,
@@ -273,33 +277,75 @@ const publishedArchive = Effect.fn("cloud.pinned_runtime.published_archive")(fun
 ) {
   const fileName = cliArchiveFileName(input.version, platformKey);
   if (input.platform === "linux") {
-    const bytes = yield* fetchReleaseAsset(
-      input.httpClient,
-      cliReleaseAssetUrl(input.version, FORK_RELEASE_MANIFEST_FILE, input.releaseBaseUrl),
-      "downloading the t3 release manifest",
-    );
-    const json = yield* decodeReleaseManifestJson(new TextDecoder().decode(bytes)).pipe(
-      Effect.mapError(
-        (cause) =>
-          new PinnedRuntimeInstallError({ step: "reading the t3 release manifest", cause }),
-      ),
-    );
-    const manifest = decodeForkReleaseManifest(json, `v${input.version}`);
-    if (manifest === undefined) {
-      return yield* new PinnedRuntimeInstallError({ step: "validating the t3 release manifest" });
+    const readManifest = Effect.fn(function* (version: string, grouped: boolean) {
+      const bytes = yield* fetchReleaseAsset(
+        input.httpClient,
+        cliReleaseAssetUrl(
+          version,
+          grouped ? FORK_RELEASE_PLATFORMS_FILE : FORK_RELEASE_MANIFEST_FILE,
+          input.releaseBaseUrl,
+        ),
+        "downloading the t3 release manifest",
+      ).pipe(
+        Effect.catchIf(
+          (error) => error.httpStatus === 404,
+          () => Effect.succeed(null),
+        ),
+      );
+      if (bytes === null) return undefined;
+      const json = yield* decodeReleaseManifestJson(new TextDecoder().decode(bytes)).pipe(
+        Effect.mapError(
+          (cause) =>
+            new PinnedRuntimeInstallError({ step: "reading the t3 release manifest", cause }),
+        ),
+      );
+      const manifest = grouped
+        ? decodeForkReleasePlatforms(json, `v${version}`)
+        : decodeForkReleaseManifest(json, `v${version}`);
+      if (manifest === undefined)
+        return yield* new PinnedRuntimeInstallError({ step: "validating the t3 release manifest" });
+      return manifest.assets.find(
+        (item) =>
+          item.fileName === fileName &&
+          item.platform === "linux" &&
+          item.kind === "server" &&
+          item.arch === input.arch,
+      );
+    });
+    let downloadUrl = cliReleaseAssetUrl(input.version, fileName, input.releaseBaseUrl);
+    let asset = yield* readManifest(input.version, false);
+    if (asset === undefined && isForkBuildVersion(input.version)) {
+      if (input.releaseBaseUrl === undefined) {
+        const found = yield* findServerRelease(
+          input.httpClient,
+          input.platform,
+          input.arch,
+        )(input.version, true).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PinnedRuntimeInstallError({ step: "finding the published release group", cause }),
+          ),
+        );
+        if (found !== null) {
+          asset = found;
+          downloadUrl = found.url;
+        }
+      } else {
+        const product = input.version.split("-")[0]!;
+        for (const candidate of new Set([product, input.version, `${product}-1`])) {
+          asset = yield* readManifest(candidate, true);
+          if (asset !== undefined) {
+            downloadUrl = cliReleaseAssetUrl(candidate, fileName, input.releaseBaseUrl);
+            break;
+          }
+        }
+      }
     }
-    const asset = manifest.assets.find(
-      (item) =>
-        item.fileName === fileName &&
-        item.platform === "linux" &&
-        item.kind === "server" &&
-        item.arch === input.arch,
-    );
     if (asset === undefined)
       return yield* new PinnedRuntimeInstallError({
         step: `finding ${fileName} in the t3 release manifest`,
       });
-    return { fileName, expected: asset.sha256, sizeBytes: asset.sizeBytes };
+    return { expected: asset.sha256, sizeBytes: asset.sizeBytes, downloadUrl };
   }
   const checksums = parseChecksums(
     new TextDecoder().decode(
@@ -316,7 +362,11 @@ const publishedArchive = Effect.fn("cloud.pinned_runtime.published_archive")(fun
       step: `finding ${fileName} in the t3 release checksums`,
     });
   }
-  return { fileName, expected, sizeBytes: undefined };
+  return {
+    expected,
+    sizeBytes: undefined,
+    downloadUrl: cliReleaseAssetUrl(input.version, fileName, input.releaseBaseUrl),
+  };
 });
 
 const isPinnedRuntimeInstallError = Schema.is(PinnedRuntimeInstallError);

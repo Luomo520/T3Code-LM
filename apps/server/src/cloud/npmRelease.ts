@@ -8,6 +8,12 @@ import {
   cliReleaseIndexPageUrl,
   decodeForkReleaseManifest,
   forkReleaseManifestUrl,
+  forkReleasePlatformsUrl,
+  decodeForkReleasePlatforms,
+  FORK_RELEASE_PLATFORMS_FILE,
+  isForkReleaseTag,
+  isForkBuildVersion,
+  type ForkReleaseAsset,
 } from "@t3tools/shared/cliRelease";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -27,6 +33,7 @@ const decodeIndex = Schema.decodeUnknownEffect(
   Schema.Array(
     Schema.Struct({
       tag_name: Schema.String,
+      assets: Schema.optionalKey(Schema.Array(Schema.Struct({ name: Schema.String }))),
       draft: Schema.optionalKey(Schema.Boolean),
       prerelease: Schema.optionalKey(Schema.Boolean),
     }),
@@ -43,10 +50,11 @@ export class NpmRelease extends Context.Service<
   }
 >()("t3/cloud/npmRelease") {}
 
-export const make = Effect.fn("NpmRelease.make")(function* () {
-  const http = yield* HttpClient.HttpClient;
-  const platform = yield* HostProcess.Platform;
-  const arch = yield* HostProcess.Architecture;
+export const findServerRelease = (
+  http: HttpClient.HttpClient,
+  platform: NodeJS.Platform,
+  arch: string,
+) => {
   const unavailable = () =>
     new ServerNpmReleaseError({ reason: "无法读取 GitHub 发布信息，请检查网络后重试。" });
   const read = Effect.fn("ForkRelease.read")(function* (url: string) {
@@ -69,10 +77,12 @@ export const make = Effect.fn("NpmRelease.make")(function* () {
     }
     return yield* decodeJson(new TextDecoder().decode(bytes)).pipe(Effect.mapError(unavailable));
   });
-  const lookupTag = Effect.fn("ForkRelease.lookupTag")(function* (tag: string) {
-    const json = yield* read(forkReleaseManifestUrl(tag));
+  const lookupTag = Effect.fn("ForkRelease.lookupTag")(function* (tag: string, grouped: boolean) {
+    const json = yield* read(grouped ? forkReleasePlatformsUrl(tag) : forkReleaseManifestUrl(tag));
     if (json === undefined) return null;
-    const manifest = decodeForkReleaseManifest(json, tag);
+    const manifest = grouped
+      ? decodeForkReleasePlatforms(json, tag)
+      : decodeForkReleaseManifest(json, tag);
     if (manifest === undefined)
       return yield* new ServerNpmReleaseError({ reason: "GitHub 发布清单无效，未发起更新。" });
     // A Windows-only release must not make an unchanged Linux server appear updatable.
@@ -82,37 +92,53 @@ export const make = Effect.fn("NpmRelease.make")(function* () {
         asset.arch === arch &&
         asset.kind === (platform === "win32" ? "installer" : "server"),
     );
-    return target === undefined ? null : { version: `${target.productVersion}-${target.build}` };
+    return target ?? null;
   });
-  const lookup = Effect.fn("ForkRelease.lookup")(
-    function* (spec: string) {
-      if (spec !== "latest")
-        return /^\d+\.\d+\.\d+-[1-9]\d*$/.test(spec) ? yield* lookupTag(`v${spec}`) : null;
-      const tags = new Set<string>();
+  return Effect.fn("ForkRelease.lookup")(
+    function* (spec: string, groupsOnly = false) {
+      if (spec !== "latest") {
+        if (!isForkBuildVersion(spec)) return null;
+        if (!groupsOnly) {
+          const direct = yield* lookupTag(`v${spec}`, false);
+          if (direct !== null) return direct;
+        }
+      }
+      const tags = new Map<string, boolean>();
+      const product = spec.split("-")[0];
       for (let page = 1; page <= 5; page += 1) {
         const json = yield* read(cliReleaseIndexPageUrl(page));
         if (json === undefined) break;
         const releases = yield* decodeIndex(json).pipe(Effect.mapError(unavailable));
         for (const release of releases) {
+          if (release.draft || release.prerelease || !isForkReleaseTag(release.tag_name)) continue;
+          const grouped =
+            release.assets?.some((asset) => asset.name === FORK_RELEASE_PLATFORMS_FILE) === true;
           if (
-            release.draft ||
-            release.prerelease ||
-            !/^v\d+\.\d+\.\d+-[1-9]\d*$/.test(release.tag_name)
+            !grouped &&
+            (groupsOnly || spec !== "latest" || !isForkBuildVersion(release.tag_name.slice(1)))
           )
             continue;
-          tags.add(release.tag_name);
+          if (spec !== "latest" && release.tag_name.slice(1).split("-")[0] !== product) continue;
+          tags.set(release.tag_name, grouped);
         }
         if (releases.length < 100) break;
       }
-      // GitHub orders releases by commit creation, not by the user's product/build sequence.
-      const orderedTags = [...tags].sort((left, right) =>
-        compareSemverVersions(right.slice(1), left.slice(1)),
-      );
-      for (const tag of orderedTags) {
-        const found = yield* lookupTag(tag);
-        if (found !== null) return found;
+      const ordered = [...tags].sort(([a], [b]) => compareSemverVersions(b.slice(1), a.slice(1)));
+      let best: ForkReleaseAsset | null = null;
+      for (const [tag, grouped] of ordered) {
+        const nextProduct = tag.slice(1).split("-")[0]!;
+        if (best !== null && best.productVersion !== nextProduct) break;
+        // 在历史构建页与合并页共存时，以安装包构建号确定推荐版本。
+        if (!grouped && best !== null && Number(tag.split("-")[1]) <= best.build) continue;
+        const found = yield* lookupTag(tag, grouped);
+        if (found === null) continue;
+        if (spec !== "latest") {
+          if (`${found.productVersion}-${found.build}` === spec) return found;
+          continue;
+        }
+        if (best === null || found.build > best.build) best = found;
       }
-      return null;
+      return best;
     },
     (effect) =>
       effect.pipe(
@@ -120,6 +146,20 @@ export const make = Effect.fn("NpmRelease.make")(function* () {
         Effect.mapError((cause) => (isReleaseError(cause) ? cause : unavailable())),
       ),
   );
+};
+
+export const make = Effect.fn("NpmRelease.make")(function* () {
+  const find = findServerRelease(
+    yield* HttpClient.HttpClient,
+    yield* HostProcess.Platform,
+    yield* HostProcess.Architecture,
+  );
+  const lookup = (spec: string) =>
+    find(spec).pipe(
+      Effect.map((asset) =>
+        asset === null ? null : { version: `${asset.productVersion}-${asset.build}` },
+      ),
+    );
   const cache = yield* Cache.make({ capacity: 32, timeToLive: Duration.minutes(1), lookup });
   return NpmRelease.of({
     get: Effect.fn("NpmRelease.get")(function* (input) {

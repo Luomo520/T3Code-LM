@@ -1,9 +1,12 @@
 import {
   decodeForkReleaseManifest,
+  decodeForkReleasePlatforms,
   FORK_RELEASE_MANIFEST_FILE,
+  FORK_RELEASE_PLATFORMS_FILE,
   FORK_RELEASE_REPOSITORY,
   forkReleaseManifestUrl,
-  isForkBuildVersion,
+  forkReleasePlatformsUrl,
+  isForkReleaseTag,
   type ForkReleaseAsset,
 } from "@t3tools/shared/forkRelease";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -28,7 +31,14 @@ export function selectAndroidUpdate(
       Number.isSafeInteger(asset.androidVersionCode) &&
       (asset.androidVersionCode as number) > installedBuild,
   );
-  return compatible.find((asset) => asset.arch === "arm64") ?? compatible[0] ?? null;
+  // 同一发布页可保留多个构建。按 Android 内部版本号选择，同版优先原生架构。
+  return (
+    compatible.sort(
+      (a, b) =>
+        b.androidVersionCode - a.androidVersionCode ||
+        Number(b.arch === "arm64") - Number(a.arch === "arm64"),
+    )[0] ?? null
+  );
 }
 
 /** Wi-Fi/Ethernet submissions cannot silently continue over mobile data later. */
@@ -65,8 +75,7 @@ export async function findAndroidAppUpdate(
         release.draft === true ||
         release.prerelease === true ||
         typeof release.tag_name !== "string" ||
-        !release.tag_name.startsWith("v") ||
-        !isForkBuildVersion(release.tag_name.slice(1)) ||
+        !isForkReleaseTag(release.tag_name) ||
         !Array.isArray(release.assets)
       ) {
         continue;
@@ -80,6 +89,18 @@ export async function findAndroidAppUpdate(
             : [],
         ),
       );
+      if (names.has(FORK_RELEASE_PLATFORMS_FILE)) {
+        if (
+          [...names].some(
+            (name) =>
+              name.endsWith("-android-arm64-apk.apk") ||
+              name.endsWith("-android-universal-apk.apk"),
+          )
+        ) {
+          candidates.set(release.tag_name, names);
+        }
+        continue;
+      }
       const apkPrefix = `T3Code-LM-${release.tag_name.slice(1)}-android-`;
       if (
         names.has(FORK_RELEASE_MANIFEST_FILE) &&
@@ -95,9 +116,14 @@ export async function findAndroidAppUpdate(
     compareSemverVersions(right.slice(1), left.slice(1)),
   );
   for (const [tag, names] of ordered) {
-    const manifestResponse = await fetch(forkReleaseManifestUrl(tag), { signal });
+    const grouped = names.has(FORK_RELEASE_PLATFORMS_FILE);
+    const manifestUrl = grouped ? forkReleasePlatformsUrl(tag) : forkReleaseManifestUrl(tag);
+    const manifestResponse = await fetch(manifestUrl, { signal });
     if (!manifestResponse.ok) throw new Error("无法读取更新清单，请稍后重试。");
-    const manifest = decodeForkReleaseManifest(await manifestResponse.json(), tag);
+    const raw: unknown = await manifestResponse.json();
+    const manifest = grouped
+      ? decodeForkReleasePlatforms(raw, tag)
+      : decodeForkReleaseManifest(raw, tag);
     if (!manifest) throw new Error("更新清单校验失败，未提供下载。");
     const asset = selectAndroidUpdate(
       manifest.assets.filter((row) => names.has(row.fileName)),

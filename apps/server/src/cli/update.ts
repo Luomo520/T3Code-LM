@@ -5,6 +5,7 @@ import {
   cliReleaseIndexPageUrl,
   cliReleaseChannelOf,
   newestCliReleaseVersion,
+  isForkBuildVersion,
   releaseAssetUrl,
   updateFeedFileName,
   type CliReleaseChannel,
@@ -21,6 +22,7 @@ import { Argument, Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { findServerRelease } from "../cloud/npmRelease.ts";
 import * as BootService from "../cloud/bootService.ts";
 import {
   ensurePinnedRuntimeInstalled,
@@ -63,6 +65,17 @@ const decodeReleaseIndex = Schema.decodeUnknownEffect(Schema.fromJsonString(Rele
 const RELEASE_INDEX_TIMEOUT = Duration.seconds(30);
 const RELEASE_INDEX_MAX_PAGES = 10;
 
+const githubApiClient = (http: HttpClient.HttpClient, token: string | undefined) =>
+  token
+    ? http.pipe(
+        HttpClient.mapRequest((request) =>
+          new URL(request.url).origin === "https://api.github.com"
+            ? HttpClientRequest.setHeader(request, "Authorization", `Bearer ${token}`)
+            : request,
+        ),
+      )
+    : http;
+
 export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(function* (
   channel: CliReleaseChannel,
 ) {
@@ -73,19 +86,18 @@ export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(funct
     const request = HttpClientRequest.get(cliReleaseIndexPageUrl(page)).pipe(
       HttpClientRequest.setHeader("Accept", "application/vnd.github+json"),
     );
-    const authenticatedRequest =
-      githubToken === undefined
-        ? request
-        : HttpClientRequest.setHeader(request, "Authorization", `Bearer ${githubToken}`);
-    const body = yield* httpClient.execute(authenticatedRequest).pipe(
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
-      Effect.flatMap((response) => response.text),
-      Effect.mapError(() => new CliUpdateError({ reason: "Could not list t3 releases." })),
-      Effect.timeoutOrElse({
-        duration: RELEASE_INDEX_TIMEOUT,
-        orElse: () => Effect.fail(new CliUpdateError({ reason: "Timed out listing t3 releases." })),
-      }),
-    );
+    const body = yield* githubApiClient(httpClient, githubToken)
+      .execute(request)
+      .pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((response) => response.text),
+        Effect.mapError(() => new CliUpdateError({ reason: "Could not list t3 releases." })),
+        Effect.timeoutOrElse({
+          duration: RELEASE_INDEX_TIMEOUT,
+          orElse: () =>
+            Effect.fail(new CliUpdateError({ reason: "Timed out listing t3 releases." })),
+        }),
+      );
     const releases = yield* decodeReleaseIndex(body).pipe(
       Effect.mapError(
         () => new CliUpdateError({ reason: "The t3 release index had an unexpected shape." }),
@@ -365,7 +377,22 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     input.requestedVersion !== undefined
       ? Effect.succeed(input.requestedVersion)
       : mirror === undefined
-        ? resolveNewestVersion(channel)
+        ? channel === "stable" && platform === "linux" && isForkBuildVersion(currentVersion)
+          ? findServerRelease(
+              httpClient,
+              platform,
+              arch,
+            )("latest").pipe(
+              Effect.mapError(() => new CliUpdateError({ reason: "无法读取 GitHub 发布信息。" })),
+              Effect.flatMap((asset) =>
+                asset === null
+                  ? Effect.fail(
+                      new CliUpdateError({ reason: "未找到适用于当前 Linux 架构的安装包。" }),
+                    )
+                  : Effect.succeed(`${asset.productVersion}-${asset.build}`),
+              ),
+            )
+          : resolveNewestVersion(channel)
         : resolveMirrorVersion(mirror, channel)
   ).pipe(Effect.ensuring(Effect.sync(progress.finish)));
   const targetChannel = cliReleaseChannelOf(targetVersion);
