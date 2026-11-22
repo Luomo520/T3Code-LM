@@ -7,6 +7,7 @@ const reactTests = [
   "src/features/home/AndroidHomeFab.layout.test.tsx",
   "src/features/layout/workspace/AndroidWorkspaceNavigation.recovery.test.tsx",
   "src/components/ui/DockGlass.test.tsx",
+  "src/components/ui/RowPressable.test.tsx",
   "src/features/threads/git/GitBranchesSheet.test.tsx",
   "src/features/threads/new-task-flow-provider.test.tsx",
   "src/features/layout/workspace/workspace-tabs-state.test.ts",

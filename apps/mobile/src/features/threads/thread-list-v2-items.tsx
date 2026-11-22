@@ -56,6 +56,7 @@ import { useNowAfter } from "../../lib/clock";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { copyThreadReference } from "../../lib/copyThreadReference";
+import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useEnvironmentScope } from "../../state/session";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { PendingMessageDelivery } from "./PendingMessageDelivery";
@@ -790,6 +791,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected === true;
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected, props.homeGroup);
+  const touchFeedbackColor =
+    Platform.OS === "android"
+      ? themeColorWithAlpha(theme["--color-primary"], selected ? 0.22 : 0.18)
+      : undefined;
 
   const status = resolveThreadListV2Status(thread);
   const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
@@ -1492,6 +1497,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         key={`${thread.environmentId}:${thread.id}`}
         interactionClassName={rowAppearance.interactionClassName}
         interactionOpacity={rowAppearance.interactionOpacity}
+        touchFeedbackColor={touchFeedbackColor}
         className={rowAppearance.className}
         accessibilityHint={swipeAccessibilityHint}
         accessibilityLabel={rowAccessibilityLabel}
@@ -1525,6 +1531,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         key={`${thread.environmentId}:${thread.id}`}
         interactionClassName={rowAppearance.interactionClassName}
         interactionOpacity={rowAppearance.interactionOpacity}
+        touchFeedbackColor={touchFeedbackColor}
         accessibilityHint={swipeAccessibilityHint}
         accessibilityLabel={rowAccessibilityLabel}
         accessibilityRole="button"

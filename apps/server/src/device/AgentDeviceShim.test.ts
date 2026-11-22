@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Layer from "effect/Layer";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { bindAgentDeviceLauncher } from "./AgentDeviceShim.ts";
@@ -45,5 +46,5 @@ it.effect("allows the bound emulator flags and rejects another Android serial", 
       expect(rejected.stderr).toContain("bound to the device and session");
       expect(rejected.stdout).toBe("");
     }
-  }).pipe(Effect.scoped, Effect.provide(ProcessRunner.layer), Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
