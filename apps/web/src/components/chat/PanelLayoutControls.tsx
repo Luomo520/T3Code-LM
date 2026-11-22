@@ -1,3 +1,4 @@
+import { localizeInterfaceText } from "~/i18n/runtime";
 import {
   PanelBottomIcon,
   PanelRightIcon,
@@ -147,7 +148,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
   maximized: boolean;
   onToggle: () => void;
 }) {
-  const label = maximized ? "Restore panel size" : "Maximize panel";
+  const label = localizeInterfaceText(maximized ? "Restore panel size" : "Maximize panel");
   return (
     <Tooltip>
       <TooltipTrigger

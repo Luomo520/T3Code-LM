@@ -1,4 +1,4 @@
-import { DockGlassCapture } from "../../components/ui/DockGlass";
+import { DockGlassCapture, DockGlassSamplingScope } from "../../components/ui/DockGlass";
 import {
   WorkspaceColumnsRendererContext,
   WorkspacePresentationHostContext,
@@ -1173,23 +1173,25 @@ function AdaptiveWorkspaceLayoutContent(
   );
 
   return (
-    <HomeListOptionsProvider
-      projectGroupingMode={projectGroupingMode}
-      savedFilters={props.savedThreadListFilters}
-    >
-      <AdaptiveWorkspaceContext value={contextValue}>
-        <WorkspacePaneStateContext value={paneState}>
-          <WindowHingeContext value={windowHinge}>
-            {usesPresentationHost ? (
-              <WorkspaceColumnsRendererContext value={renderColumns}>
-                {props.children}
-              </WorkspaceColumnsRendererContext>
-            ) : (
-              renderColumns(props.children)
-            )}
-          </WindowHingeContext>
-        </WorkspacePaneStateContext>
-      </AdaptiveWorkspaceContext>
-    </HomeListOptionsProvider>
+    <DockGlassSamplingScope>
+      <HomeListOptionsProvider
+        projectGroupingMode={projectGroupingMode}
+        savedFilters={props.savedThreadListFilters}
+      >
+        <AdaptiveWorkspaceContext value={contextValue}>
+          <WorkspacePaneStateContext value={paneState}>
+            <WindowHingeContext value={windowHinge}>
+              {usesPresentationHost ? (
+                <WorkspaceColumnsRendererContext value={renderColumns}>
+                  {props.children}
+                </WorkspaceColumnsRendererContext>
+              ) : (
+                renderColumns(props.children)
+              )}
+            </WindowHingeContext>
+          </WorkspacePaneStateContext>
+        </AdaptiveWorkspaceContext>
+      </HomeListOptionsProvider>
+    </DockGlassSamplingScope>
   );
 }

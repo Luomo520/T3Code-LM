@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import type { ManagedPolicyDocument } from "@t3tools/contracts";
+import { ServerSelfUpdateError, type ManagedPolicyDocument } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -387,6 +387,55 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       );
       expect(result).toEqual({ targetVersion: "1.2.0", method: "desktop-app" });
       expect(stages).toEqual(["downloading", "installing"]);
+      expect(order).toEqual([]);
+    }),
+  );
+
+  it.effect("passes the confirmed version to the desktop and permits retry after rejection", () =>
+    Effect.gen(function* () {
+      const checked: Array<string | undefined> = [];
+      const { selfUpdate, order } = yield* makeHarness({
+        mode: "desktop",
+        desktopAppUpdate: {
+          available: true,
+          run: (_reportProgress, _trackSwitch, confirmedVersion) =>
+            Effect.gen(function* () {
+              checked.push(confirmedVersion);
+              if (checked.length === 1) {
+                return yield* new ServerSelfUpdateError({ reason: "Incorrect prepared version" });
+              }
+              return {
+                targetVersion: confirmedVersion!,
+                method: "desktop-app" as const,
+                desktopUpdateToken: "matching-token",
+              };
+            }),
+          commit: () => Effect.never,
+        },
+      });
+      const input = { targetVersion: "1.1.0-1", requireConfirmedDesktopVersion: true };
+
+      expect((yield* selfUpdate.update(input).pipe(Effect.flip)).reason).toBe(
+        "Incorrect prepared version",
+      );
+      expect(yield* selfUpdate.update(input)).toEqual({
+        targetVersion: input.targetVersion,
+        method: "desktop-app",
+        desktopUpdateToken: "matching-token",
+      });
+      expect(checked).toEqual([input.targetVersion, input.targetVersion]);
+      expect(order).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses a strict desktop update on a background service", () =>
+    Effect.gen(function* () {
+      const { selfUpdate, order } = yield* makeHarness();
+      const failure = yield* selfUpdate
+        .update({ targetVersion: "1.1.0-1", requireConfirmedDesktopVersion: true })
+        .pipe(Effect.flip);
+
+      expect(failure.reason).toContain("未确认支持指定版本的桌面端更新");
       expect(order).toEqual([]);
     }),
   );

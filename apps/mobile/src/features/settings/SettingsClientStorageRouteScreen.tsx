@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import * as Dialog from "../../components/ui/Dialog";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
@@ -24,6 +25,7 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { formatBytes } from "../../lib/formatBytes";
 
 export function SettingsClientStorageRouteScreen() {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const summaryResult = useAtomValue(clientCacheSummaryAtom);
   const clearResult = useAtomValue(clearClientCacheAtom);
@@ -48,9 +50,8 @@ export function SettingsClientStorageRouteScreen() {
       environment.environmentId;
     Dialog.confirm({
       title: `清除 ${label} 的缓存？`,
-      message:
-        "这将移除此环境的离线任务、服务端元数据和分支缓存，已保存的连接和凭据将保留。",
-      confirmText: "Clear Cache",
+      message: "这将移除此环境的离线任务、服务端元数据和分支缓存，已保存的连接和凭据将保留。",
+      confirmText: gt("Clear Cache"),
       destructive: true,
       onConfirm: () =>
         clearCache({ type: "environment", environmentId: environment.environmentId }),
@@ -60,9 +61,8 @@ export function SettingsClientStorageRouteScreen() {
   const confirmClearAll = () => {
     Dialog.confirm({
       title: "清除所有客户端缓存？",
-      message:
-        "这会移除所有环境的离线数据，连接、凭据、账号数据和应用偏好设置将保留。",
-      confirmText: "Clear All Caches",
+      message: "这会移除所有环境的离线数据，连接、凭据、账号数据和应用偏好设置将保留。",
+      confirmText: gt("Clear All Caches"),
       destructive: true,
       onConfirm: () => clearCache({ type: "all" }),
     });
@@ -88,12 +88,16 @@ export function SettingsClientStorageRouteScreen() {
                 weight="regular"
               />
               <Text className="text-center text-base text-foreground">{"存储不可用"}</Text>
-              <Text className="text-center text-sm text-foreground-muted">{"请重启应用后重试。"}</Text>
+              <Text className="text-center text-sm text-foreground-muted">
+                {"请重启应用后重试。"}
+              </Text>
             </View>
           ) : !summary ? (
             <View className="items-center gap-3 px-6 py-8">
               <AppActivityIndicator />
-              <Text className="text-center text-sm text-foreground-muted">{"正在检查缓存数据…"}</Text>
+              <Text className="text-center text-sm text-foreground-muted">
+                {"正在检查缓存数据…"}
+              </Text>
             </View>
           ) : environmentSummaries.length > 0 ? (
             environmentSummaries.map((environment, index) => (
@@ -122,7 +126,9 @@ export function SettingsClientStorageRouteScreen() {
                 weight="regular"
               />
               <Text className="text-center text-base text-foreground">{"没有缓存数据"}</Text>
-              <Text className="text-center text-sm text-foreground-muted">{"使用环境后，离线缓存记录将显示在此处。"}</Text>
+              <Text className="text-center text-sm text-foreground-muted">
+                {"使用环境后，离线缓存记录将显示在此处。"}
+              </Text>
             </View>
           )}
         </SettingsSection>
@@ -131,16 +137,24 @@ export function SettingsClientStorageRouteScreen() {
           <SettingsSection title="操作">
             <SettingsActionRow
               icon="trash"
-              label={summary ? `Clear ${formatBytes(summary.payloadBytes)}` : "Clear caches"}
+              label={
+                summary
+                  ? gt("Clear {size}", { size: formatBytes(summary.payloadBytes) })
+                  : gt("Clear caches")
+              }
               tone="danger"
               disabled={isClearing || !summary || summary.recordCount === 0}
               loading={isClearing}
               onPress={confirmClearAll}
             />
           </SettingsSection>
-          <Text className="px-2 text-sm leading-normal text-foreground-muted">{"清除缓存不会移除环境连接、凭据、账号数据或外观偏好设置。"}</Text>
+          <Text className="px-2 text-sm leading-normal text-foreground-muted">
+            {"清除缓存不会移除环境连接、凭据、账号数据或外观偏好设置。"}
+          </Text>
           {AsyncResult.isFailure(summaryResult) || AsyncResult.isFailure(clearResult) ? (
-            <Text selectable className="px-2 text-sm text-danger-foreground">{"客户端存储暂不可用，请重启应用后重试。"}</Text>
+            <Text selectable className="px-2 text-sm text-danger-foreground">
+              {"客户端存储暂不可用，请重启应用后重试。"}
+            </Text>
           ) : null}
         </View>
       </ScrollView>
@@ -156,12 +170,15 @@ function CacheEnvironmentRow(props: {
   readonly first: boolean;
   readonly onClear: () => void;
 }) {
+  const gt = useGT();
   return (
     <View className={props.first ? undefined : "border-t border-border"}>
       <SettingsActionRow
         icon={ENVIRONMENT_MACHINE_SYMBOLS[props.machine]}
         label={props.environmentLabel}
-        description={`Clear ${formatBytes(props.environment.payloadBytes)} of cached data`}
+        description={gt("Clear {size} of cached data", {
+          size: formatBytes(props.environment.payloadBytes),
+        })}
         tone="danger"
         disabled={props.disabled}
         onPress={props.onClear}

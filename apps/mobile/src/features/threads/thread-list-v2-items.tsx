@@ -1,3 +1,5 @@
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { androidHomeTheme } from "../home/androidHomeTheme";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
@@ -54,7 +56,6 @@ import { useNowAfter } from "../../lib/clock";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { copyThreadReference } from "../../lib/copyThreadReference";
-import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useEnvironmentScope } from "../../state/session";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { PendingMessageDelivery } from "./PendingMessageDelivery";
@@ -375,6 +376,13 @@ const DRAFT_TASK_MENU_ACTIONS: MenuAction[] = [
   { id: "delete", title: "放弃", image: "trash", attributes: { destructive: true } },
 ];
 
+function useThreadListRowTheme() {
+  const { themeVariables, themeId, themeAppearance } = useAppearancePreferences();
+  const homeTheme =
+    Platform.OS === "android" ? androidHomeTheme(themeId, themeAppearance) : undefined;
+  return homeTheme ?? themeVariables;
+}
+
 export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props: {
   readonly pendingTask: PendingNewTask;
   readonly selected?: boolean;
@@ -385,6 +393,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly pane?: "screen" | "sidebar";
   readonly showPendingDivider: boolean;
   readonly showTrailingDivider?: boolean;
+  readonly homeGroup?: "only" | "first" | "middle" | "last";
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
   readonly fullSwipeWidth?: number;
@@ -406,10 +415,10 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   const titleLineHeight =
     Platform.OS === "android" ? androidTitleLineHeight : titleTypography.lineHeight * fontScale;
   const dormant = useSwipeRowDormant(props.activationKey);
-  const theme = useUniwindTheme();
+  const theme = useThreadListRowTheme();
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected ?? false;
-  const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
+  const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected, props.homeGroup);
   const isDraft = pendingTask.kind === "draft";
   const deleteLabel = isDraft ? "放弃" : "删除";
   const handleDelete = useCallback(
@@ -641,7 +650,8 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
               ) : (
                 <View>
                   <View className={THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME}>{rowContent}</View>
-                  {THREAD_LIST_V2_ROW_DIVIDERS && props.showTrailingDivider !== false ? (
+                  {(THREAD_LIST_V2_ROW_DIVIDERS || props.homeGroup) &&
+                  props.showTrailingDivider !== false ? (
                     <View className="ml-5 h-px bg-border-subtle" />
                   ) : null}
                 </View>
@@ -674,6 +684,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly environmentMachine?: EnvironmentMachineKind;
   readonly pane?: "screen" | "sidebar";
   readonly showTrailingDivider?: boolean;
+  readonly homeGroup?: "only" | "first" | "middle" | "last";
   readonly selected?: boolean;
   readonly fullSwipeWidth?: number;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
@@ -775,10 +786,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     if (pr) onOpenThreadPullRequests(thread, pr);
   }, [onOpenThreadPullRequests, pr, thread]);
 
-  const theme = useUniwindTheme();
+  const theme = useThreadListRowTheme();
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected === true;
-  const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
+  const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected, props.homeGroup);
 
   const status = resolveThreadListV2Status(thread);
   const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
@@ -1502,7 +1513,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         ) : (
           <View>
             <View className={THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME}>{fadedCardContent}</View>
-            {THREAD_LIST_V2_ROW_DIVIDERS && props.showTrailingDivider !== false ? (
+            {(THREAD_LIST_V2_ROW_DIVIDERS || props.homeGroup) &&
+            props.showTrailingDivider !== false ? (
               <View className="ml-5 h-px bg-border-subtle" />
             ) : null}
           </View>

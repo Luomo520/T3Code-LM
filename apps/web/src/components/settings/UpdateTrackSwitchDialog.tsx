@@ -17,7 +17,7 @@ import {
   localSwitchBlockReason,
   type ChannelSwitchRelease,
 } from "../sidebar/updateEverything.logic";
-import { isHostedByThisApp, useUpdateEverything } from "../sidebar/useUpdateEverything";
+import { useIsHostedByThisApp, useUpdateEverything } from "../sidebar/useUpdateEverything";
 import {
   localUpdaterStaysPut,
   nothingToMove,
@@ -84,6 +84,7 @@ function SwitchPlan({
   // After a partial switch this app may already be on the track; then only remotes move.
   const switchesLocal = crossesLocal && !updatesOff;
   const [checking, setChecking] = useState(false);
+  const isHostedByThisApp = useIsHostedByThisApp();
   const everything = useUpdateEverything(switchesLocal ? release.version : null, release);
   const label = channelSwitchLabel(release.channel);
   const idle = nothingToMove({

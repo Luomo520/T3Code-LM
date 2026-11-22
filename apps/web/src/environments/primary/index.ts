@@ -2,6 +2,7 @@ export {
   peekPairingTokenFromUrl,
   PrimaryEnvironmentPairingCredentialRejectedError,
   PrimaryEnvironmentRequestError,
+  primaryEnvironmentAuthFailureSummary,
   resolveInitialServerAuthGateState,
   stripPairingTokenFromUrl,
   submitServerAuthCredential,

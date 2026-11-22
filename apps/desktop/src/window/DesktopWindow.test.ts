@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
-import { DesktopSnapShotId } from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS, DesktopSnapShotId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -242,6 +242,7 @@ function layerTest(input: {
   readonly onWindowCreate?: Effect.Effect<void>;
   readonly openedExternalUrls?: unknown[];
   readonly onCopyText?: (text: string) => Effect.Effect<void>;
+  readonly clientLanguage?: string;
   readonly onPopupTemplate?: (input: ElectronMenu.ElectronMenuTemplateInput) => Effect.Effect<void>;
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
@@ -336,7 +337,11 @@ function layerTest(input: {
           ? layerDesktopEnvironment
           : layerDesktopEnvironmentFor(input.platform),
         layerDesktopAppSettings,
-        layerDesktopClientSettings,
+        input.clientLanguage === undefined
+          ? layerDesktopClientSettings
+          : DesktopClientSettings.layerTest(
+              Option.some({ ...DEFAULT_CLIENT_SETTINGS, language: input.clientLanguage }),
+            ),
         layerDesktopServerExposure,
         DesktopState.layer,
         layerElectronApp,
@@ -1499,54 +1504,63 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("offers to copy the bare address when right-clicking a mailto link", () =>
-    Effect.gen(function* () {
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const popup = yield* Deferred.make<ElectronMenu.ElectronMenuTemplateInput>();
-      const copied = yield* Deferred.make<string>();
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-        onPopupTemplate: (input) => Deferred.succeed(popup, input),
-        onCopyText: (text) => Deferred.succeed(copied, text),
-      });
+  it.effect.each([
+    { language: "zh", copyEmailLabel: "复制电子邮件地址", selectAllLabel: "全选" },
+    { language: "en", copyEmailLabel: "Copy Email Address", selectAllLabel: "Select All" },
+  ])(
+    "uses $language menu labels and copies the bare mailto address",
+    ({ language, copyEmailLabel, selectAllLabel }) =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const popup = yield* Deferred.make<ElectronMenu.ElectronMenuTemplateInput>();
+        const copied = yield* Deferred.make<string>();
+        const layer = layerTest({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          onPopupTemplate: (input) => Deferred.succeed(popup, input),
+          platform: "win32",
+          clientLanguage: language,
+          onCopyText: (text) => Deferred.succeed(copied, text),
+        });
 
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
-        const contextMenu = fakeWindow.webContentsListeners.get("context-menu");
-        if (!contextMenu) {
-          return yield* Effect.die("context-menu listener was not registered");
-        }
-        contextMenu(
-          { preventDefault: vi.fn() },
-          {
-            linkURL: "mailto:restaurant%40example.com?subject=Hi",
-            misspelledWord: "",
-            dictionarySuggestions: [],
-            mediaType: "none",
-            editFlags: { canCut: false, canCopy: false, canPaste: false, canSelectAll: true },
-          },
-        );
+          const contextMenu = fakeWindow.webContentsListeners.get("context-menu");
+          if (!contextMenu) {
+            return yield* Effect.die("context-menu listener was not registered");
+          }
+          contextMenu(
+            { preventDefault: vi.fn() },
+            {
+              linkURL: "mailto:restaurant%40example.com?subject=Hi",
+              misspelledWord: "Coppy",
+              dictionarySuggestions: ["Copy"],
+              mediaType: "none",
+              editFlags: { canCut: false, canCopy: false, canPaste: false, canSelectAll: true },
+            },
+          );
 
-        const { template } = yield* Deferred.await(popup);
-        const copyEmail = template.find((item) => item.label === "Copy Email Address");
-        assert.isDefined(
-          copyEmail,
-          `no "Copy Email Address" item in ${JSON.stringify(template.map((item) => item.label ?? item.role ?? item.type))}`,
-        );
-        copyEmail?.click?.(
-          {} as Electron.MenuItem,
-          fakeWindow.window,
-          {} as Electron.KeyboardEvent,
-        );
-        assert.equal(yield* Deferred.await(copied), "restaurant@example.com");
-      }).pipe(Effect.provide(layer));
-    }),
+          const { template } = yield* Deferred.await(popup);
+          assert.equal(template[0]?.label, "Copy");
+          assert.isUndefined(template[0]?.role);
+          const selectAll = template.find((item) => item.role === "selectAll");
+          assert.equal(selectAll?.label, selectAllLabel);
+          assert.isTrue(selectAll?.enabled);
+          const copyEmail = template.find((item) => item.label === copyEmailLabel);
+          assert.isDefined(copyEmail);
+          copyEmail?.click?.(
+            {} as Electron.MenuItem,
+            fakeWindow.window,
+            {} as Electron.KeyboardEvent,
+          );
+          assert.equal(yield* Deferred.await(copied), "restaurant@example.com");
+        }).pipe(Effect.provide(layer));
+      }),
   );
 
   it.effect(

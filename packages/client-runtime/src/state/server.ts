@@ -106,7 +106,11 @@ export type ServerUpdateState =
 
 export interface ServerUpdateTarget {
   readonly environmentId: EnvironmentId;
-  readonly input: EnvironmentRpcInput<typeof WS_METHODS.serverUpdateServer>;
+  readonly input: Omit<
+    EnvironmentRpcInput<typeof WS_METHODS.serverUpdateServer>,
+    "requireConfirmedDesktopVersion"
+  >;
+  readonly requireConfirmedDesktopVersion?: boolean;
 }
 
 const IDLE_SERVER_UPDATE_STATE: ServerUpdateState = { status: "idle" };
@@ -977,6 +981,9 @@ export function createServerEnvironmentAtoms<R, E>(
     concurrency: configConcurrency,
     execute: Effect.fn("ServerUpdate.updateServer")(function (target, atomRegistry) {
       const stateAtom = serverUpdateStateAtom(target.environmentId);
+      const confirmedVersion = target.requireConfirmedDesktopVersion
+        ? target.input.targetVersion
+        : undefined;
       let targetVersion = target.input.targetVersion;
       let fromVersion =
         atomRegistry.get(configValueAtom(target.environmentId))?.environment.serverVersion ??
@@ -1005,6 +1012,27 @@ export function createServerEnvironmentAtoms<R, E>(
               acceptedAt = accepting?.session === session ? accepting.at : undefined;
             }),
           ),
+          // 能力来自实际发送请求的连接，重连前缓存的配置可能已过时。
+          Effect.tap(({ initialConfig }) =>
+            confirmedVersion === undefined
+              ? Effect.void
+              : initialConfig.pipe(
+                  Effect.flatMap(({ environment: { capabilities } }) =>
+                    capabilities.confirmedDesktopUpdateVersion === true &&
+                    capabilities.serverSelfUpdate === "desktop-managed" &&
+                    capabilities.serverSelfUpdateProgress === true
+                      ? Effect.void
+                      : Effect.fail(
+                          new ServerUpdateTerminalError({
+                            targetVersion: confirmedVersion,
+                            status: "failed",
+                            reason:
+                              "当前连接未确认支持指定版本的桌面端更新。请刷新设备状态后重试。",
+                          }),
+                        ),
+                  ),
+                ),
+          ),
         );
         yield* Deferred.await(desktopCommitStarting).pipe(
           Effect.andThen(
@@ -1025,6 +1053,10 @@ export function createServerEnvironmentAtoms<R, E>(
           target,
           Effect.gen(function* () {
             const currentConfig = atomRegistry.get(configValueAtom(target.environmentId));
+            const input =
+              confirmedVersion === undefined
+                ? target.input
+                : { ...target.input, requireConfirmedDesktopVersion: true };
             fromVersion = currentConfig?.environment.serverVersion ?? targetVersion;
             atomRegistry.set(stateAtom, {
               status: "running",
@@ -1034,7 +1066,10 @@ export function createServerEnvironmentAtoms<R, E>(
             });
             // Only launcher updates carry an updateId. Read before the request so a ready from
             // after it can never pose as the accepting process.
-            if (currentConfig?.environment.capabilities.serverSelfUpdate === "boot-service") {
+            if (
+              confirmedVersion === undefined &&
+              currentConfig?.environment.capabilities.serverSelfUpdate === "boot-service"
+            ) {
               accepting = yield* environmentRegistry
                 .followStream(
                   target.environmentId,
@@ -1056,6 +1091,7 @@ export function createServerEnvironmentAtoms<R, E>(
             }
 
             const supportsProgress =
+              confirmedVersion !== undefined ||
               currentConfig?.environment.capabilities.serverSelfUpdateProgress === true;
             const updateResult: ServerSelfUpdateResult = supportsProgress
               ? yield* Effect.gen(function* () {
@@ -1072,7 +1108,7 @@ export function createServerEnvironmentAtoms<R, E>(
                             runStreamInSession(
                               session,
                               WS_METHODS.serverUpdateServerWithProgress,
-                              target.input,
+                              input,
                             ),
                           ),
                         ),
@@ -1102,6 +1138,7 @@ export function createServerEnvironmentAtoms<R, E>(
                   const selfUpdateMethod = currentConfig?.environment.capabilities.serverSelfUpdate;
                   // Desktop preparation needs its terminal commit token.
                   const accepted =
+                    confirmedVersion === undefined &&
                     receivedProgress &&
                     (selfUpdateMethod === "boot-service" || selfUpdateMethod === "respawn")
                       ? { targetVersion, method: selfUpdateMethod }
@@ -1140,6 +1177,18 @@ export function createServerEnvironmentAtoms<R, E>(
                   return yield* Effect.failCause(exit.cause);
                 });
 
+            if (
+              confirmedVersion !== undefined &&
+              (updateResult.method !== "desktop-app" ||
+                updateResult.desktopUpdateToken === undefined ||
+                updateResult.targetVersion !== confirmedVersion)
+            ) {
+              return yield* new ServerUpdateTerminalError({
+                targetVersion: confirmedVersion,
+                status: "failed",
+                reason: `远端桌面端未准备确认的版本 ${confirmedVersion}。请刷新设备状态后重新选择。`,
+              });
+            }
             if (
               updateResult.method === "desktop-app" &&
               updateResult.desktopUpdateToken !== undefined

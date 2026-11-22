@@ -1012,6 +1012,8 @@ export const ServerSelfUpdateInput = Schema.Struct({
   targetVersion: TrimmedNonEmptyString,
   /** Desktop-managed hosts move their app to this update track first. Sent only for a track switch. */
   channel: Schema.optionalKey(DesktopUpdateChannelSchema),
+  /** 仅用于声明支持的远端桌面，准备完成后按确认版本校验。 */
+  requireConfirmedDesktopVersion: Schema.optionalKey(Schema.Boolean),
   /** The target release's highest migration; the host refuses to leave Nightly without it. */
   targetDatabaseMigration: Schema.optionalKey(Schema.Int),
   stageOnly: Schema.optionalKey(Schema.Boolean),

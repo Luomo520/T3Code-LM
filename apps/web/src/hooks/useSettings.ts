@@ -197,6 +197,10 @@ function refreshClientSettingsFromOtherTab(): void {
 const defaultClientSettingsPersistence = (settings: ClientSettings): Promise<void> =>
   ensureLocalApi().persistence.setClientSettings(settings);
 
+export function whenClientSettingsWritesSettled(): Promise<void> {
+  return clientSettingsPersistenceQueue;
+}
+
 function enqueueClientSettingsPersistence<A>(work: () => Promise<A>): Promise<A> {
   const result = clientSettingsPersistenceQueue.then(work);
   clientSettingsPersistenceQueue = result.then(

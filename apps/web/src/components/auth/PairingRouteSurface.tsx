@@ -7,6 +7,7 @@ import { connectPairing } from "../../connection/onboarding";
 import {
   peekPairingTokenFromUrl,
   stripPairingTokenFromUrl,
+  primaryEnvironmentAuthFailureSummary,
   submitServerAuthCredential,
 } from "../../environments/primary";
 import { readHostedPairingRequest } from "../../hostedPairing";
@@ -26,6 +27,8 @@ export function PairingPendingSurface() {
   );
 }
 
+import { localizeInterfaceText } from "../../i18n/runtime";
+
 export function PairingRouteSurface({
   auth,
   initialErrorMessage,
@@ -37,7 +40,9 @@ export function PairingRouteSurface({
 }) {
   const [autoPairToken] = useState(peekPairingTokenFromUrl);
   const [credential, setCredential] = useState(autoPairToken ?? "");
-  const [errorMessage, setErrorMessage] = useState(initialErrorMessage ?? "");
+  const [errorMessage, setErrorMessage] = useState(() =>
+    initialErrorMessage ? localizeInterfaceText(initialErrorMessage) : "",
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const autoSubmitAttemptedRef = useRef(false);
 
@@ -47,7 +52,10 @@ export function PairingRouteSurface({
 
     const submitError = await submitServerAuthCredential(nextCredential).then(
       () => null,
-      (error) => errorMessageFromUnknown(error),
+      (error) => {
+        const summary = primaryEnvironmentAuthFailureSummary(error);
+        return summary === null ? errorMessageFromUnknown(error) : localizeInterfaceText(summary);
+      },
     );
 
     setIsSubmitting(false);

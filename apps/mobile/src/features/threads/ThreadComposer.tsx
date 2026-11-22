@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import { DockGlassBackdrop } from "../../components/ui/DockGlass";
 import { useSidebarWorkspaceTabs } from "../layout/workspace/useSystemWorkspaceTabBar";
 import { Button } from "../../components/ui/Button";
@@ -593,9 +594,11 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   });
   const isSubmissionLocked =
     props.interactionLocked === true || queuedEdit?.saving === true || voiceInput.blocksSubmission;
+  const gt = useGT();
   const voicePresentation = resolveVoiceComposerPresentation(
     voiceInput.state,
     voiceInput.elapsedSeconds,
+    gt,
   );
   const isVoiceInputPresented = voicePresentation.statusKind === "active";
   const isExpanded = isFocused || settingsSheetPresentation.keepsComposerExpanded;

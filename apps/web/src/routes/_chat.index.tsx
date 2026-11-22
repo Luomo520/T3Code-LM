@@ -97,25 +97,30 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
     <SidebarInset
       {...contentArea}
       role="main"
+      data-miuix-home=""
       className="h-dvh min-h-0 overflow-hidden overscroll-y-none"
     >
-      <WorkspacePageHeader electron={isElectron}>
+      <WorkspacePageHeader data-miuix-home-header="" electron={isElectron}>
         <div className="min-w-3 flex-1" />
         <HomeHeaderUsageStats />
       </WorkspacePageHeader>
       <Empty className="flex-1">
-        <EmptyHeader className="max-w-md">
-          <EmptyTitle>Couldn’t start a new thread</EmptyTitle>
-          <EmptyDescription>
-            The project is still available. Try opening the draft again.
-          </EmptyDescription>
-          <div className="mt-5 flex justify-center">
-            <Button size="sm" onClick={onRetry}>
-              <RefreshIcon size="md" />
-              Try again
-            </Button>
-          </div>
-        </EmptyHeader>
+        <div data-miuix-home-card="" className="w-full max-w-md px-6 py-8">
+          <EmptyHeader className="max-w-none">
+            <EmptyTitle data-miuix-home-title="" role="heading" aria-level={1}>
+              Couldn’t start a new thread
+            </EmptyTitle>
+            <EmptyDescription>
+              The project is still available. Try opening the draft again.
+            </EmptyDescription>
+            <div className="mt-5 flex justify-center">
+              <Button size="sm" onClick={onRetry}>
+                <RefreshIcon size="md" />
+                Try again
+              </Button>
+            </div>
+          </EmptyHeader>
+        </div>
       </Empty>
     </SidebarInset>
   );

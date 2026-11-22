@@ -26,9 +26,13 @@ export function getThreadListV2NewBranchMenuTitle(_branch: string) {
 }
 
 export function getThreadListV2RowAppearance(
-  theme: MobileThemeVariables,
+  theme: Pick<
+    MobileThemeVariables,
+    "--color-thread-selected" | "--color-grouped-card" | "--color-drawer" | "--color-screen"
+  >,
   sidebarPane: boolean,
   selected: boolean,
+  _homeGroup?: "only" | "first" | "middle" | "last",
 ) {
   const selectedBackgroundColor = theme["--color-thread-selected"];
   const style: ViewStyle | undefined = sidebarPane

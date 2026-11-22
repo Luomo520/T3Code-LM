@@ -9,6 +9,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
@@ -139,6 +140,7 @@ it.effect.each([
       yield* listen.pipe(
         Effect.provide(
           Layer.mergeAll(
+            DesktopClientSettings.layerTest(),
             FileSystem.layerNoop({
               readFileString: () => Effect.succeed("0.1.2"),
               writeFileString: () => Deferred.succeed(remembered, undefined).pipe(Effect.asVoid),
@@ -182,12 +184,16 @@ it.effect.each([
         _tag: "Failing",
         reason: "Server failed before readiness",
         managedPolicy: false,
-        output: "Failure details",
+        output: "  Failure details <ERROR_07>\nC:\\working folder",
       });
       yield* Deferred.await(checked);
       expect(loaded.length).toBe(shouldRecover ? 1 : 0);
       if (shouldRecover) {
-        expect(decodeURIComponent(loaded[0]!)).toContain("Failure details");
+        const html = decodeURIComponent(loaded[0]!);
+        expect(html).toContain('lang="zh-CN"');
+        expect(html).toContain("T3 Code 启动失败");
+        expect(html).toContain(">复制详情</a>");
+        expect(html).toContain("  Failure details &lt;ERROR_07&gt;\nC:\\working folder");
         if (closeMain) yield* Ref.set(mainRef, Option.none());
         yield* SubscriptionRef.set(state.primaryBackendStartup, { _tag: "Ready" });
         yield* Deferred.await(remembered);

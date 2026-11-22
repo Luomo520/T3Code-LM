@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import { useAtomValue } from "@effect/atom-react";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -15,13 +16,6 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { environmentThreadShells } from "../../state/threads";
-
-const KIND_LABELS = {
-  subagent: "Subagent",
-  command: "Command",
-  monitor: "Monitor",
-  background_task: "Background task",
-} as const;
 
 type BackgroundWorkTarget = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
 
@@ -49,7 +43,9 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}
     >
       {presentation === null ? (
-        <Text className="pt-6 text-center text-sm text-foreground-muted">{"没有后台运行的工作。"}</Text>
+        <Text className="pt-6 text-center text-sm text-foreground-muted">
+          {"没有后台运行的工作。"}
+        </Text>
       ) : (
         presentation.items.map((item) => (
           <BackgroundWorkRow key={item.taskId} item={item} onOpen={openThread} />
@@ -69,6 +65,14 @@ function BackgroundWorkRow(props: {
   readonly item: PendingBackgroundWorkItem;
   readonly onOpen: (threadId: ThreadId) => void;
 }) {
+  const gt = useGT();
+  const KIND_LABELS = {
+    subagent: gt("Subagent"),
+    command: gt("Command"),
+    monitor: gt("Monitor"),
+    background_task: gt("Background task"),
+  } as const;
+
   const { item } = props;
   const childThreadId = item.childThreadId;
   const row = (
@@ -95,7 +99,7 @@ function BackgroundWorkRow(props: {
   ) : (
     <Pressable
       accessibilityRole="link"
-      accessibilityLabel={`Open subagent ${item.label}`}
+      accessibilityLabel={gt("Open subagent {agent}", { agent: item.label })}
       onPress={() => props.onOpen(childThreadId)}
       className="active:opacity-70"
     >

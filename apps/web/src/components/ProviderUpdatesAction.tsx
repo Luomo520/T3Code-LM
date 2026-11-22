@@ -1,4 +1,9 @@
-import { AuthProvidersManageScope, PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
+import {
+  AuthProvidersManageScope,
+  PROVIDER_DISPLAY_NAMES,
+  type EnvironmentId,
+  type ProviderInstanceId,
+} from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -28,7 +33,7 @@ export function useCheckProviderUpdates() {
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
-  const inFlight = useRef<Promise<void> | null>(null);
+  const inFlight = useRef<Promise<ReadonlyArray<string>> | null>(null);
 
   const check = async (quiet: boolean) => {
     const failures = await Promise.all(
@@ -42,11 +47,11 @@ export function useCheckProviderUpdates() {
           const result = await refreshProviders({ environmentId, input: { refreshModels: true } });
           if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return [];
           const error = squashAtomCommandFailure(result);
-          return [`${label}: ${error instanceof Error ? error.message : "Refresh failed."}`];
+          return [`${label}: ${error instanceof Error ? error.message : "检查失败。"}`];
         }),
     );
     const lines = failures.flat();
-    if (quiet || lines.length === 0) return;
+    if (quiet || lines.length === 0) return lines;
     toastManager.add(
       stackedThreadToast({
         type: "error",
@@ -54,6 +59,7 @@ export function useCheckProviderUpdates() {
         description: <span className="whitespace-pre-line">{lines.join("\n")}</span>,
       }),
     );
+    return lines;
   };
 
   // A repeat click must not start a second model rediscovery while one is running.
@@ -65,6 +71,13 @@ export function useCheckProviderUpdates() {
     inFlight.current = running;
     return running;
   };
+}
+
+export function providerUpdateId(
+  environmentId: EnvironmentId,
+  candidate: { readonly instanceId: ProviderInstanceId },
+) {
+  return JSON.stringify(["provider", environmentId, candidate.instanceId]);
 }
 
 export function useProviderUpdates() {
@@ -90,9 +103,21 @@ export function useProviderUpdates() {
       : [];
   });
 
-  const updateAll = async ({ quiet = false }: { readonly quiet?: boolean } = {}) => {
+  const selectMachines = (selected?: ReadonlySet<string>) =>
+    selected === undefined
+      ? machines
+      : machines.flatMap((machine) => {
+          const candidates = machine.candidates.filter((candidate) =>
+            selected.has(providerUpdateId(machine.environmentId, candidate)),
+          );
+          return candidates.length > 0 ? [{ ...machine, candidates }] : [];
+        });
+  const updateAll = async ({
+    quiet = false,
+    selected,
+  }: { readonly quiet?: boolean; readonly selected?: ReadonlySet<string> } = {}) => {
     const runs = await Promise.all(
-      machines.flatMap(({ environmentId, label, candidates }) =>
+      selectMachines(selected).flatMap(({ environmentId, label, candidates }) =>
         candidates.map(async (candidate): Promise<ProviderUpdateRun> => ({
           environmentId,
           machineLabel: label,
@@ -117,7 +142,7 @@ export function useProviderUpdates() {
     return runs;
   };
 
-  return { machines, updateAll };
+  return { machines, selectMachines, updateAll };
 }
 
 export function ProviderUpdatesAction() {

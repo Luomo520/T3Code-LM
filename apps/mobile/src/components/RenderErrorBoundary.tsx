@@ -2,6 +2,7 @@ import { Observe } from "expo-observe";
 import { Component, type ReactNode } from "react";
 import { ScrollView, View } from "react-native";
 
+import { useGT } from "../i18n/I18nProvider";
 import { AppText as Text } from "./ui/AppText";
 import { Button } from "./ui/Button";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
@@ -90,7 +91,8 @@ export function RenderFailureView(
     readonly exit?: { readonly label: string; readonly onPress: () => void };
   },
 ) {
-  const title = props.title ?? "This screen couldn't be displayed";
+  const gt = useGT();
+  const title = props.title ?? gt("This screen couldn't be displayed");
   return (
     <ScrollView
       className="flex-1 bg-screen"
@@ -102,14 +104,14 @@ export function RenderFailureView(
       <Text accessibilityRole="header" className="text-center text-xl font-t3-bold">
         {title}
       </Text>
-      <Text className="text-center text-sm text-foreground-muted">{"请重试。如果问题持续出现，可复制详情以报告问题。"}</Text>
+      <Text className="text-center text-sm text-foreground-muted">{gt("Try again. If the problem continues, copy the details to report it.")}</Text>
       <Text selectable className="text-center font-mono text-xs text-danger-foreground">
         {props.details.split("\n", 1)[0]?.slice(0, 300)}
       </Text>
       <View className="w-full max-w-xs gap-2">
-        <Button label="重试" onPress={props.retry} tone="primary" fullWidth />
+        <Button label={gt("Retry")} onPress={props.retry} tone="primary" fullWidth />
         <Button
-          label="复制详情"
+          label={gt("Copy details")}
           onPress={() => copyTextWithHaptic(props.details, { target: "error details" })}
           fullWidth
         />

@@ -1,5 +1,6 @@
 import {
   EnvironmentAuthInvalidError,
+  EnvironmentConnectApprovalPendingError,
   type AuthBrowserSessionResult,
   type AuthCreatePairingCredentialInput,
   type AuthSessionState,
@@ -8,6 +9,7 @@ import {
 import { createBrowserHistory } from "@tanstack/react-router";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { installEnvironmentHttpTest } from "../test/environmentHttpTest";
@@ -394,5 +396,80 @@ describe("resolveInitialServerAuthGateState", () => {
       auth: LOOPBACK_AUTH,
     });
     expect(testApi.calls.browserSession).toEqual([{ credential: "rejected-token" }]);
+  });
+});
+
+describe("primary environment auth failure summaries", () => {
+  it.each([
+    [200, "Check that the address points to a T3 Code server."],
+    [400, "Check the server address or request a new pairing link."],
+    [401, "Sign in again or open a new pairing link."],
+    [403, "Ask the server administrator for access."],
+    [404, "Check that the address points to a T3 Code server."],
+    [429, "Wait a moment before trying again."],
+    [500, "Check that T3 Code is running on the server, then try again."],
+    [503, "Check that T3 Code is running on the server, then try again."],
+  ])("gives an action and preserves HTTP %s in the technical error", async (status, action) => {
+    const { PrimaryEnvironmentRequestError, primaryEnvironmentAuthFailureSummary } =
+      await import("./environments/primary/auth");
+    const request = HttpClientRequest.get("http://localhost/api/auth/session");
+    const response = HttpClientResponse.fromWeb(request, new Response("", { status }));
+    const cause = new HttpClientError.HttpClientError({
+      reason: new HttpClientError.StatusCodeError({ request, response }),
+    });
+    const error = PrimaryEnvironmentRequestError.fromCause({
+      operation: "fetch-session-state",
+      cause,
+    });
+    expect(primaryEnvironmentAuthFailureSummary(error)).toContain(`(HTTP ${status}). ${action}`);
+    expect(error.message).toBe(
+      `Primary environment request failed during fetch-session-state (HTTP ${status}).`,
+    );
+    expect(error.cause).toBe(cause);
+    expect(error.stack).toContain(error.message);
+  });
+
+  it("distinguishes pending device approval from denied access", async () => {
+    const { PrimaryEnvironmentRequestError, primaryEnvironmentAuthFailureSummary } =
+      await import("./environments/primary/auth");
+    const cause = new EnvironmentConnectApprovalPendingError({
+      code: "connect_approval_pending",
+      traceId: "trace-approval",
+    });
+    const error = PrimaryEnvironmentRequestError.fromCause({
+      operation: "fetch-session-state",
+      cause,
+    });
+    expect(primaryEnvironmentAuthFailureSummary(error)).toBe(
+      "This device is waiting for approval (HTTP 403). Approve it from a connected device, then try again.",
+    );
+    expect(error.cause).toBe(cause);
+  });
+
+  it("gives a retry instruction when the request times out", async () => {
+    const { PrimaryEnvironmentRequestError, primaryEnvironmentAuthFailureSummary } =
+      await import("./environments/primary/auth");
+    const error = PrimaryEnvironmentRequestError.fromCause({
+      operation: "fetch-session-state",
+      cause: new DOMException("The operation was aborted.", "AbortError"),
+    });
+    expect(primaryEnvironmentAuthFailureSummary(error)).toBe(
+      "The connection timed out. Check that T3 Code is running on the server, then try again.",
+    );
+  });
+
+  it("keeps the fallback status out of the user message when no server answered", async () => {
+    const { PrimaryEnvironmentRequestError, primaryEnvironmentAuthFailureSummary } =
+      await import("./environments/primary/auth");
+    const cause = new TypeError("Failed to fetch");
+    const error = PrimaryEnvironmentRequestError.fromCause({
+      operation: "fetch-session-state",
+      cause,
+    });
+    expect(error.status).toBe(500);
+    expect(primaryEnvironmentAuthFailureSummary(error)).toBe(
+      "Could not reach the server. Check your network connection and the server address, then try again.",
+    );
+    expect(error.cause).toBe(cause);
   });
 });

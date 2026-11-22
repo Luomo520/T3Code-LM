@@ -74,6 +74,61 @@ NodeTest.test("keeps the old locale API and reloads only when explicitly changed
   NodeAssert.equal(reloads, 1);
 });
 
+NodeTest.test("follows the saved UI language and delegates legacy changes", () => {
+  const storage = new Map([[LOCALE_STORAGE_KEY, "system"]]);
+  const requests: string[] = [];
+  let reloads = 0;
+  const env = {
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    },
+    location: { reload: () => reloads++ },
+    navigator: { languages: ["en-US"] },
+  };
+  const original = installT3zhRuntime(dict, env);
+  original.api.followClientSettings((locale) => requests.push(locale));
+  original.api.setLocale("zh-CN");
+  NodeAssert.deepEqual(requests, ["zh-CN"]);
+  NodeAssert.equal(reloads, 0);
+  original.api.syncClientLocale("zh-CN");
+  original.api.syncClientLocale("zh-CN");
+  NodeAssert.equal(reloads, 1);
+  NodeAssert.equal(storage.get(LOCALE_STORAGE_KEY), "system");
+  const restored = installT3zhRuntime(dict, env);
+  NodeAssert.equal(restored.t("Settings"), "设置");
+  restored.api.syncClientLocale("en");
+  NodeAssert.equal(installT3zhRuntime(dict, env).t("Settings"), "Settings");
+});
+
+NodeTest.test("translates diagnosis sentences and preserves the host label and command", () => {
+  const t = createTranslator(dict);
+  const host = "Settings / 我的机器";
+  NodeAssert.equal(t(`T3 Code on ${host} did not answer`), `${host} 上的 T3 Code 未响应`);
+  NodeAssert.equal(
+    t(`On ${host}, check Settings > Sharing & access or run \`t3 connect status\`.`),
+    `在 ${host} 上查看「设置 → 共享与访问」，或运行 \`t3 connect status\`。`,
+  );
+  NodeAssert.equal(
+    t(`Or run \`t3 auth connect-device approve <code>\` on ${host}.`),
+    `也可以在 ${host} 上运行 \`t3 auth connect-device approve <code>\`。`,
+  );
+});
+
+NodeTest.test("translates the startup summary without rewriting request diagnostics", () => {
+  const t = createTranslator(dict);
+  NodeAssert.equal(
+    t("The server could not complete the connection (HTTP 500). Check that T3 Code is running on the server, then try again."),
+    "服务端未能完成连接（HTTP 500）。请确认服务端正在运行 T3 Code，然后重试。",
+  );
+  NodeAssert.equal(
+    t("The server requires a new sign-in (HTTP 401). Sign in again or open a new pairing link."),
+    "服务端要求重新登录（HTTP 401）。请重新登录，或打开新的配对链接。",
+  );
+  const details = "Primary environment request failed during fetch-session-state (HTTP 500).";
+  NodeAssert.equal(t(details), details);
+});
+
 NodeTest.test("preserves product, model, protocol and short statistics names", () => {
   const t = createTranslator(dict);
   for (const value of [

@@ -5,6 +5,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const native = vi.hoisted(() => ({
   listeners: new Set<(value: boolean) => void>(),
   appearance: "light" as "light" | "dark",
+  glassEnabled: true,
+  preferencesReady: true,
+  platform: "android" as "android" | "ios",
   resolve: undefined as ((value: boolean) => void) | undefined,
   reject: undefined as (() => void) | undefined,
 }));
@@ -15,15 +18,32 @@ vi.mock("react-native", async () => {
   const { forwardRef } = await import("react");
   return {
     StyleSheet: { absoluteFill: { position: "absolute", inset: 0 } },
-    View: forwardRef<HTMLDivElement, { children?: ReactNode; testID?: string; style?: unknown }>(
-      (props, ref) => (
-        <div ref={ref} data-testid={props.testID} data-style={JSON.stringify(props.style)}>
-          {props.children}
-        </div>
-      ),
-    ),
+    Platform: {
+      get OS() {
+        return native.platform;
+      },
+    },
+    processColor: () => 1,
+    View: forwardRef<
+      HTMLDivElement,
+      { children?: ReactNode; testID?: string; style?: unknown; nativeID?: string }
+    >((props, ref) => (
+      <div
+        ref={ref}
+        id={props.nativeID}
+        data-testid={props.testID}
+        data-style={JSON.stringify(props.style)}
+      >
+        {props.children}
+      </div>
+    )),
     AccessibilityInfo: {
       isReduceTransparencyEnabled: () =>
+        new Promise<boolean>((resolve, reject) => {
+          native.resolve = resolve;
+          native.reject = () => reject(new Error("unavailable"));
+        }),
+      isHighTextContrastEnabled: () =>
         new Promise<boolean>((resolve, reject) => {
           native.resolve = resolve;
           native.reject = () => reject(new Error("unavailable"));
@@ -37,6 +57,8 @@ vi.mock("react-native", async () => {
 });
 vi.mock("../../features/settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
+    dockGlassEnabled: native.glassEnabled,
+    isReady: native.preferencesReady,
     themeAppearance: native.appearance,
     themeVariables: { "--color-screen": native.appearance === "dark" ? "#191a1d" : "#f7f7f8" },
   }),
@@ -44,7 +66,17 @@ vi.mock("../../features/settings/appearance/AppearancePreferencesProvider", () =
 vi.mock("../../lib/mobileTheme", () => ({
   themeColorWithAlpha: (color: string, alpha: number) => `${color}:${alpha}`,
 }));
-import { DockGlassBackdrop, DockGlassCapture, DockGlassProvider } from "./DockGlass";
+vi.mock("../../native/AndroidDockSample", () => ({
+  AndroidDockSample: ({ targetNativeId }: { targetNativeId: string }) => (
+    <div data-sample={targetNativeId} />
+  ),
+}));
+import {
+  DockGlassBackdrop,
+  DockGlassCapture,
+  DockGlassProvider,
+  DockGlassSamplingScope,
+} from "./DockGlass";
 
 const roots: Root[] = [];
 async function mount(element: ReactNode) {
@@ -76,13 +108,16 @@ function tint(container: HTMLElement, value: string) {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   native.appearance = "light";
+  native.glassEnabled = true;
+  native.preferencesReady = true;
+  native.platform = "android";
 });
 afterEach(async () => {
   for (const root of roots.splice(0)) await act(async () => root.unmount());
   document.body.innerHTML = "";
   native.listeners.clear();
 });
-it("mounts nested navigation content without loading any native blur module", async () => {
+it("mounts nested content while awaiting the Android accessibility preference", async () => {
   const { container } = await mount(scene());
   expect(
     container.querySelector('[data-testid="workspace"] [data-testid="thread"]')?.textContent,
@@ -132,14 +167,14 @@ it("removes the accessibility subscription when the provider unmounts", async ()
   await act(async () => native.resolve?.(false));
 });
 
-it("uses a nearly opaque navigation material so unblurred rows cannot compete with icons", async () => {
+it("uses a translucent material without an eligible capture target", async () => {
   const { container } = await mount(
     <DockGlassProvider>
       <DockGlassBackdrop scope="workspace" material="navigation" />
     </DockGlassProvider>,
   );
   await act(async () => native.resolve?.(false));
-  expect(tint(container, "#f7f7f8:0.98")).toBe(true);
+  expect(tint(container, "#f7f7f8:0.84")).toBe(true);
 });
 
 it.each(["light", "dark"] as const)(
@@ -163,3 +198,54 @@ it.each(["light", "dark"] as const)(
     }
   },
 );
+
+function samplingScene() {
+  return (
+    <DockGlassProvider>
+      <DockGlassSamplingScope>
+        <DockGlassCapture scope="workspace" testID="scene">
+          会话
+        </DockGlassCapture>
+        <DockGlassBackdrop scope="workspace" material="navigation" sample />
+        <DockGlassBackdrop scope="thread" sample />
+      </DockGlassSamplingScope>
+    </DockGlassProvider>
+  );
+}
+
+it("binds the navigation backdrop to its sibling content after accessibility resolves", async () => {
+  const { container } = await mount(samplingScene());
+  const source = container.querySelector('[data-testid="scene"]')!;
+  expect(container.querySelector("[data-sample]")).toBeNull();
+  await act(async () => native.resolve?.(false));
+  expect(source.id).toBeTruthy();
+  expect(container.querySelector("[data-sample]")?.getAttribute("data-sample")).toBe(source.id);
+  expect(tint(container, "#f7f7f8:0.56")).toBe(true);
+  expect(container.querySelectorAll("[data-sample]")).toHaveLength(1);
+});
+
+it("switches the capsule to solid without remounting content and restores sampling", async () => {
+  const page = await mount(samplingScene());
+  await act(async () => native.resolve?.(false));
+  const source = page.container.querySelector('[data-testid="scene"]');
+  native.glassEnabled = false;
+  await act(async () => page.root.render(samplingScene()));
+  expect(page.container.querySelector("[data-sample]")).toBeNull();
+  expect(tint(page.container, "#f7f7f8:1")).toBe(true);
+  native.glassEnabled = true;
+  await act(async () => page.root.render(samplingScene()));
+  expect(page.container.querySelector("[data-sample]")).toBeTruthy();
+  expect(page.container.querySelector('[data-testid="scene"]')).toBe(source);
+});
+
+it("keeps the first frame solid until saved preferences are available", async () => {
+  native.preferencesReady = false;
+  const page = await mount(samplingScene());
+  await act(async () => native.resolve?.(false));
+  expect(page.container.querySelector("[data-sample]")).toBeNull();
+  native.preferencesReady = true;
+  native.glassEnabled = false;
+  await act(async () => page.root.render(samplingScene()));
+  expect(page.container.querySelector("[data-sample]")).toBeNull();
+  expect(tint(page.container, "#f7f7f8:1")).toBe(true);
+});

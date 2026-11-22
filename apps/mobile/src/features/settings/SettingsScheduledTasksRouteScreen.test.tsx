@@ -15,6 +15,11 @@ const { Children, mocks } = vi.hoisted(() => ({
   Children: ({ children }: { children?: ReactNode }) => children,
   mocks: { upsert: vi.fn(), alert: vi.fn(), tasks: [] as ScheduledTask[] },
 }));
+// 测试关注设置和会话命令，使用英文源文案并隔离原生语言模块。
+vi.mock("../../i18n/I18nProvider", () => ({
+  useGT: () => (source: string) => source,
+}));
+
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
   View: Children,

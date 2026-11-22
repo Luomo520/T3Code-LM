@@ -1069,6 +1069,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             ),
         isRegeneratingTitle && "opacity-55",
       )}
+      data-sidebar-thread-title=""
+      data-receded={shouldRecede || undefined}
       dir={textDirection(thread.title)}
     >
       {thread.title}
@@ -1225,6 +1227,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     return (
       <li
         data-thread-item={threadKey}
+        data-sidebar-thread-group="threads"
         {...sortableRootProps}
         {...(fileDropHandlers ?? {})}
         className={cn(
@@ -1416,6 +1419,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   return (
     <li
       data-thread-item={threadKey}
+      data-sidebar-thread-group={props.isPinned ? "pinned" : "threads"}
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
       // The hints are the rendered heights inside py-0.5. Revealing the open thread measures rows

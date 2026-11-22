@@ -31,6 +31,7 @@ const reactTests = [
   "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
   "src/features/settings/SettingsScheduledTasksRouteScreen.test.tsx",
   "src/features/settings/components/BranchNamingSettings.test.tsx",
+  "src/features/settings/components/AndroidUpdateCenter.test.tsx",
   "src/features/usage/useHeaderUsageHistory.test.tsx",
   "src/features/usage/useHeaderUsagePolling.test.tsx",
   "src/features/usage/HeaderUsageDetailsDialog.test.tsx",

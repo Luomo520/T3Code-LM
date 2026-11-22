@@ -1,7 +1,9 @@
+import { GTProvider } from "gt-react";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
+import zh from "../../i18n/translations/zh.json";
 import { SidebarProvider } from "../ui/sidebar";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { SETTINGS_NAV_GROUPS, SETTINGS_SECTION_LABELS } from "./settingsSearch";
@@ -110,4 +112,20 @@ it.each([1280, 390])("names each group by a heading outside it at %ipx wide", as
     expect(heading?.tagName, `the group starting at ${first} has no heading`).toBe("H3");
   }
   expect(page.getByRole("tree").query()).toBeNull();
+});
+
+it("opens the translated settings search and About page at 390px", async () => {
+  await page.viewport(390, 800);
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{ zh }}>
+      <SidebarProvider defaultOpen>
+        <SettingsSidebarNav pathname="/settings/general" />
+      </SidebarProvider>
+    </GTProvider>,
+    { router: "/settings/general" },
+  );
+  await userEvent.click(page.getByRole("button", { name: "搜索设置" }));
+  await expect.element(page.getByRole("combobox", { name: "搜索设置" })).toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "关于", exact: true }));
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/settings/about"));
 });

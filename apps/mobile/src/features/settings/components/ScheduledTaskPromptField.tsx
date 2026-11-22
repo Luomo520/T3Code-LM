@@ -1,3 +1,4 @@
+import { useGT } from "../../../i18n/I18nProvider";
 import { TextInput, View } from "react-native";
 
 import { AppText as Text } from "../../../components/ui/AppText";
@@ -21,17 +22,18 @@ export function ScheduledTaskPromptField(props: {
   readonly disabled: boolean;
   readonly voiceInput: ReturnType<typeof useVoiceInputController>;
 }) {
+  const gt = useGT();
   const voice = props.voiceInput;
-  const presentation = resolveVoiceComposerPresentation(voice.state, voice.elapsedSeconds);
+  const presentation = resolveVoiceComposerPresentation(voice.state, voice.elapsedSeconds, gt);
   const showsDictation = presentation.statusKind === "active";
   const showsIdleTrigger = voice.isAvailable && !showsDictation;
 
   return (
     <View className="gap-2 border-t border-border-subtle px-4 py-3">
-      <Text className="text-sm text-foreground-muted">{"提示词"}</Text>
+      <Text className="text-sm text-foreground-muted">{gt("Prompt")}</Text>
       <View className="flex-row items-end">
         <TextInput
-          accessibilityLabel="提示词"
+          accessibilityLabel={gt("Prompt")}
           value={props.value}
           onChangeText={props.onChange}
           selection={props.selection}
@@ -40,7 +42,7 @@ export function ScheduledTaskPromptField(props: {
           multiline
           scrollEnabled
           textAlignVertical="top"
-          placeholder="每次运行时智能体应执行什么？"
+          placeholder={gt("What should the agent do each time?")}
           placeholderTextColorClassName="accent-foreground-muted"
           className="max-h-40 min-h-24 min-w-0 flex-1 font-sans text-base text-foreground"
         />

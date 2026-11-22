@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import { DockGlassCapture } from "../../components/ui/DockGlass";
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import { useOpenThreadInspector } from "./thread-inspector-navigation";
@@ -419,6 +420,7 @@ function ThreadDetailBody(
     >;
   },
 ) {
+  const gt = useGT();
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const { layout } = useAdaptiveWorkspaceLayout();
   const deviceType = useDeviceType();
@@ -644,7 +646,7 @@ function ThreadDetailBody(
     });
     setForceStoppingKey((current) => (current === threadKey ? null : current));
     if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) Dialog.alert("Could not force stop the agent");
+      if (!isAtomCommandInterrupted(result)) Dialog.alert(gt("Could not force stop the agent"));
       return;
     }
     const others = result.value.sharedWithThreadIds.length;
@@ -765,7 +767,7 @@ function ThreadDetailBody(
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       Dialog.alert(
-        "Could not update thread",
+        gt("Could not update thread"),
         error instanceof Error ? error.message : "Try again.",
       );
     }
@@ -787,7 +789,7 @@ function ThreadDetailBody(
       connectionAwaitingApproval: props.connectionAwaitingApproval === true,
       environmentLabel: props.environmentLabel,
       onReconnect: props.onReconnectEnvironment,
-    });
+    }, gt);
     if (connectionStatus !== null && !props.draftMode) {
       return connectionStatus;
     }
@@ -1393,7 +1395,7 @@ function ThreadDetailBody(
     if (AsyncResult.isFailure(edited)) {
       const error = squashAtomCommandFailure(edited);
       Dialog.alert(
-        "Could not edit message",
+        gt("Could not edit message"),
         error instanceof Error ? error.message : "Please try again.",
       );
       return;

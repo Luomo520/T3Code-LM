@@ -47,6 +47,7 @@ export class DesktopAppUpdate extends Context.Service<
         download?: ServerSelfUpdateDownloadProgress,
       ) => Effect.Effect<void, ServerSelfUpdateError>,
       trackSwitch?: DesktopTelemetryReceiver.DesktopTrackSwitch,
+      confirmedVersion?: string,
     ) => Effect.Effect<ServerSelfUpdateResult, ServerSelfUpdateError>;
     /** Success stops the server; returns only on installation failure or timeout. */
     readonly commit: (
@@ -76,6 +77,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
       download?: ServerSelfUpdateDownloadProgress,
     ) => Effect.Effect<void, ServerSelfUpdateError>,
     trackSwitch: boolean,
+    confirmedVersion: string | undefined,
   ) {
     const lastProgress = yield* Ref.make<{
       stage: ServerSelfUpdateProgressStage;
@@ -127,11 +129,19 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
 
     const report = terminal.value;
     if (report.outcome === "ready-to-install") {
+      const downloaded = report.state.downloadedVersion;
+      if (confirmedVersion !== undefined && downloaded !== confirmedVersion) {
+        // 释放桌面端已准备的安装项，下一次确认可重新请求。
+        yield* receiver.cancelDesktopUpdate(requestId).pipe(Effect.ignore({ log: true }));
+        return yield* failWith(
+          downloaded === null
+            ? `远端桌面端未报告已下载的版本。请在远端桌面检查更新版本 ${confirmedVersion} 后重试。`
+            : `远端桌面端准备的版本为 ${downloaded}，确认的版本为 ${confirmedVersion}。请在远端桌面检查更新，再返回重新选择。`,
+        );
+      }
       yield* emitStage("installing");
       const targetVersion =
-        report.state.downloadedVersion ??
-        report.state.availableVersion ??
-        report.state.currentVersion;
+        downloaded ?? report.state.availableVersion ?? report.state.currentVersion;
       yield* Effect.logInfo("Desktop app update prepared for install.", {
         targetVersion,
       });
@@ -154,7 +164,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
   });
 
   const run: DesktopAppUpdate["Service"]["run"] = Effect.fn("desktopUpdate.desktopAppUpdate.run")(
-    function* (reportProgress, trackSwitch) {
+    function* (reportProgress, trackSwitch, confirmedVersion) {
       if (!available) {
         return yield* failWith(
           "This server was not started by the T3 Code desktop app, so it cannot drive a desktop update.",
@@ -187,6 +197,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
             changes,
             reportProgress,
             trackSwitch !== undefined,
+            confirmedVersion,
           ).pipe(
             Effect.onInterrupt(() => receiver.cancelDesktopUpdate(requestId).pipe(Effect.ignore)),
           );

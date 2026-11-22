@@ -94,6 +94,7 @@ export interface ServerUpdateTarget {
   readonly installation?: ServerInstallation | undefined;
   readonly desktopAppUpdate?: boolean;
   readonly targetVersion: string;
+  readonly requireConfirmedDesktopVersion?: boolean;
   /** Set only by a track switch; the host's desktop app moves to this track. */
   readonly channel?: DesktopUpdateChannel;
   /** A track switch's checked release migration; the host re-checks its own database. */
@@ -138,6 +139,7 @@ export function useServerUpdate() {
     pendingUpdateEnvironmentIds.add(environmentId);
     const result = await updateServer({
       environmentId,
+      ...(target.requireConfirmedDesktopVersion ? { requireConfirmedDesktopVersion: true } : {}),
       input: {
         targetVersion,
         ...(target.channel === undefined ? {} : { channel: target.channel }),

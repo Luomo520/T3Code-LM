@@ -165,8 +165,8 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       key: "loading:claudeAgent:running",
       tone: "loading",
-      title: "Updating Claude",
-      description: "Claude update in progress.",
+      title: "正在更新 Claude",
+      description: "Claude 正在更新。",
     });
   });
 
@@ -204,7 +204,7 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       key: "succeeded:claudeAgent:2026-04-23T10:01:00.000Z:Provider updated.",
       tone: "success",
-      title: "Claude updated: v1.1.0",
+      title: "Claude 已更新：v1.1.0",
     });
   });
 
@@ -261,7 +261,7 @@ describe("provider update launch notification logic", () => {
     expect(successView).toMatchObject({
       key: "succeeded:codex:2026-04-23T10:01:00.000Z:Provider updated.",
       tone: "success",
-      title: "Codex updated: v1.2.0",
+      title: "Codex 已更新：v1.2.0",
     });
 
     const failureView = getProviderUpdateSidebarPillView(providers, {
@@ -271,7 +271,7 @@ describe("provider update launch notification logic", () => {
     expect(failureView).toMatchObject({
       key: "failed:claudeAgent:2026-04-23T10:00:00.000Z:Update command exited with code 1.",
       tone: "error",
-      title: "Claude v1.1.0 update failed",
+      title: "Claude v1.1.0 更新失败",
     });
   });
 });
@@ -337,20 +337,24 @@ describe("getProviderUpdateRunToastView", () => {
       ]),
     ).toMatchObject({
       type: "success",
-      description: `Linux · OpenCode: ${message}\nLaptop · OpenCode: ${message}`,
+      description:
+        "Linux · OpenCode: OpenCode CLI 已更新。请重启已配置的本地 OpenCode 服务端以使用新版本。\nLaptop · OpenCode: OpenCode CLI 已更新。请重启已配置的本地 OpenCode 服务端以使用新版本。",
     });
     expect(
       getProviderUpdateSidebarPillView([updated], {
         visibleAfterIso: sessionStartedAt,
       }),
-    ).toMatchObject({ title: "OpenCode updated: v2.2.5", description: message });
+    ).toMatchObject({
+      title: "OpenCode 已更新：v2.2.5",
+      description: "OpenCode CLI 已更新。请重启已配置的本地 OpenCode 服务端以使用新版本。",
+    });
 
     const restarted = { ...updated, version: "2.2.5" };
     expect(
       getProviderUpdateRunToastView([
         run("Linux", "opencode", AsyncResult.success({ providers: [restarted] })),
       ]),
-    ).toMatchObject({ description: "New sessions will use the updated provider." });
+    ).toMatchObject({ description: "新会话将使用更新后的 CLI。" });
   });
 
   it("lists every failed update and ignores interrupted ones", () => {
@@ -385,7 +389,7 @@ describe("getProviderUpdateRunToastView", () => {
 
     expect(view).toEqual({
       type: "error",
-      title: "2 of 3 provider updates failed",
+      title: "3 项 CLI 中有 2 项更新失败",
       description: "Mac Studio · Claude: npm exited with code 1.\nLaptop · Codex: WebSocket closed",
     });
   });

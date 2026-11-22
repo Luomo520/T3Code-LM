@@ -109,7 +109,17 @@ import { useFabScroll } from "./FabScrollContext";
 import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
+import { useGT } from "../../i18n/I18nProvider";
 import { deriveHomeEmptyState } from "./home-empty-state";
+
+type HomeListItem = ThreadListV2ListItem | ProjectHeading;
+
+function startsHomeCardGroup(row: HomeListItem | undefined, previous: HomeListItem | undefined) {
+  if (row?.type === "v2-thread")
+    return previous?.type !== "v2-thread" || row.item.pinned !== previous.item.pinned;
+  if (row?.type === "v2-pending") return row.showPendingDivider || previous?.type !== "v2-pending";
+  return true;
+}
 
 interface HomeScreenProps {
   /** Whether this list is the one on screen; see `useHomeRouteVisible`. */
@@ -196,6 +206,7 @@ function renderHomeScrollView(props: ScrollViewProps) {
 }
 
 export function HomeScreen(props: HomeScreenProps) {
+  const gt = useGT();
   const homePreferences = useAtomValue(mobilePreferencesAtom);
   const saveHomePreferences = useAtomSet(updateMobilePreferencesAtom);
   const homeView = AsyncResult.isSuccess(homePreferences)
@@ -250,7 +261,7 @@ export function HomeScreen(props: HomeScreenProps) {
       ? deriveCenteredContentHorizontalPadding({
           viewportWidth: windowWidth,
           maxContentWidth: ANDROID_READING_MAX_WIDTH,
-          minimumPadding: 0,
+          minimumPadding: 4,
         })
       : 0;
   const iosBottomClearance = Math.max(
@@ -531,7 +542,25 @@ export function HomeScreen(props: HomeScreenProps) {
     if (swipeEnabled) activateVisibleRows(threadListV2Items);
   }, [activateVisibleRows, swipeEnabled, threadListV2Items]);
 
-  const renderV2Item = ({ item }: { readonly item: ThreadListV2ListItem | ProjectHeading }) => {
+  const renderV2Item = ({
+    item,
+    index,
+  }: {
+    readonly item: HomeListItem;
+    readonly index: number;
+  }) => {
+    const first = startsHomeCardGroup(item, displayedItems[index - 1]);
+    const last = startsHomeCardGroup(displayedItems[index + 1], item);
+    const homeGroup =
+      Platform.OS === "android"
+        ? first
+          ? last
+            ? "only"
+            : "first"
+          : last
+            ? "last"
+            : "middle"
+        : undefined;
     if (item.type === "home-project")
       return (
         <Pressable
@@ -540,7 +569,10 @@ export function HomeScreen(props: HomeScreenProps) {
           accessibilityState={{ expanded: item.expanded, disabled: hasSearchQuery }}
           disabled={hasSearchQuery}
           onPress={() => toggleProject(item.projectKey)}
-          className="min-h-12 flex-row items-center gap-2 px-5 py-2"
+          className={cn(
+            "min-h-12 flex-row items-center gap-2 px-5 py-2",
+            Platform.OS === "android" && "active:bg-row-hover rounded-xl",
+          )}
         >
           <SymbolView
             name={item.expanded ? "chevron.down" : "chevron.right"}
@@ -549,12 +581,15 @@ export function HomeScreen(props: HomeScreenProps) {
           />
           <SymbolView name="folder" size={16} tintColorClassName="accent-icon-muted" />
           <Text
-            className="min-w-0 flex-1 text-[13px] font-t3-medium text-foreground-muted"
+            className={cn(
+              "min-w-0 flex-1 font-t3-medium text-foreground-muted",
+              Platform.OS === "android" ? "text-sm" : "text-[13px]",
+            )}
             numberOfLines={1}
           >
             {item.title}
           </Text>
-          <Text className="text-xs text-foreground-muted">{item.count}</Text>
+          <Text className="text-xs tabular-nums text-foreground-muted">{item.count}</Text>
         </Pressable>
       );
 
@@ -583,7 +618,8 @@ export function HomeScreen(props: HomeScreenProps) {
           }
           environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
           showPendingDivider={item.showPendingDivider}
-          showTrailingDivider={item.showTrailingDivider}
+          homeGroup={homeGroup}
+          showTrailingDivider={homeGroup ? !last : item.showTrailingDivider}
           onSelectPendingTask={props.onSelectPendingTask}
           onDeletePendingTask={props.onDeletePendingTask}
           fullSwipeWidth={fullSwipeWidth}
@@ -642,7 +678,8 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozePresetMinute={item.snoozePresetMinute ?? ""}
         snoozeWakeLabelText={item.snoozeWakeLabelText}
         timeLabel={item.timeLabel}
-        showTrailingDivider={item.showTrailingDivider}
+        homeGroup={homeGroup}
+        showTrailingDivider={homeGroup ? !last : item.showTrailingDivider}
         project={projectByKey.get(projectKey) ?? null}
         projectTitle={v2ProjectTitleByProjectKey.get(projectKey)}
         showPinnedDetails
@@ -727,8 +764,8 @@ export function HomeScreen(props: HomeScreenProps) {
     props.selectedEnvironmentId === null
       ? null
       : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
-        "this environment");
-  const emptyState = deriveHomeEmptyState(props.catalogState, props.projects.length);
+        gt("this environment"));
+  const emptyState = deriveHomeEmptyState(props.catalogState, props.projects.length, gt);
 
   if (!hasAnyThreads) {
     return (
@@ -751,12 +788,12 @@ export function HomeScreen(props: HomeScreenProps) {
               <EmptyState
                 title={emptyState.title}
                 detail={emptyState.detail}
-                actionLabel={emptyState.showsAddEnvironment ? "Add environment" : undefined}
+                actionLabel={emptyState.showsAddEnvironment ? gt("Add environment") : undefined}
                 onAction={emptyState.showsAddEnvironment ? props.onAddConnection : undefined}
                 action={
                   Platform.OS === "android" && emptyState.showsAddEnvironment ? (
                     <FloatingActionButton
-                      label="Add environment"
+                      label={gt("Add environment")}
                       icon="plus"
                       variant="extended"
                       tone="primary"
@@ -804,32 +841,32 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2ListEmpty =
     hasSearchQuery && threadSearch.isPending ? (
       <EmptyState
-        title="Searching thread messages…"
-        detail={`Looking for "${props.searchQuery}" in messages.`}
+        title={gt("Searching thread messages…")}
+        detail={gt("Searching messages for “{query}”.", { query: props.searchQuery })}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : hasSearchQuery ? (
       <EmptyState
-        title="No results"
-        detail={`No threads matching "${props.searchQuery}".`}
+        title={gt("No results")}
+        detail={gt("No threads match “{query}”.", { query: props.searchQuery })}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : v2ScopedProjectGroup !== null ? (
       <EmptyState
-        title={`No threads in ${v2ScopedProjectGroup.title}`}
-        detail="Choose another project or create a new task."
+        title={gt("No threads in {scope}", { scope: v2ScopedProjectGroup.title })}
+        detail={gt("Choose another project or create a new task.")}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : selectedEnvironmentLabel ? (
       <EmptyState
-        title={`No threads in ${selectedEnvironmentLabel}`}
-        detail="Choose another environment or create a new task."
+        title={gt("No threads in {scope}", { scope: selectedEnvironmentLabel })}
+        detail={gt("Choose another environment or create a new task.")}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : (
       <EmptyState
-        title="No threads yet"
-        detail="Create a task to start a new coding session."
+        title={gt("No threads yet")}
+        detail={gt("Create a task to start a new coding session.")}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     );
@@ -881,10 +918,20 @@ export function HomeScreen(props: HomeScreenProps) {
                   <>
                     <View
                       className={cn(
-                        "min-h-11 flex-row items-center justify-end px-4",
-                        Platform.OS !== "android" && "py-1",
+                        "min-h-11 flex-row items-center px-4",
+                        Platform.OS === "android"
+                          ? "min-h-14 justify-between gap-2"
+                          : "justify-end py-1",
                       )}
                     >
+                      {Platform.OS === "android" ? (
+                        <Text
+                          accessibilityRole="header"
+                          className="min-w-0 shrink text-[30px] font-t3-bold tracking-tight text-foreground"
+                        >
+                          最近会话
+                        </Text>
+                      ) : null}
                       <ListFilterMenu
                         label={homeView === "projects" ? "按项目" : "按时间"}
                         accessibilityLabel="会话排列方式"

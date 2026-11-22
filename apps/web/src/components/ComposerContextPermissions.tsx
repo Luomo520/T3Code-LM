@@ -10,6 +10,7 @@ import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
   resolveCompatibleRuntimeMode,
   resolveRuntimeModeOptions,
+  runtimeModeAriaLabel,
   runtimeModeConfig,
 } from "./chat/runtimeModeConfig";
 import { ComposerContextLabel } from "./ComposerContextLabel";
@@ -43,7 +44,7 @@ export function ComposerContextPermissions(props: {
                 <ComposerControl
                   size="xs"
                   className="ms-auto min-w-0 shrink-0"
-                  aria-label={`Permissions: ${label}`}
+                  aria-label={runtimeModeAriaLabel(label)}
                   data-composer-context-control
                 />
               }

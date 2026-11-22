@@ -1,3 +1,4 @@
+import { localizeInterfaceText } from "~/i18n/runtime";
 import {
   memo,
   useEffect,
@@ -369,17 +370,19 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       : null;
   const compactsBeforeSend = compactTokens !== null && !keepFullHistory;
 
-  const submitLabel = showResume
-    ? "Resume thread"
-    : isEditingQueuedMessage
-      ? "Update queued message"
-      : compactsBeforeSend
-        ? "Compact and send"
-        : isQueuing
-          ? "Queue message"
-          : isRunning
-            ? "Steer message"
-            : "Submit message";
+  const submitLabel = localizeInterfaceText(
+    showResume
+      ? "Resume thread"
+      : isEditingQueuedMessage
+        ? "Update queued message"
+        : compactsBeforeSend
+          ? "Compact and send"
+          : isQueuing
+            ? "Queue message"
+            : isRunning
+              ? "Steer message"
+              : "Submit message",
+  );
   const submitStatus = isEnvironmentUnavailable
     ? "Environment disconnected"
     : (sendDisabledReason ??

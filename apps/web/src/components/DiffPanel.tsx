@@ -1,3 +1,4 @@
+import { localizeInterfaceText } from "../i18n/runtime";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
 import type { FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
@@ -441,17 +442,18 @@ export default function DiffPanel({
     selectedCommitSha !== null && selectedGitSource?.headRef === selectedCommitSha
       ? selectedGitSource.commitSubject
       : undefined;
+  const uncommittedLabel = localizeInterfaceText("Uncommitted");
   const selectedGitScopeLabel =
     selectedCommitSha !== null
-      ? (selectedCommitSubject ?? `Commit ${selectedCommitSha.slice(0, 7)}`)
+      ? (selectedCommitSubject ?? localizeInterfaceText(`Commit ${selectedCommitSha.slice(0, 7)}`))
       : selectedGitScope === "unstaged"
-        ? "Uncommitted"
+        ? uncommittedLabel
         : "Changes";
   const selectedScopeLabel = toolCallSelection
     ? "Tool call"
     : selectedRunId === null
       ? selectedCommitSha !== null
-        ? (selectedCommitSubject ?? "Commit")
+        ? (selectedCommitSubject ?? localizeInterfaceText("Commit"))
         : selectedGitScopeLabel
       : selectedTurn?.runId === latestTurn?.runId
         ? "Latest turn"
@@ -888,7 +890,7 @@ export default function DiffPanel({
                 <span>Changes</span>
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="unstaged" closeOnClick>
-                <span>Uncommitted</span>
+                <span>{uncommittedLabel}</span>
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="latest" closeOnClick>
                 <span>Latest turn</span>

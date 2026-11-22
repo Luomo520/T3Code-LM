@@ -196,6 +196,9 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     if (policyRefusal !== undefined) {
       return yield* failWith(policyRefusal);
     }
+    if (input.requireConfirmedDesktopVersion && capability !== "desktop-managed") {
+      return yield* failWith("当前环境未确认支持指定版本的桌面端更新。请刷新设备状态后重试。");
+    }
     if (capability === "desktop-managed") {
       const unsafeCrossing = input.channel === undefined ? null : crossesTrackUnsafely(input);
       if (unsafeCrossing !== null) return yield* failWith(unsafeCrossing);
@@ -208,6 +211,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
             input.channel === undefined
               ? undefined
               : { channel: input.channel, targetVersion: input.targetVersion },
+            input.requireConfirmedDesktopVersion ? input.targetVersion : undefined,
           )
           .pipe(Effect.onError(() => Ref.set(inFlight, false)));
       }

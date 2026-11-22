@@ -164,11 +164,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
           serverSelfUpdate: capabilities.serverSelfUpdate,
           desktopAppUpdate: capabilities.desktopAppUpdate,
           desktopAppChannelSwitch: capabilities.desktopAppChannelSwitch,
+          confirmedDesktopUpdateVersion: capabilities.confirmedDesktopUpdateVersion,
           serverSelfUpdateProgress: capabilities.serverSelfUpdateProgress,
         }).toEqual({
           serverSelfUpdate: "desktop-managed",
           desktopAppUpdate: advertised,
           desktopAppChannelSwitch: advertised,
+          confirmedDesktopUpdateVersion: advertised,
           serverSelfUpdateProgress: advertised,
         });
       }),

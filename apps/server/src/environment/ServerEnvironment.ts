@@ -293,7 +293,13 @@ export const make = Effect.gen(function* () {
         ? { serverSelfUpdateProgress: true }
         : {}),
       ...(serverSelfUpdate === "boot-service" ? { serverUpdateStaging: true } : {}),
-      ...(desktopAppUpdate ? { desktopAppUpdate: true, desktopAppChannelSwitch: true } : {}),
+      ...(desktopAppUpdate
+        ? {
+            desktopAppUpdate: true,
+            desktopAppChannelSwitch: true,
+            confirmedDesktopUpdateVersion: true,
+          }
+        : {}),
       serverBrowser: true,
       peerLinks: true,
       mcpModeLimitHeader: true,

@@ -13,19 +13,22 @@ import { AppText as Text } from "../../../components/ui/AppText";
 import * as Dialog from "../../../components/ui/Dialog";
 import { ListActionRow } from "../../../components/ui/ListActionRow";
 import { Progress } from "../../../components/ui/Progress";
+import { appAtomRegistry } from "../../../state/atom-registry";
 import { useEnvironmentQuery } from "../../../state/query";
 import type { ConnectedEnvironmentSummary } from "../../../state/remote-runtime-types";
 import { serverEnvironment } from "../../../state/server";
-import {
-  environmentSession,
-  readEnvironmentScope,
-  useEnvironmentScope,
-} from "../../../state/session";
+import { environmentSession, useEnvironmentScope } from "../../../state/session";
 import { useAtomCommand } from "../../../state/use-atom-command";
 import {
   ENVIRONMENT_RELEASES_PAGE_URL,
   supportsEnvironmentUpdate,
 } from "../environment-maintenance";
+
+import {
+  matchesConfirmedUpdate,
+  remoteUpdateDeviceAtom,
+  serverUpdateImpact,
+} from "../updateCenter";
 
 export function EnvironmentServerUpdateRows({
   environment,
@@ -38,6 +41,7 @@ export function EnvironmentServerUpdateRows({
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const sessionConfig = useAtomValue(environmentSession.initialConfigValueAtom(environmentId));
   const state = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
+  const device = useAtomValue(remoteUpdateDeviceAtom(environmentId));
   const canMaintain = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
   const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const update = useAtomCommand(serverEnvironment.updateServer, { reportFailure: false });
@@ -77,14 +81,25 @@ export function EnvironmentServerUpdateRows({
   if (compact && state.status === "idle" && targetVersion === null) return null;
 
   function requestUpdate() {
-    if (!canCheck || !canInstall || targetVersion === null || running || providerBusy) return;
+    const selected = device?.server;
+    if (!selected) return;
     Dialog.confirm({
       title: `更新 ${deviceName}？`,
-      message: `安装 T3 Code ${targetVersion}。${capabilities?.serverSelfUpdate === "desktop-managed" ? "桌面应用将关闭并重新启动。" : "服务端将重启并重新连接。"}正在运行的会话可能会中断。`,
+      message: `${selected.fromVersion} → ${selected.targetVersion}。${serverUpdateImpact(selected)}`,
       confirmText: "更新服务端",
       onConfirm: () => {
-        if (!readEnvironmentScope(environmentId, AuthEnvironmentMaintainScope)) return;
-        void update({ environmentId, input: { targetVersion } }).then((result) => {
+        const current = appAtomRegistry.get(remoteUpdateDeviceAtom(environmentId))?.server;
+        if (!current || !matchesConfirmedUpdate(selected, current)) {
+          Dialog.alert("更新条件已变化", "请重新检查设备状态和目标版本。");
+          return;
+        }
+        void update({
+          environmentId,
+          ...(selected.desktopManaged && selected.confirmedDesktopUpdateVersion
+            ? { requireConfirmedDesktopVersion: true }
+            : {}),
+          input: { targetVersion: selected.targetVersion },
+        }).then((result) => {
           if (AsyncResult.isSuccess(result)) {
             Dialog.alert("服务端已更新", `${deviceName} 已更新至 ${result.value.targetVersion}。`);
           }
@@ -163,7 +178,7 @@ export function EnvironmentServerUpdateRows({
                   ? `${runningVersion} → ${targetVersion}`
                   : undefined
             }
-            disabled={providerBusy}
+            disabled={!device?.server}
             onPress={requestUpdate}
           />
         ) : manual ? (

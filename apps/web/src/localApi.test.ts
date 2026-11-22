@@ -65,6 +65,38 @@ afterEach(() => {
 });
 
 describe("LocalApi", () => {
+  it.each(["en", "system", "zh-CN"])(
+    "uses legacy language %s before the first settings save",
+    async (language) => {
+      testWindow().localStorage.setItem("t3code-zh.locale", language);
+      const { createLocalApi } = await import("./localApi");
+      await expect(createLocalApi().persistence.getClientSettings()).resolves.toMatchObject({
+        language: language === "zh-CN" ? "zh" : language,
+      });
+    },
+  );
+
+  it("uses the legacy language when an older browser settings record has no language field", async () => {
+    testWindow().localStorage.setItem("t3code-zh.locale", "en");
+    testWindow().localStorage.setItem(
+      "t3code:client-settings:v1",
+      JSON.stringify({ wordWrap: false }),
+    );
+    const { createLocalApi } = await import("./localApi");
+    await expect(createLocalApi().persistence.getClientSettings()).resolves.toMatchObject({
+      language: "en",
+      wordWrap: false,
+    });
+  });
+
+  it("keeps the saved language even when a legacy preference remains", async () => {
+    testWindow().localStorage.setItem("t3code-zh.locale", "en");
+    const { DEFAULT_CLIENT_SETTINGS } = await import("@t3tools/contracts");
+    const { createLocalApi } = await import("./localApi");
+    const persistence = createLocalApi().persistence;
+    await persistence.setClientSettings({ ...DEFAULT_CLIENT_SETTINGS, language: "ja" });
+    await expect(persistence.getClientSettings()).resolves.toMatchObject({ language: "ja" });
+  });
   it("fails closed in a browser when no themed host is available", async () => {
     requestConfirmDialogMock.mockReturnValue(undefined);
     const { createLocalApi } = await import("./localApi");

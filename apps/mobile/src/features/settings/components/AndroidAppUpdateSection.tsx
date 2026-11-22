@@ -2,11 +2,12 @@ import { useIsFocused } from "@react-navigation/native";
 import { nativeApplicationVersion, nativeBuildVersion } from "expo-application";
 import { deviceName, modelName, supportedCpuArchitectures } from "expo-device";
 import * as Network from "expo-network";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AppState, Platform, View } from "react-native";
 import { Progress } from "../../../components/ui/Progress";
 
 import * as Dialog from "../../../components/ui/Dialog";
+import { SymbolView } from "../../../components/ui/AppSymbol";
 import { ListActionRow } from "../../../components/ui/ListActionRow";
 import {
   cancelAppUpdateDownload,
@@ -46,11 +47,7 @@ function taskDescription(task: AppUpdateDownload): string {
   }
 }
 
-export function AndroidAppUpdateSection({
-  checkOnOpen = false,
-}: {
-  readonly checkOnOpen?: boolean;
-}) {
+export function useAndroidAppUpdate(checkOnOpen = false) {
   const focused = useIsFocused();
   const [checking, setChecking] = useState(false);
   const [checkComplete, setCheckComplete] = useState(false);
@@ -155,47 +152,40 @@ export function AndroidAppUpdateSection({
     };
   }, [check, checkOnOpen, focused]);
 
-  if (Platform.OS !== "android") return null;
-
-  const availableVersion = asset ? `${asset.productVersion}-${asset.build}` : task?.version;
-  const availableVersionLabel = checking
-    ? "正在检查"
-    : (availableVersion ?? (checkComplete ? "无适用于此设备的新版" : "未确认"));
-
   const run = async (action: () => Promise<unknown>) => {
-    if (busy.current) return;
+    if (busy.current) return false;
     busy.current = true;
     setWorking(true);
     setNotice(null);
     try {
       await action();
       await refreshTask();
+      return true;
     } catch (error) {
       if (mounted.current) setNotice(messageOf(error));
+      return false;
     } finally {
       busy.current = false;
       if (mounted.current) setWorking(false);
     }
   };
 
-  const download = async () => {
+  const startDownload = (candidate: AndroidUpdateAsset, allowMetered: boolean) =>
+    run(() => enqueueAppUpdate(candidate, allowMetered));
+
+  const requestDownload = async () => {
     if (!asset || busy.current) return;
     busy.current = true;
     setWorking(true);
     try {
-      const network = await Network.getNetworkStateAsync();
+      const metered = await getAndroidUpdateMetered();
       if (!mounted.current) return;
-      if (network.isConnected === false || network.isInternetReachable === false) {
-        setNotice("当前无法访问网络，请连接后重试。");
-        return;
-      }
-      const metered = requiresMobileDownloadConfirmation(network.type);
       Dialog.confirm({
         title: metered ? "使用移动网络下载更新？" : "下载 App 更新？",
         message: `${asset.productVersion}-${asset.build} · ${sizeLabel(asset.sizeBytes)}。${metered ? "当前为移动网络或网络类型未知，可能产生流量费用。" : "若切换到移动网络，下载会暂停。"}下载完成后仍需你确认安装。`,
         confirmText: "下载 APK",
         onConfirm: () => {
-          void run(() => enqueueAppUpdate(asset, metered));
+          void startDownload(asset, metered);
         },
       });
     } catch (error) {
@@ -206,22 +196,99 @@ export function AndroidAppUpdateSection({
     }
   };
 
+  return {
+    activeTask,
+    asset,
+    available: !checking && !working && task === null,
+    check,
+    checkComplete,
+    checking,
+    fraction,
+    notice,
+    refreshTask,
+    requestDownload,
+    run,
+    startDownload,
+    task,
+    working,
+  };
+}
+
+export async function getAndroidUpdateMetered() {
+  const network = await Network.getNetworkStateAsync();
+  if (network.isConnected === false || network.isInternetReachable === false) {
+    throw new Error("当前无法访问网络，请连接后重试。");
+  }
+  return requiresMobileDownloadConfirmation(network.type);
+}
+
+export const androidUpdateDeviceName = () => deviceName?.trim() || modelName?.trim() || "此手机";
+export const androidUpdateVersion = () => nativeApplicationVersion ?? "未知";
+
+export function AndroidAppUpdateSection() {
+  const update = useAndroidAppUpdate();
+  return <AndroidAppUpdateDevice update={update} />;
+}
+
+export function AndroidAppUpdateDevice({
+  update,
+  selection,
+  inUpdateCenter = false,
+  disabled = false,
+}: {
+  readonly update: ReturnType<typeof useAndroidAppUpdate>;
+  readonly selection?: ReactNode;
+  readonly inUpdateCenter?: boolean;
+  readonly disabled?: boolean;
+}) {
+  if (Platform.OS !== "android") return null;
+  const {
+    activeTask,
+    asset,
+    check,
+    checkComplete,
+    checking,
+    fraction,
+    notice,
+    refreshTask,
+    requestDownload,
+    run,
+    task,
+    working,
+  } = update;
+  const availableVersion = asset ? `${asset.productVersion}-${asset.build}` : task?.version;
+  const availableVersionLabel = checking
+    ? "正在检查"
+    : (availableVersion ?? (checkComplete ? "无适用于此设备的新版" : "未确认"));
+
   return (
     <SettingsSection
-      title={`Android 客户端 · ${deviceName?.trim() || modelName?.trim() || "未知设备"}`}
+      title={
+        inUpdateCenter ? androidUpdateDeviceName() : `Android 客户端 · ${androidUpdateDeviceName()}`
+      }
+      titleIcon={
+        inUpdateCenter ? (
+          <SymbolView name="iphone" size={16} tintColorClassName="accent-icon" />
+        ) : undefined
+      }
       footer={notice ?? "更新包保存到 Download/t3code，下载完成后可确认安装。"}
     >
+      {selection}
       <ListActionRow
         icon="arrow.clockwise"
         label={checking ? "正在检查更新…" : "检查客户端更新"}
-        description={`运行版本 ${nativeApplicationVersion ?? "未知"} · 构建 ${nativeBuildVersion ?? "未知"}\n可更新版本 ${availableVersionLabel}`}
+        description={
+          selection
+            ? undefined
+            : `${inUpdateCenter ? "Android App\n" : ""}运行版本 ${androidUpdateVersion()} · 构建 ${nativeBuildVersion ?? "未知"}\n可更新版本 ${availableVersionLabel}`
+        }
         loading={checking}
-        disabled={working}
+        disabled={disabled || working}
         onPress={() => {
           void check();
         }}
       />
-      {asset && !task ? (
+      {!inUpdateCenter && asset && !task ? (
         <ListActionRow
           icon="arrow.down.circle"
           label={`下载 ${asset.productVersion}-${asset.build}`}
@@ -229,7 +296,7 @@ export function AndroidAppUpdateSection({
           loading={working}
           disabled={checking}
           onPress={() => {
-            void download();
+            void requestDownload();
           }}
         />
       ) : null}
@@ -246,7 +313,7 @@ export function AndroidAppUpdateSection({
               .filter(Boolean)
               .join(" · ")}
             loading={working}
-            disabled={checking}
+            disabled={disabled || checking}
             onPress={() => {
               void run(task.status === "downloaded" ? openAppUpdateInstaller : refreshTask);
             }}
@@ -265,13 +332,13 @@ export function AndroidAppUpdateSection({
             onPress={() => {
               void run(showDownloadedFiles);
             }}
-            disabled={working || checking}
+            disabled={disabled || working || checking}
           />
           <ListActionRow
             icon="trash"
             label={task.status === "downloaded" ? "删除此更新下载" : "取消此更新下载"}
             tone="danger"
-            disabled={working || checking}
+            disabled={disabled || working || checking}
             onPress={() =>
               Dialog.confirm({
                 title: "取消并删除此更新下载？",

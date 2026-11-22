@@ -2,17 +2,24 @@ import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import {
   AuthProvidersManageScope,
+  PROVIDER_DISPLAY_NAMES,
   AuthOrchestrationReadScope,
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { sessionPermissionsUnavailableMessage } from "@t3tools/shared/authScopeOptions";
+import {
+  formatProviderMaintenanceMessage,
+  isProviderUpdateActive,
+} from "@t3tools/client-runtime/providerUpdates";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
 import { Linking, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import * as Dialog from "../../components/ui/Dialog";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { providerUpdateResult } from "./updateCenter";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
@@ -69,11 +76,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const allowed =
     !AsyncResult.isFailure(sessionResult) && canMaintainEnvironment(session, connected);
   const running = updateState.status === "running";
-  const providerBusy =
-    config?.providers.some(
-      (provider) =>
-        provider.updateState?.status === "running" || provider.updateState?.status === "queued",
-    ) ?? false;
+  const providerBusy = config?.providers.some(isProviderUpdateActive) ?? false;
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const busy = !connected || pending !== null || running || providerBusy;
@@ -92,7 +95,9 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);
       setError(
-        cause instanceof Error ? cause.message : "The action could not be completed. Try again.",
+        cause instanceof Error
+          ? formatProviderMaintenanceMessage(cause.message)
+          : "操作未完成，请重试。",
       );
     }
   }
@@ -104,20 +109,51 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
       !canUpdateEnvironmentProvider(provider)
     )
       return;
-    void run(provider.instanceId, async () => {
-      const result = await updateProvider({
-        environmentId,
-        input: {
-          provider: provider.driver,
-          instanceId: provider.instanceId,
-        },
-      });
-      if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
+    const label =
+      provider.displayName ?? PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
+    const targetVersion = provider.versionAdvisory?.latestVersion;
+    Dialog.confirm({
+      title: `更新 ${label}？`,
+      message: `${environment?.environmentLabel ?? "此环境"} · ${provider.installedVersion ?? provider.version ?? "未知版本"} → ${targetVersion}。服务端会复核最新兼容版本，等相关任务结束后更新 CLI，期间服务端继续运行。`,
+      confirmText: "更新此项",
+      onConfirm: () => {
+        const latest = appAtomRegistry.get(serverEnvironment.configValueAtom(environmentId));
+        const selected = latest?.providers.find(
+          (entry) => entry.instanceId === provider.instanceId,
+        );
+        if (
+          !readEnvironmentScope(environmentId, AuthProvidersManageScope) ||
+          !selected ||
+          !selected.enabled ||
+          selected.driver !== provider.driver ||
+          selected.versionAdvisory?.latestVersion !== targetVersion ||
+          !canUpdateEnvironmentProvider(selected) ||
+          latest?.providers.some(isProviderUpdateActive) ||
+          appAtomRegistry.get(serverEnvironment.updateStateAtom(environmentId)).status === "running"
+        ) {
+          setError("设备状态或可更新版本已变化，请刷新后重试。");
+          return;
+        }
+        void run(selected.instanceId, async () => {
+          const result = await updateProvider({
+            environmentId,
+            input: { provider: selected.driver, instanceId: selected.instanceId },
+          });
+          if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
+          const updated = result.value.providers.find(
+            (entry) => entry.instanceId === selected.instanceId,
+          );
+          const version = updated?.installedVersion ?? updated?.version;
+          setNotice(
+            `${label} · ${providerUpdateResult(updated?.updateState) ?? "尚未确认更新结果。"}${version ? ` 当前版本 ${version}` : ""}`,
+          );
+        });
+      },
     });
   }
 
   return (
-    <SettingsScreen title={environment?.environmentLabel ?? "Environment"}>
+    <SettingsScreen title={environment?.environmentLabel ?? "环境"}>
       <ScreenScrollView
         contentInsetAdjustmentBehavior="automatic"
         className="flex-1"
@@ -157,14 +193,13 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
               </Text>
             ) : !allowed ? (
               <Text className="px-2 text-sm text-foreground-muted">
-                {AsyncResult.isFailure(sessionResult) || session === null || !session.authenticated
-                  ? sessionPermissionsUnavailableMessage({
-                      connected,
-                      failed: AsyncResult.isFailure(sessionResult),
-                      rejected:
-                        !AsyncResult.isFailure(sessionResult) && session?.authenticated === false,
-                    })
-                  : "This connection does not have permission to manage the environment."}
+                {AsyncResult.isFailure(sessionResult)
+                  ? "暂时无法验证权限，正在自动重试。"
+                  : session?.authenticated === false
+                    ? "此环境未接受当前会话，请重新连接。"
+                    : session === null
+                      ? "正在检查权限…"
+                      : "当前连接没有管理此环境的权限。"}
               </Text>
             ) : null}
             {error ? (
@@ -180,7 +215,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                   {supportUrl && managedPolicy ? (
                     <SettingsActionRow
                       icon="questionmark.bubble"
-                      label={`Get help from ${managedPolicy.organization}`}
+                      label={`联系 ${managedPolicy.organization} 获取帮助`}
                       onPress={() => void Linking.openURL(supportUrl).catch(() => undefined)}
                     />
                   ) : null}
@@ -201,7 +236,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                           input: { reloadSecrets: true },
                         });
                         if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-                        setNotice("Provider status refreshed.");
+                        setNotice("服务提供方状态已刷新。");
                       });
                     }}
                   />
@@ -235,8 +270,9 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                                   : "text-sm text-foreground-muted"
                               }
                             >
-                              {provider.updateState.message ??
-                                `更新 ${provider.updateState.status}`}
+                              {provider.updateState.message
+                                ? formatProviderMaintenanceMessage(provider.updateState.message)
+                                : providerUpdateResult(provider.updateState)}
                             </Text>
                           ) : null}
                           {provider.compatibilityAdvisory?.message ? (
@@ -252,14 +288,14 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                           {provider.versionAdvisory?.status === "behind_latest" &&
                           !provider.versionAdvisory.canUpdate ? (
                             <Text className="text-sm text-foreground-muted">
-                              {"更新环境所在电脑上的此服务提供方。"}
+                              {"请在此 CLI 所在的设备上手动更新。"}
                             </Text>
                           ) : null}
                         </View>
                         {canUpdateEnvironmentProvider(provider) ? (
                           <SettingsActionRow
                             icon="arrow.up.circle"
-                            label={`Update ${provider.displayName ?? provider.driver}`}
+                            label={`更新 ${provider.displayName ?? PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver}`}
                             disabled={busy || !canManageProviders}
                             loading={pending === provider.instanceId}
                             onPress={() => requestProviderUpdate(provider)}

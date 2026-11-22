@@ -1,5 +1,4 @@
 import {
-  defaultInstanceIdForDriver,
   PROVIDER_DISPLAY_NAMES,
   type EnvironmentId,
   type ProviderDriverKind,
@@ -12,19 +11,22 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 
-export type ProviderUpdateCandidate = ServerProvider & {
-  readonly versionAdvisory: NonNullable<ServerProvider["versionAdvisory"]> & {
-    readonly status: "behind_latest";
-    readonly latestVersion: string;
-  };
-};
+import {
+  dedupeProvidersByDriver,
+  formatProviderMaintenanceMessage,
+  isProviderUpdateActive,
+} from "@t3tools/client-runtime/providerUpdates";
 
-export type ProviderSettingsUpdateCandidate = ServerProvider & {
-  readonly versionAdvisory: NonNullable<ServerProvider["versionAdvisory"]> & {
-    readonly canUpdate: true;
-    readonly updateCommand: string;
-  };
-};
+export {
+  canOneClickUpdateProviderCandidate,
+  collectProviderUpdateCandidates,
+  hasOneClickUpdateProviderCandidate,
+  isProviderSettingsUpdateCandidate,
+  isProviderUpdateCandidate,
+  isProviderUpdateActive,
+  type ProviderUpdateCandidate,
+  type ProviderSettingsUpdateCandidate,
+} from "@t3tools/client-runtime/providerUpdates";
 
 export type ProviderUpdateSidebarPillTone = "loading" | "warning" | "error" | "success";
 
@@ -48,42 +50,12 @@ function formatVersion(value: string): string {
   return value.startsWith("v") ? value : `v${value}`;
 }
 
-function chooseRepresentativeProvider(
-  current: ServerProvider | undefined,
-  candidate: ServerProvider,
-): ServerProvider {
-  if (!current) {
-    return candidate;
-  }
-  const defaultInstanceId = defaultInstanceIdForDriver(candidate.driver);
-  if (candidate.instanceId === defaultInstanceId) {
-    return candidate;
-  }
-  if (current.instanceId === defaultInstanceId) {
-    return current;
-  }
-  return candidate.checkedAt.localeCompare(current.checkedAt) >= 0 ? candidate : current;
-}
-
-function dedupeProvidersByDriver<T extends ServerProvider>(providers: ReadonlyArray<T>): T[] {
-  const latestProviderByDriver = new Map<ProviderDriverKind, T>();
-
-  for (const provider of providers) {
-    latestProviderByDriver.set(
-      provider.driver,
-      chooseRepresentativeProvider(latestProviderByDriver.get(provider.driver), provider) as T,
-    );
-  }
-
-  return [...latestProviderByDriver.values()];
-}
-
 function getProviderUpdatedTitle(
   provider: Pick<ServerProvider, "driver" | "version" | "installedVersion">,
 ): string {
   const providerName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
   const version = provider.installedVersion ?? provider.version;
-  return version ? `${providerName} updated: ${formatVersion(version)}` : `${providerName} updated`;
+  return version ? `${providerName} 已更新：${formatVersion(version)}` : `${providerName} 已更新`;
 }
 
 // Only OpenCode reports an installed CLI apart from a running external server.
@@ -93,16 +65,13 @@ export function getProviderRestartNotice(
   return provider.updateState?.status === "succeeded" &&
     provider.installedVersion != null &&
     provider.version != null &&
-    provider.installedVersion !== provider.version
-    ? provider.updateState.message
+    provider.installedVersion !== provider.version &&
+    provider.updateState.message
+    ? formatProviderMaintenanceMessage(provider.updateState.message)
     : null;
 }
 
-function getProviderUpdatedDescription(providerCount: number): string {
-  return providerCount === 1
-    ? "New sessions will use the updated provider."
-    : "New sessions will use the updated providers.";
-}
+const providerUpdatedDescription = "新会话将使用更新后的 CLI。";
 
 function getProviderFailedUpdateTitle(
   provider: Pick<ServerProvider, "driver" | "versionAdvisory">,
@@ -110,93 +79,15 @@ function getProviderFailedUpdateTitle(
   const providerName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
   const attemptedVersion = provider.versionAdvisory?.latestVersion;
   return attemptedVersion
-    ? `${providerName} ${formatVersion(attemptedVersion)} update failed`
-    : `${providerName} update failed`;
-}
-
-export function isProviderUpdateCandidate(
-  provider: ServerProvider,
-): provider is ProviderUpdateCandidate {
-  return (
-    provider.enabled &&
-    provider.compatibilityAdvisory?.latestVersionStatus !== "broken" &&
-    provider.compatibilityAdvisory?.latestVersionStatus !== "unsupported" &&
-    provider.versionAdvisory?.status === "behind_latest" &&
-    provider.versionAdvisory.latestVersion !== null
-  );
-}
-
-export function isProviderUpdateActive(provider: Pick<ServerProvider, "updateState">): boolean {
-  return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
-}
-
-export function collectProviderUpdateCandidates(
-  providers: ReadonlyArray<ServerProvider>,
-): ProviderUpdateCandidate[] {
-  return dedupeProvidersByDriver(providers.filter(isProviderUpdateCandidate));
-}
-
-export function isProviderSettingsUpdateCandidate(
-  provider: ServerProvider,
-): provider is ProviderSettingsUpdateCandidate {
-  return (
-    provider.enabled &&
-    provider.compatibilityAdvisory?.latestVersionStatus !== "broken" &&
-    provider.compatibilityAdvisory?.latestVersionStatus !== "unsupported" &&
-    provider.versionAdvisory?.status === "behind_latest" &&
-    provider.versionAdvisory.canUpdate === true &&
-    provider.versionAdvisory.updateCommand !== null
-  );
-}
-
-export function hasOneClickUpdateProviderCandidate(
-  candidate: ProviderUpdateCandidate,
-  providers: ReadonlyArray<ServerProvider>,
-): boolean {
-  if (
-    candidate.versionAdvisory.canUpdate !== true ||
-    candidate.versionAdvisory.updateCommand === null
-  ) {
-    return false;
-  }
-
-  const driverProviders = providers.filter((provider) => provider.driver === candidate.driver);
-  if (driverProviders.length === 0) {
-    return false;
-  }
-
-  const updateCommands = new Set<string>();
-  for (const provider of driverProviders) {
-    if (!isProviderUpdateCandidate(provider)) {
-      continue;
-    }
-    const advisory = provider.versionAdvisory;
-    if (!advisory || advisory.canUpdate !== true || advisory.updateCommand === null) {
-      return false;
-    }
-    updateCommands.add(advisory.updateCommand);
-  }
-
-  return updateCommands.size === 1;
-}
-
-export function canOneClickUpdateProviderCandidate(
-  candidate: ProviderUpdateCandidate,
-  providers: ReadonlyArray<ServerProvider>,
-): boolean {
-  return (
-    !isProviderUpdateActive(candidate) && hasOneClickUpdateProviderCandidate(candidate, providers)
-  );
+    ? `${providerName} ${formatVersion(attemptedVersion)} 更新失败`
+    : `${providerName} 更新失败`;
 }
 
 function formatProviderList(providers: ReadonlyArray<Pick<ServerProvider, "driver">>) {
   const names = providers.map(
     (provider) => PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver,
   );
-  if (names.length <= 2) {
-    return names.join(" and ");
-  }
-  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+  return names.join("、");
 }
 
 export interface ProviderUpdateRun {
@@ -222,7 +113,7 @@ export function getProviderUpdateRunOutcome(
     const error = squashAtomCommandFailure(run.result);
     return {
       status: "failed",
-      line: `${label}: ${error instanceof Error ? error.message : "Provider update failed."}`,
+      line: `${label}: ${error instanceof Error ? formatProviderMaintenanceMessage(error.message) : "CLI 更新失败"}`,
     };
   }
   const provider = run.result.value.providers.find(
@@ -234,7 +125,7 @@ export function getProviderUpdateRunOutcome(
     ? { status: "updated", message: restartNotice ? `${label}: ${restartNotice}` : null }
     : {
         status: "failed",
-        line: `${label}: ${updateState?.message ?? "Provider update did not finish."}`,
+        line: `${label}: ${updateState?.message ? formatProviderMaintenanceMessage(updateState.message) : "CLI 更新未完成"}`,
       };
 }
 
@@ -262,18 +153,16 @@ export function getProviderUpdateRunToastView(runs: ReadonlyArray<ProviderUpdate
   if (failureLines.length === 0) {
     return {
       type: "success",
-      title: settled.length === 1 ? "Provider updated" : `${settled.length} providers updated`,
-      description: successMessages.join("\n") || getProviderUpdatedDescription(settled.length),
+      title: `已更新 ${settled.length} 项 CLI`,
+      description: successMessages.join("\n") || providerUpdatedDescription,
     };
   }
   return {
     type: "error",
     title:
       failureLines.length < settled.length
-        ? `${failureLines.length} of ${settled.length} provider updates failed`
-        : settled.length === 1
-          ? "Provider update failed"
-          : "Provider updates failed",
+        ? `${settled.length} 项 CLI 中有 ${failureLines.length} 项更新失败`
+        : "CLI 更新失败",
     description: [...failureLines, ...successMessages].join("\n"),
   };
 }
@@ -339,12 +228,9 @@ export function getProviderUpdateSidebarPillView(
       tone: "loading",
       title:
         activeProviders.length === 1
-          ? `Updating ${activeProviderName}`
-          : `Updating ${activeProviders.length} providers`,
-      description:
-        activeProviders.length === 1
-          ? `${formatProviderList(activeProviders)} update in progress.`
-          : `${formatProviderList(activeProviders)} updates are in progress.`,
+          ? `正在更新 ${activeProviderName}`
+          : `正在更新 ${activeProviders.length} 项 CLI`,
+      description: `${formatProviderList(activeProviders)} 正在更新。`,
     };
   }
 
@@ -370,7 +256,7 @@ export function getProviderUpdateSidebarPillView(
       title:
         failedProviders.length === 1
           ? getProviderFailedUpdateTitle(failedProvider)
-          : `${failedProviders.length} provider updates failed`,
+          : `${failedProviders.length} 项 CLI 更新失败`,
       description: getFailedProviderUpdateDescription(failedProviders),
       dismissible: true,
     });
@@ -394,11 +280,9 @@ export function getProviderUpdateSidebarPillView(
       tone: "warning",
       title:
         unchangedProviders.length === 1
-          ? `${unchangedProviderName} still needs an update`
-          : `${unchangedProviders.length} providers still need updates`,
-      description: `${formatProviderList(unchangedProviders)} ${
-        unchangedProviders.length === 1 ? "still appears" : "still appear"
-      } outdated. Review provider settings for details.`,
+          ? `${unchangedProviderName} 仍需更新`
+          : `${unchangedProviders.length} 项 CLI 仍需更新`,
+      description: `${formatProviderList(unchangedProviders)} 仍为旧版，请在供应商设置中查看详情。`,
       dismissible: true,
     });
   }
@@ -420,10 +304,10 @@ export function getProviderUpdateSidebarPillView(
       title:
         succeededProviders.length === 1
           ? getProviderUpdatedTitle(succeededProvider)
-          : `${succeededProviders.length} providers updated`,
+          : `已更新 ${succeededProviders.length} 项 CLI`,
       description:
         [...new Set(succeededProviders.map(getProviderRestartNotice).filter(Boolean))].join("\n") ||
-        getProviderUpdatedDescription(succeededProviders.length),
+        providerUpdatedDescription,
       dismissAfterVisibleMs: PROVIDER_UPDATE_SUCCESS_VISIBLE_MS,
     });
   }
@@ -455,8 +339,8 @@ function getFailedProviderUpdateDescription(providers: ReadonlyArray<ServerProvi
   if (providers.length === 1) {
     const provider = providers[0]!;
     if (provider.updateState?.message) {
-      return provider.updateState.message;
+      return formatProviderMaintenanceMessage(provider.updateState.message);
     }
   }
-  return `${formatProviderList(providers)} failed to update. Check provider settings for details.`;
+  return `${formatProviderList(providers)} 更新失败，请在供应商设置中查看详情。`;
 }

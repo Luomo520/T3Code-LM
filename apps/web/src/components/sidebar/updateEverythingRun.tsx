@@ -43,6 +43,18 @@ export function setUpdateEverythingRun(
   appAtomRegistry.update(updateEverythingRunAtom, update);
 }
 
+export function beginUpdateEverythingRun(run: UpdateEverythingRun): boolean {
+  const current = appAtomRegistry.get(updateEverythingRunAtom);
+  if (
+    current &&
+    (current.localVersion !== null || current.machines.some(({ result }) => result === null))
+  ) {
+    return false;
+  }
+  setUpdateEverythingRun(() => run);
+  return true;
+}
+
 function updateRunMachines(update: (machine: UpdateRunMachine) => UpdateRunMachine): void {
   setUpdateEverythingRun(
     (run) => run && closeFinishedUpdateRun({ ...run, machines: run.machines.map(update) }),
@@ -121,7 +133,7 @@ export function retryFailedUpdateRunServers(
           ? providerFailure
           : outcome.status === "failed"
             ? outcome.message
-            : "Could not start the update",
+            : "无法开始更新",
         { serverUpdated: outcome.status === "updated" },
       ),
     );
@@ -380,8 +392,8 @@ export function startDesktopUpdateLaunchNotice(): () => void {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Update did not apply",
-          description: `T3 Code is still on ${APP_VERSION}. Install ${notAppliedVersion} again from the update button.`,
+          title: "更新未生效",
+          description: `T3 Code 仍为 ${APP_VERSION}。请从更新入口重新安装 ${notAppliedVersion}。`,
         }),
       );
     },

@@ -98,6 +98,8 @@ export function FloatingWorkspaceDock(props: {
   readonly unselectedColor: string;
   readonly indicatorColor: string;
   readonly glassScope: DockGlassScope;
+  readonly sampleGlass: boolean;
+  readonly containerColor: string;
   readonly onNewThread?: () => void;
   readonly primaryColor: string;
   readonly primaryForeground: string;
@@ -145,6 +147,9 @@ export function FloatingWorkspaceDock(props: {
         <DockGlassBackdrop
           scope={props.glassScope}
           material="navigation"
+          surfaceColor={props.containerColor}
+          sample={props.sampleGlass}
+          contentRevision={props.selectedTab}
           borderRadius={props.height / 2}
         />
         {props.tabs.map((tab) => (

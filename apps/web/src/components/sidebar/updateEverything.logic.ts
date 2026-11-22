@@ -2,6 +2,8 @@ import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import {
   type DesktopUpdateChannel,
   type EnvironmentId,
+  type ProviderDriverKind,
+  type ProviderInstanceId,
   managedNightlyDeniedMessage,
   managedUpdatesDenial,
   type ServerConfig,
@@ -388,6 +390,10 @@ export interface UpdateRunMachine {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly updatesProviders: boolean;
+  readonly providers?: ReadonlyArray<{
+    readonly instanceId: ProviderInstanceId;
+    readonly driver: ProviderDriverKind;
+  }>;
   readonly server: ServerUpdateTarget | null;
   readonly handedOffVersion: string | null;
   readonly startedAt: number;
@@ -563,27 +569,22 @@ export function getUpdateEverythingToastView(
   readonly description?: string;
 } | null {
   const parts = [
-    result.localVersion !== null && result.localVersion === appVersion ? "this app" : null,
-    countLabel(result.updatedServers, "server"),
-    countLabel(result.updatedProviders, "provider"),
+    result.localVersion !== null && result.localVersion === appVersion ? "本机桌面端" : null,
+    result.updatedServers > 0 ? `${result.updatedServers} 台服务端` : null,
+    result.updatedProviders > 0 ? `${result.updatedProviders} 项 CLI` : null,
   ].filter((part) => part !== null);
-  const restarting =
-    result.restarting.length === 0
-      ? []
-      : [
-          `${joinList(result.restarting)} ${result.restarting.length === 1 ? "is" : "are"} still restarting.`,
-        ];
+  const restarting = result.restarting.map((label) => `${label} 正在重启并重新连接。`);
   if (result.failures.length === 0) {
     if (parts.length === 0) return null;
     return {
       type: "success",
-      title: `Updated ${joinList(parts)}`,
+      title: `已更新 ${parts.join("、")}`,
       ...(restarting.length === 0 ? {} : { description: restarting.join("\n") }),
     };
   }
   return {
     type: "error",
-    title: parts.length === 0 ? "Update failed" : `Updated ${joinList(parts)}`,
+    title: parts.length === 0 ? "更新失败" : `部分更新失败，已更新 ${parts.join("、")}`,
     description: [...result.failures, ...restarting].join("\n"),
   };
 }

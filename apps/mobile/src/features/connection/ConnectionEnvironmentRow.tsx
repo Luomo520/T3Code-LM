@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import * as Dialog from "../../components/ui/Dialog";
 import { ConnectionTraceId } from "./ConnectionTraceId";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -25,15 +26,15 @@ import { ConnectionFormField } from "./ConnectionFormField";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
 import { environmentStatusText } from "./environmentStatusText";
 
-function connectionStatusLabel(environment: ConnectedEnvironmentSummary): string | null {
+function connectionStatusLabel(environment: ConnectedEnvironmentSummary, gt: ReturnType<typeof useGT>): string {
   if (!environment.isEnabled && environment.connectionState !== "unsupported") {
-    return "Off";
+    return gt("Off");
   }
   return environmentStatusText({
     phase: environment.connectionState,
     error: environment.connectionError,
     traceId: environment.connectionErrorTraceId,
-  });
+  }, gt);
 }
 
 export function ConnectionEnvironmentRow(props: {
@@ -49,6 +50,13 @@ export function ConnectionEnvironmentRow(props: {
     updates: { readonly label: string; readonly displayUrl: string },
   ) => Promise<AtomCommandResult<unknown, unknown>>;
 }) {
+  const gt = useGT();
+  const environment = props.environment.environmentLabel;
+  const manageLabel = props.opensDetails
+    ? gt("Manage {environment}", { environment })
+    : props.expanded
+      ? gt("Collapse details for {environment}", { environment })
+      : gt("Expand details for {environment}", { environment });
   const [label, setLabel] = useState(props.environment.environmentLabel);
   const [url, setUrl] = useState(props.environment.displayUrl);
   const serverConfig = useAtomValue(
@@ -64,7 +72,7 @@ export function ConnectionEnvironmentRow(props: {
     presentation,
   );
   const enabled = props.environment.isEnabled && !unsupported;
-  const statusLabel = connectionStatusLabel(props.environment);
+  const statusLabel = connectionStatusLabel(props.environment, gt);
   const statusTraceId = enabled ? props.environment.connectionErrorTraceId : null;
   const hasConnectionFailure = enabled && props.environment.connectionError !== null;
   const freeze = enabled
@@ -85,8 +93,8 @@ export function ConnectionEnvironmentRow(props: {
     }
     const error = Cause.squash(result.cause);
     Dialog.alert(
-      "Could not update environment",
-      error instanceof Error ? error.message : "The environment could not be updated.",
+      gt("Could not update environment"),
+      error instanceof Error ? error.message : gt("The environment could not be updated."),
     );
   };
 
@@ -96,11 +104,7 @@ export function ConnectionEnvironmentRow(props: {
         <Pressable
           className="min-w-0 flex-1 gap-0.5 active:opacity-70"
           accessibilityRole="button"
-          accessibilityLabel={
-            props.opensDetails
-              ? `Manage ${props.environment.environmentLabel} 次`
-              : ` 次${props.expanded ? "Collapse" : "Expand"} details for ${props.environment.environmentLabel} 次`
-          }
+          accessibilityLabel={manageLabel}
           onPress={props.onToggle}
         >
           <View className="flex-row items-center gap-1.5">
@@ -165,7 +169,7 @@ export function ConnectionEnvironmentRow(props: {
         </Pressable>
 
         <ThemedSwitch
-          accessibilityLabel={`Enable ${props.environment.environmentLabel} 次`}
+          accessibilityLabel={gt("Enable {environment}", { environment })}
           style={{ alignSelf: "center" }}
           disabled={unsupported && !canRetry}
           onValueChange={(next) => props.onSetEnabled(props.environment.environmentId, next)}
@@ -173,11 +177,7 @@ export function ConnectionEnvironmentRow(props: {
         />
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={
-            props.opensDetails
-              ? `Manage ${props.environment.environmentLabel} 次`
-              : ` 次${props.expanded ? "Collapse" : "Expand"} details for ${props.environment.environmentLabel} 次`
-          }
+          accessibilityLabel={manageLabel}
           onPress={props.onToggle}
           style={{
             minWidth: 44,

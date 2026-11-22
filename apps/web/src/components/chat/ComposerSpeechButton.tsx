@@ -1,3 +1,4 @@
+import { localizeInterfaceText } from "~/i18n/runtime";
 import type { VoiceInputState } from "@t3tools/client-runtime/voice-input";
 import { CheckIcon, MicIcon, XIcon } from "lucide-react";
 import { useEffect, useState, type PointerEvent, type ReactElement } from "react";
@@ -97,7 +98,7 @@ export function ComposerSpeechButton(props: {
   onStart(): void;
 }) {
   if (props.state.phase !== "idle") return null;
-  const label = "Start voice input";
+  const label = localizeInterfaceText("Start voice input");
 
   return (
     <ShortcutTooltip label={label} shortcut={props.shortcutLabel}>

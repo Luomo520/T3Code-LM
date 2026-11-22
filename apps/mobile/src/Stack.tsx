@@ -1,3 +1,4 @@
+import { I18nProvider, useGT } from "./i18n/I18nProvider";
 import { isDraftThreadRoute } from "./features/threads/thread-route-state";
 import { ComponentCatalogScreen } from "./features/development/ComponentCatalogScreen";
 import { PullRequestGuideStopScreen } from "./features/pull-requests/guide/PullRequestGuideScreen";
@@ -767,16 +768,17 @@ function GuardedScreenLayout(props: {
 }
 
 function ScreenRenderFallback(props: RenderFailureProps & { readonly routeName: string }) {
+  const gt = useGT();
   const navigation = useNavigation();
   const exit = navigation.canGoBack()
-    ? { label: "返回", onPress: () => navigation.goBack() }
+    ? { label: gt("Back"), onPress: () => navigation.goBack() }
     : props.routeName === "Home"
       ? // Home itself failed, and the Settings list renders inside it; open a Settings page.
         {
-          label: "Open settings",
+          label: gt("Open settings"),
           onPress: () => openSettings(navigation, DEFAULT_SETTINGS_PAGE),
         }
-      : { label: "Return home", onPress: () => navigation.dispatch(StackActions.replace("Home")) };
+      : { label: gt("Return home"), onPress: () => navigation.dispatch(StackActions.replace("Home")) };
 
   return <RenderFailureView {...props} exit={exit} />;
 }
@@ -795,20 +797,22 @@ export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navig
 
   /* oxlint-disable react/no-unstable-nested-components -- React Navigation invokes screenLayout as a render callback. */
   return (
-    <Navigator
-      screenLayout={(props) => <GuardedScreenLayout {...props} />}
-      screenOptions={({ route, navigation }) =>
-        Platform.OS === "android"
-          ? {
-              animation: androidWorkspaceDestinationAnimation(
-                route,
-                navigation.getState().routes,
-                usesSplitView,
-              ),
-            }
-          : {}
-      }
-    />
+    <I18nProvider>
+      <Navigator
+        screenLayout={(props) => <GuardedScreenLayout {...props} />}
+        screenOptions={({ route, navigation }) =>
+          Platform.OS === "android"
+            ? {
+                animation: androidWorkspaceDestinationAnimation(
+                  route,
+                  navigation.getState().routes,
+                  usesSplitView,
+                ),
+              }
+            : {}
+        }
+      />
+    </I18nProvider>
   );
 
   /* oxlint-enable react/no-unstable-nested-components */

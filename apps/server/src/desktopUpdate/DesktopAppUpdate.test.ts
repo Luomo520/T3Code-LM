@@ -57,7 +57,7 @@ function report(
 interface HarnessOptions {
   readonly mode?: "web" | "desktop";
   readonly controlFd?: number | undefined;
-  readonly reports?: (requestId: string) => readonly DesktopUpdateStatusReport[];
+  readonly reports?: (requestId: string, attempt: number) => readonly DesktopUpdateStatusReport[];
   readonly keepOpen?: boolean;
 }
 
@@ -66,7 +66,9 @@ const makeHarness = Effect.fn("test.make_desktop_app_update_harness")(function* 
 ) {
   const fs = yield* FileSystem.FileSystem;
   const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-desktop-app-update-test-" });
-  const requestIdDeferred = yield* Deferred.make<string>();
+  let requestIdDeferred = yield* Deferred.make<string>();
+  const requested: string[] = [];
+  const cancelled: string[] = [];
   const baseConfig = yield* ServerConfig.ServerConfig.pipe(
     Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
   );
@@ -78,31 +80,40 @@ const makeHarness = Effect.fn("test.make_desktop_app_update_harness")(function* 
       : { desktopTelemetryControlFd: 5 }),
   };
   const reportsForRun = options.reports ?? (() => []);
-  const changes = Stream.unwrap(
-    Deferred.await(requestIdDeferred).pipe(
-      Effect.map((requestId) => {
-        const emitted = Stream.fromIterable(reportsForRun(requestId));
-        return options.keepOpen ? Stream.concat(emitted, Stream.never) : emitted;
-      }),
-    ),
-  );
 
   const service = yield* DesktopAppUpdate.make().pipe(
     Effect.provide(
       Layer.mergeAll(
         DesktopTelemetryReceiver.layerTest({
           requestDesktopUpdate: (requestId) =>
-            Deferred.succeed(requestIdDeferred, requestId).pipe(Effect.asVoid),
-          desktopUpdates: Effect.succeed({
+            Effect.sync(() => void requested.push(requestId)).pipe(
+              Effect.andThen(Deferred.succeed(requestIdDeferred, requestId)),
+              Effect.asVoid,
+            ),
+          cancelDesktopUpdate: (requestId) =>
+            Effect.gen(function* () {
+              cancelled.push(requestId);
+              requestIdDeferred = yield* Deferred.make<string>();
+            }),
+          desktopUpdates: Effect.sync(() => ({
             latest: Option.none<DesktopUpdateStatusReport>(),
-            changes,
-          }),
+            changes: Stream.unwrap(
+              Deferred.await(requestIdDeferred).pipe(
+                Effect.map((requestId) => {
+                  const emitted = Stream.fromIterable(
+                    reportsForRun(requestId, requested.indexOf(requestId) + 1),
+                  );
+                  return options.keepOpen ? Stream.concat(emitted, Stream.never) : emitted;
+                }),
+              ),
+            ),
+          })),
         }),
         ServerConfig.layer(config),
       ),
     ),
   );
-  return { service };
+  return { service, requested, cancelled };
 });
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("desktop app update", (it) => {
@@ -140,6 +151,41 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("desktop app upda
       const retry = yield* service.run(() => Effect.void).pipe(Effect.flip);
       expect(retry.reason).not.toBe("A desktop app update is already in progress.");
     }),
+  );
+
+  it.effect.each(["1.2.5", null])(
+    "cancels a prepared update with downloaded version %s and permits a matching retry",
+    (mismatchedVersion) =>
+      Effect.gen(function* () {
+        const confirmedVersion = "1.2.4";
+        const { service, requested, cancelled } = yield* makeHarness({
+          reports: (requestId, attempt) => [
+            report(
+              requestId,
+              makeState({
+                status: "downloaded",
+                availableVersion: confirmedVersion,
+                downloadedVersion: attempt === 1 ? mismatchedVersion : confirmedVersion,
+              }),
+              { outcome: "ready-to-install" },
+            ),
+          ],
+        });
+
+        const rejected = yield* service
+          .run(() => Effect.void, undefined, confirmedVersion)
+          .pipe(Effect.flip);
+        expect(rejected.reason).toContain(confirmedVersion);
+        expect(cancelled).toEqual([requested[0]]);
+
+        const prepared = yield* service.run(() => Effect.void, undefined, confirmedVersion);
+        expect(prepared).toEqual({
+          targetVersion: confirmedVersion,
+          method: "desktop-app",
+          desktopUpdateToken: requested[1],
+        });
+        expect(prepared.desktopUpdateToken).not.toBe(cancelled[0]);
+      }),
   );
 
   it.effect("succeeds without an install when a track switch finds the host current", () =>

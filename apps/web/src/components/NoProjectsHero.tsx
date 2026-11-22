@@ -21,24 +21,27 @@ export function NoProjectsHero() {
     <SidebarInset
       {...contentArea}
       role="main"
+      data-miuix-home=""
       className="h-dvh min-h-0 overflow-hidden overscroll-y-none"
     >
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         {/* The desktop window only moves where CSS opts in, so keep a titlebar strip. */}
-        <WorkspacePageHeader electron={isElectron}>
+        <WorkspacePageHeader data-miuix-home-header="" electron={isElectron}>
           <div className="min-w-3 flex-1" />
           <HomeHeaderUsageStats />
         </WorkspacePageHeader>
         <Empty size="hero" className="flex-1">
-          <div className="w-full max-w-lg px-8 py-12">
+          <div data-miuix-home-card="" className="w-full max-w-lg px-4 py-8 sm:px-8 sm:py-12">
             <EmptyHeader className="max-w-none">
-              <EmptyTitle>What should we work on?</EmptyTitle>
+              <EmptyTitle data-miuix-home-title="" role="heading" aria-level={1}>
+                What should we work on?
+              </EmptyTitle>
               <EmptyDescription>
                 {scratchTargetEnvironmentId === null
                   ? "Add a project to start your first thread."
                   : "Add a project, or start without one."}
               </EmptyDescription>
-              <div className="mt-6 flex justify-center gap-2">
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
                 <Button size="sm" onClick={() => openCommandPalette({ open: "add-project" })}>
                   <PlusIcon className="size-4" />
                   Add project

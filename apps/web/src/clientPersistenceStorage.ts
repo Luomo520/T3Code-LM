@@ -1,4 +1,10 @@
-import { ClientSettingsSchema, type ClientSettings } from "@t3tools/contracts";
+import {
+  ClientSettingsSchema,
+  DEFAULT_CLIENT_SETTINGS,
+  type ClientSettings,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
 
@@ -8,12 +14,24 @@ function hasWindow(): boolean {
   return typeof window !== "undefined";
 }
 
-export function readBrowserClientSettings(): ClientSettings | null {
+export function readBrowserClientSettings(
+  readLegacyLanguage?: () => string | undefined,
+): ClientSettings | null {
   if (!hasWindow()) {
     return null;
   }
 
-  return getLocalStorageItem(CLIENT_SETTINGS_STORAGE_KEY, ClientSettingsSchema);
+  const schema = readLegacyLanguage
+    ? Schema.Struct({
+        ...ClientSettingsSchema.fields,
+        language: Schema.String.pipe(
+          Schema.withDecodingDefault(
+            Effect.sync(() => readLegacyLanguage() ?? DEFAULT_CLIENT_SETTINGS.language),
+          ),
+        ),
+      })
+    : ClientSettingsSchema;
+  return getLocalStorageItem(CLIENT_SETTINGS_STORAGE_KEY, schema);
 }
 
 export function writeBrowserClientSettings(settings: ClientSettings): void {

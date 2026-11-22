@@ -68,7 +68,18 @@
     "Zoom": "缩放",
     "Zoom In": "放大",
     "Zoom Out": "缩小",
-    "↑ Drag T3 Code into the list above": "↑ 将 T3 Code 拖到上方列表中"
+    "↑ Drag T3 Code into the list above": "↑ 将 T3 Code 拖到上方列表中",
+    "1 thread with new notifications": "1 个会话有新通知",
+    "Checking for a newer version…": "正在检查是否有新版本…",
+    "Close Developer Tools": "关闭开发者工具",
+    "Copy details": "复制详情",
+    "Copy Email Address": "复制电子邮件地址",
+    "Get a different version from the releases page.": "可在发布页面下载其他版本。",
+    "Logs:": "日志：",
+    "Open releases": "打开发布页面",
+    "Quit": "退出",
+    "The server wrote no output.": "服务端没有输出日志。",
+    "Your organization's managed policy stopped T3 Code from starting. Send the details below to your IT administrator.": "组织的管理策略阻止了 T3 Code 启动。请将下面的详情提供给 IT 管理员。"
   },
   "templates": {
     "About {0}": "关于 {0}",
@@ -79,6 +90,13 @@
     "Set up {0}": "设置{0}",
     "Stage: {0}": "阶段：{0}",
     "T3 Code {0} is currently the newest version available.": "T3 Code {0} 当前已是最新版本。",
-    "{0} threads with new notifications": "{0} 个任务有新通知"
+    "{0} threads with new notifications": "{0} 个会话有新通知",
+    "Download {0}": "下载 {0}",
+    "Version {0} is available. It can contain a fix.": "可更新到 {0}，新版本可能已修复此问题。",
+    "Update to {0}": "更新到 {0}",
+    "Downloading {0}. T3 Code restarts when the download is done.": "正在下载 {0}。下载完成后，T3 Code 将重启。",
+    "Downloading {0} ({1}%). T3 Code restarts when the download is done.": "正在下载 {0}（{1}%）。下载完成后，T3 Code 将重启。",
+    "Version {0} started correctly on this computer. Download it and install it to go back.": "版本 {0} 曾在此电脑上成功启动。下载并安装此版本即可回退。",
+    "Version {0}. T3 Code tries again in the background.": "当前版本为 {0}。T3 Code 会在后台重试。"
   }
 }

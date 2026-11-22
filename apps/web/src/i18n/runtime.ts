@@ -3,8 +3,11 @@ import { getTranslationsSnapshot } from "gt-react";
 
 import {
   getClientSettings,
+  getClientSettingsHydratedSnapshot,
   subscribeClientSettings,
+  subscribeClientSettingsHydration,
   updateClientSettings,
+  whenClientSettingsWritesSettled,
 } from "../hooks/useSettings";
 import { initializeI18n } from "./initializeI18n";
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";
@@ -21,6 +24,24 @@ const pendingLoads = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
 let snapshot: I18nSnapshot = { locale: DEFAULT_LOCALE, translations: { ...loadedTranslations } };
 let requestedLocale = DEFAULT_LOCALE;
+
+type LegacyLocale = "en" | "zh-CN";
+type LegacyLocalization = {
+  followClientSettings(request: (value: LegacyLocale | "system") => void): void;
+  syncClientLocale(value: LegacyLocale): void;
+  t(value: string): string;
+};
+
+function legacyLocalization(): LegacyLocalization | undefined {
+  return typeof window === "undefined"
+    ? undefined
+    : (window as Window & { __t3zh?: LegacyLocalization }).__t3zh;
+}
+
+// 只在已知是应用文案的显示入口调用，例如诊断模型的标题与操作步骤。
+export function localizeInterfaceText(value: string): string {
+  return legacyLocalization()?.t(value) ?? value;
+}
 
 function loadLocale(locale: string): Promise<void> {
   if (locale in loadedTranslations) return Promise.resolve();
@@ -51,14 +72,26 @@ function activateLocale(locale: string): void {
 }
 
 function applyLanguageSetting(): void {
-  // Not desktopBridge.getSystemLocale(): that is the regional/time locale, not the UI language.
-  requestedLocale = resolveLocale(
-    getClientSettings().language,
-    navigator.languages,
+  const preference = getClientSettings().language;
+  const desktopLanguages =
+    preference === "system" ? window.desktopBridge?.getPreferredSystemLanguages?.() : undefined;
+  const locale = resolveLocale(
+    preference,
+    desktopLanguages?.length ? desktopLanguages : navigator.languages,
     SUPPORTED_LOCALES,
     DEFAULT_LOCALE,
   );
+  requestedLocale = locale;
   void whenLocaleReady();
+  if (getClientSettingsHydratedSnapshot()) {
+    queueMicrotask(() => {
+      void whenClientSettingsWritesSettled().then(() => {
+        if (requestedLocale === locale) {
+          legacyLocalization()?.syncClientLocale(locale === "zh" ? "zh-CN" : "en");
+        }
+      });
+    });
+  }
 }
 
 /** GT's own locale setters write the saved setting, which stays the only source of truth. */
@@ -68,6 +101,10 @@ export function persistGTLocale(locale: string): void {
 
 export function startI18n(): void {
   initializeI18n(persistGTLocale);
+  legacyLocalization()?.followClientSettings((locale) =>
+    persistGTLocale(locale === "zh-CN" ? "zh" : locale),
+  );
+  subscribeClientSettingsHydration(applyLanguageSetting);
   subscribeClientSettings(applyLanguageSetting);
   applyLanguageSetting();
 }

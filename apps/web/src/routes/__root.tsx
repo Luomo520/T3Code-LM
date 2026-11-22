@@ -48,7 +48,11 @@ import {
 } from "@t3tools/client-runtime/state/project-grouping";
 import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
-import { resolveInitialServerAuthGateState } from "../environments/primary";
+import {
+  primaryEnvironmentAuthFailureSummary,
+  resolveInitialServerAuthGateState,
+} from "../environments/primary";
+import { localizeInterfaceText } from "../i18n/runtime";
 import { GUEST_PAGE_PATH } from "../guestPage";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
@@ -282,6 +286,9 @@ function CopyErrorButton({ report }: { report: string }) {
 }
 
 function errorMessage(error: unknown): string {
+  const summary = primaryEnvironmentAuthFailureSummary(error);
+  if (summary !== null) return localizeInterfaceText(summary);
+
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }

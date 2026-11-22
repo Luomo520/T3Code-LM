@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -11,6 +12,7 @@ import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import { ChevronRightIcon } from "lucide-react";
 
+import { localizeInterfaceText } from "../../i18n/runtime";
 import { APP_VERSION } from "~/branding";
 import { environmentCatalog } from "~/connection/catalog";
 import { type EnvironmentPresentation, useRelayEnvironmentDiscovery } from "~/state/environments";
@@ -57,7 +59,8 @@ export function ConnectionDiagnosisHeadline({
 }: {
   readonly environment: EnvironmentPresentation;
 }) {
-  return useConnectionDiagnosis(environment).diagnosis?.headline ?? null;
+  const headline = useConnectionDiagnosis(environment).diagnosis?.headline;
+  return headline ? localizeInterfaceText(headline) : null;
 }
 
 const HOP_MARK = { ok: "✓", failed: "✕", unchecked: "–" } as const;
@@ -65,12 +68,16 @@ const HOP_NOTE = { ok: "", failed: "Failed", unchecked: "Not checked" } as const
 
 /** Ticks once per second, and only while a retry is scheduled, so the list around it does not re-render. */
 function RetryCountdown({ retryAt }: { readonly retryAt: number }) {
-  return useDeadlinePassed(retryAt) ? "retrying" : <RetryCountdownTicker retryAt={retryAt} />;
+  const gt = useGT();
+  return useDeadlinePassed(retryAt) ? gt("Retrying…") : <RetryCountdownTicker retryAt={retryAt} />;
 }
 
 function RetryCountdownTicker({ retryAt }: { readonly retryAt: number }) {
+  const gt = useGT();
   const seconds = Math.ceil((retryAt - useNowSecond()) / 1_000);
-  return <>{seconds > 0 ? `retrying in ${seconds}s` : "retrying"}</>;
+  return seconds > 0
+    ? gt("Retrying in {seconds, plural, one {# second} other {# seconds}}", { seconds })
+    : gt("Retrying…");
 }
 
 /** The collapsed failure: the full headline, then the retry state and a Details toggle. */
@@ -87,13 +94,14 @@ export function ConnectionDiagnosisSummary({
   readonly expanded: boolean;
   readonly onToggle: () => void;
 }) {
+  const gt = useGT();
   return (
     <div className="text-xs">
-      <p className="text-destructive">{diagnosis.headline}</p>
+      <p className="text-destructive">{localizeInterfaceText(diagnosis.headline)}</p>
       <p className="flex flex-wrap items-center gap-1 text-muted-foreground">
         {retryAt !== null ? <RetryCountdown retryAt={retryAt} /> : null}
         {retryAt !== null && attempt > 0 ? <span aria-hidden>·</span> : null}
-        {attempt > 0 ? <span>attempt {attempt}</span> : null}
+        {attempt > 0 ? <span>{gt("Attempt {attempt}", { attempt })}</span> : null}
         {retryAt !== null || attempt > 0 ? <span aria-hidden>·</span> : null}
         <button
           type="button"
@@ -152,7 +160,9 @@ export function ConnectionDiagnosisPanel({
             <span aria-hidden className="w-3 text-center">
               {HOP_MARK[hop.result]}
             </span>
-            <span className={cn(hop.result === "ok" && "text-foreground")}>{hop.label}</span>
+            <span className={cn(hop.result === "ok" && "text-foreground")}>
+              {localizeInterfaceText(hop.label)}
+            </span>
             <span>{HOP_NOTE[hop.result]}</span>
           </li>
         ))}
@@ -161,7 +171,7 @@ export function ConnectionDiagnosisPanel({
         <p className="font-medium text-foreground">What to try</p>
         <ol className="list-decimal pl-4 text-muted-foreground">
           {diagnosis.steps.map((step) => (
-            <li key={step}>{step}</li>
+            <li key={step}>{localizeInterfaceText(step)}</li>
           ))}
         </ol>
         {diagnosis.moreInfoUrl ? (
@@ -178,7 +188,7 @@ export function ConnectionDiagnosisPanel({
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 font-mono text-muted-foreground">
         {diagnosis.facts.map(([label, value]) => (
           <div key={label} className="contents">
-            <dt>{label}</dt>
+            <dt>{localizeInterfaceText(label)}</dt>
             <dd className="break-all text-foreground">{value}</dd>
           </div>
         ))}

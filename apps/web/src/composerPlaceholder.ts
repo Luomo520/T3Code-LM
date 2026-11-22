@@ -1,1 +1,5 @@
-export const DEFAULT_COMPOSER_PLACEHOLDER = "Ask anything. @ files, $ skills, / commands";
+import { localizeInterfaceText } from "./i18n/runtime";
+
+export function getDefaultComposerPlaceholder() {
+  return localizeInterfaceText("Ask anything. @ files, $ skills, / commands");
+}

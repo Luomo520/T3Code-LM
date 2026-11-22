@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
@@ -16,7 +17,6 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import {
   NAVIGATION_TAB_ICONS,
-  WORKSPACE_TAB_LABELS,
   useNavigationTabOrder,
   useHiddenNavigationTabs,
   useEnabledNavigationTabs,
@@ -26,6 +26,12 @@ import { SettingsSection } from "./components/SettingsSection";
 import { resolveWorkspaceTabOrder } from "../layout/workspace/workspace-tabs-state";
 
 export function SettingsNavigationRouteScreen() {
+  const gt = useGT();
+  const tabLabels = {
+    threads: Platform.OS === "ios" ? gt("Chats") : gt("Threads"),
+    pullRequests: Platform.OS === "ios" ? gt("PRs") : gt("Pulls"),
+    usage: gt("Usage"),
+  };
   const insets = useSafeAreaInsets();
   const order = useNavigationTabOrder();
   const { layout } = useAdaptiveWorkspaceLayout();
@@ -37,7 +43,7 @@ export function SettingsNavigationRouteScreen() {
   const ready = customizable && AsyncResult.isSuccess(preferences) && !preferences.waiting;
   const save = useAtomSet(updateMobilePreferencesAtom);
   return (
-    <SettingsScreen title="Navigation tabs">
+    <SettingsScreen title={gt("Navigation tabs")}>
       <ScreenScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentContainerClassName="gap-4 px-5 pt-4"
@@ -45,10 +51,14 @@ export function SettingsNavigationRouteScreen() {
       >
         <Text className="px-2 text-sm text-foreground-muted">
           {customizable
-            ? "Phones show the first four enabled sections; Android tablet rails show all enabled sections. Remaining sections appear at the top of Settings. Hidden sections appear only here. Settings always stays last. Saved on this device."
-            : "Tab customization becomes available when there are six sections, including Settings."}
+            ? gt(
+                "Phones show the first four enabled sections; Android tablet rails show all enabled sections. Remaining sections appear at the top of Settings. Hidden sections appear only here. Settings always stays last. Saved on this device.",
+              )
+            : gt(
+                "Tab customization becomes available when there are six sections, including Settings.",
+              )}
         </Text>
-        <SettingsSection title="Tab order">
+        <SettingsSection title={gt("Tab order")}>
           {order.map((tab, index) => (
             <View key={tab} className="flex-row items-center gap-3 px-4 py-3">
               <SymbolView
@@ -57,18 +67,22 @@ export function SettingsNavigationRouteScreen() {
                 tintColorClassName="accent-icon"
               />
               <View className="flex-1">
-                <Text>{WORKSPACE_TAB_LABELS[tab]}</Text>
+                <Text>{tabLabels[tab]}</Text>
                 <Text className="text-xs text-foreground-muted">
                   {hidden.includes(tab)
-                    ? "Hidden"
+                    ? gt("Hidden")
                     : enabled.indexOf(tab) < capacity
-                      ? `Tab ${enabled.indexOf(tab) + 1}`
-                      : "In Settings"}
+                      ? gt("Tab {position}", { position: enabled.indexOf(tab) + 1 })
+                      : gt("In Settings")}
                 </Text>
               </View>
               <IconButton
                 icon={hidden.includes(tab) ? "eye.slash" : "eye"}
-                accessibilityLabel={`${hidden.includes(tab) ? "Show" : "Hide"} ${WORKSPACE_TAB_LABELS[tab]}`}
+                accessibilityLabel={
+                  hidden.includes(tab)
+                    ? gt("Show {tab}", { tab: tabLabels[tab] })
+                    : gt("Hide {tab}", { tab: tabLabels[tab] })
+                }
                 disabled={!ready}
                 onPress={() =>
                   save({
@@ -83,7 +97,7 @@ export function SettingsNavigationRouteScreen() {
               />
               <IconButton
                 icon="arrow.up"
-                accessibilityLabel={`Move ${WORKSPACE_TAB_LABELS[tab]} up`}
+                accessibilityLabel={gt("Move {tab} up", { tab: tabLabels[tab] })}
                 disabled={!ready || index === 0}
                 onPress={() =>
                   save({
@@ -99,7 +113,7 @@ export function SettingsNavigationRouteScreen() {
               />
               <IconButton
                 icon="arrow.down"
-                accessibilityLabel={`Move ${WORKSPACE_TAB_LABELS[tab]} down`}
+                accessibilityLabel={gt("Move {tab} down", { tab: tabLabels[tab] })}
                 disabled={!ready || index === order.length - 1}
                 onPress={() =>
                   save({
@@ -117,7 +131,7 @@ export function SettingsNavigationRouteScreen() {
           ))}
         </SettingsSection>
         <Button
-          label="Reset tabs"
+          label={gt("Reset tabs")}
           tone="text"
           disabled={!ready}
           onPress={() => save({ navigationTabOrder: [], hiddenNavigationTabs: [] })}

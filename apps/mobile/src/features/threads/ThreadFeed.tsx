@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import { Button } from "../../components/ui/Button";
 import { PendingMessageDelivery } from "./PendingMessageDelivery";
 import * as Dialog from "../../components/ui/Dialog";
@@ -2819,6 +2820,7 @@ const THREAD_FEED_MAINTAIN_SCROLL_AT_END = {
 } as const;
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+  const gt = useGT();
   const { listRef, onIsAtEndChange, onHeaderMaterialVisibilityChange } = props;
   const feedThreadKey = scopedThreadKey(props.environmentId, props.threadId);
   const workflowOpening = useWorkflowOpening(props.detailRef);
@@ -3949,7 +3951,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             info.item.message.projectedItem?.item.type === "user_message" &&
             info.item.message.projectedItem.item.freshContext ? (
               <ThreadContextDivider
-                label="New session"
+                label={gt("New session")}
                 icon="arrow.clockwise"
                 iconColor={iconSubtleColor}
               />
@@ -4122,8 +4124,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             style={[StyleSheet.absoluteFill, { left: contentLeftInset, right: contentRightInset }]}
           >
             <ThreadFeedPlaceholder
-              title="尚无对话"
-              detail="Ask the agent to inspect the repo, run a command, or continue the active thread."
+              title={gt("No messages yet")}
+              detail={gt("Ask the agent to inspect the repo, run a command, or continue the active thread.")}
               topInset={topContentInset}
               bottomInset={bottomContentInset}
               horizontalPadding={horizontalPadding}
@@ -4138,6 +4140,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
 });
 
 function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
+  const gt = useGT();
   const theme = useUniwindTheme();
   const mutedColor = theme["--color-icon-subtle"];
   if (!props.hasMoreHistory && props.error === null) {
@@ -4148,9 +4151,9 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
       {props.hasMoreHistory ? (
         <View className="self-center">
           <Button
-            label={props.loading ? "Loading earlier activity…" : "加载更早的活动"}
+            label={props.loading ? gt("Loading earlier activity…") : gt("Load earlier activity")}
             tone="secondary"
-            accessibilityLabel="加载更早的活动"
+            accessibilityLabel={gt("Load earlier activity")}
             disabled={props.loading}
             onPress={props.onLoadEarlier}
             icon="chevron.up"

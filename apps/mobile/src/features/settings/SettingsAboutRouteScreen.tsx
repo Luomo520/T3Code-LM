@@ -17,7 +17,7 @@ import {
   runAppUpdateCheck,
 } from "../updates/app-updates";
 import { useWorkspaceEnvironments } from "../../state/workspace";
-import { AndroidAppUpdateSection } from "./components/AndroidAppUpdateSection";
+import { AndroidUpdateCenter } from "./components/AndroidUpdateCenter";
 import { EnvironmentServerUpdateRows } from "./components/EnvironmentServerUpdateRows";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -38,9 +38,9 @@ export function SettingsAboutRouteScreen() {
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        {Platform.OS === "android" ? <AndroidUpdateCenter /> : null}
         <AppSettingsSection />
-        <AndroidAppUpdateSection checkOnOpen />
-        {connectedEnvironments.length > 0 ? (
+        {Platform.OS !== "android" && connectedEnvironments.length > 0 ? (
           <SettingsSection title="服务端">
             {connectedEnvironments.map((environment) => (
               <EnvironmentServerUpdateRows
@@ -84,7 +84,7 @@ function AppSettingsSection() {
     await settlePromise(() =>
       runAppUpdateCheck({
         applyMode: "immediate",
-        onFailure: (message) => Dialog.alert("Update failed", message),
+        onFailure: (message) => Dialog.alert("更新失败", message),
         onStateChange: (state) =>
           setCheckState({
             state,
@@ -144,7 +144,7 @@ function AppSettingsSection() {
       <SettingsRow icon="doc.text" label="法律信息" fullScreenTarget="SettingsLegal" />
       {updateCheckAvailable ? (
         <Pressable
-          accessibilityLabel={`Version ${versionLabel}`}
+          accessibilityLabel={`版本 ${versionLabel}`}
           accessibilityRole="text"
           disabled={busy}
           onPress={handleVersionPress}

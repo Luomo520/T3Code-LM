@@ -1,9 +1,15 @@
-import { themeColorWithAlpha } from "../../../lib/mobileTheme";
+import { themeColorWithContrast } from "../../../lib/mobileTheme";
+import { androidHomeTheme } from "../../home/androidHomeTheme";
 import { FloatingWorkspaceDock } from "./FloatingWorkspaceDock";
 import { type DockGlassScope } from "../../../components/ui/DockGlass";
 import { selectedNavigationTab, visibleNavigationTabs } from "./navigation-tab-order";
 import { requireNativeView } from "expo";
-import { CommonActions, useFocusEffect, useNavigation } from "@react-navigation/native";
+import {
+  CommonActions,
+  useFocusEffect,
+  useIsFocused,
+  useNavigation,
+} from "@react-navigation/native";
 import {
   Keyboard,
   processColor,
@@ -32,11 +38,7 @@ import { useAdaptiveWorkspaceLayout } from "../adaptive-workspace-context";
 import { useAndroidWorkspaceRoot } from "./AndroidWorkspaceTabsProvider";
 import { useNavigationTabOrder, useHiddenNavigationTabs } from "./navigation-tabs";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
-import {
-  FLOATING_TABS,
-  floatingDockBottomClearance,
-  floatingDockMetrics,
-} from "./floating-workspace-tabs";
+import { FLOATING_TABS, floatingDockMetrics } from "./floating-workspace-tabs";
 
 // Matches RAIL_WIDTH in the native rail.
 export const ANDROID_WORKSPACE_RAIL_WIDTH = 72;
@@ -87,13 +89,14 @@ export function AndroidWorkspaceNavigation(props: {
   const hidden = useHiddenNavigationTabs();
   const root = useAndroidWorkspaceRoot();
   const navigation = useNavigation();
+  const focused = useIsFocused();
   const insets = useSafeAreaInsets();
   const toolbar = useToolbarLayout();
   const connectionState = useWorkspaceConnectionState();
   const keyboardVisible = useSoftKeyboardShowing();
   useFocusEffect(refreshSoftKeyboardShowing);
   const { layout } = useAdaptiveWorkspaceLayout();
-  const { themeAppearance, themeVariables: colors } = useAppearancePreferences();
+  const { themeId, themeAppearance, themeVariables: colors } = useAppearancePreferences();
   const { scale, fabSize } = useAndroidControlSizing();
   const window = useWindowDimensions();
   const rail = Boolean(props.rail);
@@ -102,8 +105,19 @@ export function AndroidWorkspaceNavigation(props: {
     ...visibleNavigationTabs(order, hidden, rail ? 5 : 4),
     "settings",
   ];
-  const { containerColor, indicatorColor, selectedColor, unselectedColor } =
-    androidWorkspaceNavigationColors(colors, rail, floating);
+  const baseColors = androidWorkspaceNavigationColors(colors, rail, floating);
+  const homeTheme = floating ? androidHomeTheme(themeId, themeAppearance) : undefined;
+  const { containerColor, indicatorColor, selectedColor, unselectedColor } = homeTheme
+    ? {
+        containerColor: homeTheme["--color-grouped-card"],
+        indicatorColor: homeTheme["--color-thread-selected"],
+        selectedColor: themeColorWithContrast(homeTheme["--color-primary"], [
+          homeTheme["--color-thread-selected"],
+          homeTheme["--color-grouped-card"],
+        ]),
+        unselectedColor: homeTheme["--color-foreground"],
+      }
+    : baseColors;
   const selectedTab = selectedNavigationTab(
     order,
     workspace.state.selectedTab,
@@ -145,6 +159,8 @@ export function AndroidWorkspaceNavigation(props: {
         unselectedColor={unselectedColor}
         indicatorColor={indicatorColor}
         glassScope={props.glassScope ?? "workspace"}
+        sampleGlass={focused}
+        containerColor={containerColor}
         onNewThread={
           showCompose
             ? () => {
@@ -153,8 +169,8 @@ export function AndroidWorkspaceNavigation(props: {
               }
             : undefined
         }
-        primaryColor={colors["--color-primary"]}
-        primaryForeground={colors["--color-primary-foreground"]}
+        primaryColor={(homeTheme ?? colors)["--color-primary"]}
+        primaryForeground={(homeTheme ?? colors)["--color-primary-foreground"]}
       />
     );
   }
@@ -199,8 +215,6 @@ export function FloatingWorkspaceTabs(props: {
   readonly onSelect?: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { fabSize } = useAndroidControlSizing();
-  const { themeVariables: colors } = useAppearancePreferences();
   const keyboardVisible = useSoftKeyboardShowing();
   useFocusEffect(refreshSoftKeyboardShowing);
   if (keyboardVisible) return null;
@@ -219,17 +233,6 @@ export function FloatingWorkspaceTabs(props: {
         alignItems: "center",
       }}
     >
-      <View
-        pointerEvents="none"
-        style={{
-          position: "absolute",
-          height: floatingDockBottomClearance(insets.bottom, fabSize),
-          left: 0,
-          right: 0,
-          bottom: 0,
-          experimental_backgroundImage: `linear-gradient(to bottom, ${themeColorWithAlpha(colors["--color-screen"], 0)} 0%, ${colors["--color-screen"]} 26%, ${colors["--color-screen"]} 100%)`,
-        }}
-      />
       <AndroidWorkspaceNavigation {...props} floating />
     </View>
   );

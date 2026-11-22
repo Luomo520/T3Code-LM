@@ -1,3 +1,4 @@
+import type { useGT } from "../../i18n/I18nProvider";
 import type { VoiceInputState } from "@t3tools/client-runtime/voice-input";
 
 export type VoiceComposerPresentation = {
@@ -12,6 +13,7 @@ export type VoiceComposerPresentation = {
 export function resolveVoiceComposerPresentation(
   state: VoiceInputState,
   elapsedSeconds: number,
+  gt: ReturnType<typeof useGT>,
 ): VoiceComposerPresentation {
   switch (state.phase) {
     case "idle":
@@ -38,7 +40,7 @@ export function resolveVoiceComposerPresentation(
         trailingAction: "confirm",
         showsSend: false,
         statusKind: "active",
-        statusLabel: "Preparing",
+        statusLabel: gt("Preparing"),
         confirmationEnabled: false,
       };
     case "recording": {
@@ -48,7 +50,9 @@ export function resolveVoiceComposerPresentation(
         trailingAction: "confirm",
         showsSend: false,
         statusKind: "active",
-        statusLabel: `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`,
+        statusLabel: gt("Recording {duration}", {
+          duration: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`,
+        }),
         confirmationEnabled: true,
       };
     }
@@ -59,7 +63,7 @@ export function resolveVoiceComposerPresentation(
         trailingAction: "confirm",
         showsSend: false,
         statusKind: "active",
-        statusLabel: "Transcribing",
+        statusLabel: gt("Transcribing"),
         confirmationEnabled: false,
       };
   }

@@ -1,3 +1,4 @@
+import { localizeInterfaceText } from "../i18n/runtime";
 import {
   type EnvironmentThreadShell,
   type PendingSubagentRequest,
@@ -141,7 +142,7 @@ export function startThreadNotifications(
       return;
     const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
     const active = activeThread();
-    const title =
+    const title = localizeInterfaceText(
       kind === "completion"
         ? "Thread completed"
         : status === "approval"
@@ -152,7 +153,8 @@ export function startThreadNotifications(
               ? "Thread failed"
               : status === "request"
                 ? "Guest request"
-                : "Input needed";
+                : "Input needed",
+    );
     if (hasNotificationSound(mode)) {
       void playNotificationSound(kind, () =>
         hasNotificationSound(getClientSettings().notificationMode),

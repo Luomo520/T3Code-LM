@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -104,6 +105,7 @@ function DragHandle(props: {
   canMoveUp: boolean;
   canMoveDown: boolean;
 }) {
+  const gt = useGT();
   const latest = useRef(props);
   /* oxlint-disable react/refs -- The pan gesture captures its callbacks once per `disabled` change; they read the latest handlers when native gesture events fire. */
   latest.current = props;
@@ -128,7 +130,7 @@ function DragHandle(props: {
         collapsable={false}
         accessible
         accessibilityRole="adjustable"
-        accessibilityLabel={`Reorder ${props.title}`}
+        accessibilityLabel={gt("Reorder {thread}", { thread: props.title })}
         accessibilityHint="上移和下移仅调整当前分区中的顺序，其他操作可将任务移至不同分区。"
         accessibilityState={{ disabled: props.disabled }}
         accessibilityActions={[
@@ -164,6 +166,7 @@ function DragHandle(props: {
 }
 
 function ThreadArrangementSheet(props: { onClose: () => void }) {
+  const gt = useGT();
   const { appearance } = useAppearancePreferences();
   const { fontScale } = useWindowDimensions();
   const { rowHeight, headerHeight } = deriveThreadArrangementSizing({
@@ -400,7 +403,9 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
                 onClose={props.onClose}
                 accessibilityLabel="关闭任务排列"
               />
-              <Text className="px-5 pb-3 text-sm text-foreground-muted">{"拖动以排序、置顶或收起，松手后保存更改。"}</Text>
+              <Text className="px-5 pb-3 text-sm text-foreground-muted">
+                {"拖动以排序、置顶或收起，松手后保存更改。"}
+              </Text>
               <View
                 onLayout={(event) => {
                   geometry.current.height = event.nativeEvent.layout.height;
@@ -537,10 +542,12 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
                           >
                             <Text className="text-sm text-foreground-muted">
                               {olderSettledShelf.loading
-                                ? "Loading"
+                                ? gt("Loading")
                                 : olderSettledShelf.failed
-                                  ? "Could not load older threads. Retry"
-                                  : `Show more (${settledCount - visibleSettled.length} settled hidden)`}
+                                  ? gt("Could not load older threads. Retry")
+                                  : gt("Show more ({count} settled hidden)", {
+                                      count: settledCount - visibleSettled.length,
+                                    })}
                             </Text>
                           </Pressable>
                         ) : (

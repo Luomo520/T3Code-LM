@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import {
   getPromptControlledTraits,
   getTraitSelectChange,
@@ -184,6 +185,7 @@ function ProviderHeader(props: {
   readonly modelCount: number;
   readonly onToggle: () => void;
 }) {
+  const gt = useGT();
   const content = (
     <>
       <ProviderIcon iconUrl={props.iconUrl} provider={props.driver} size={15} />
@@ -210,7 +212,10 @@ function ProviderHeader(props: {
   if (props.collapsible) {
     return (
       <Pressable
-        accessibilityLabel={`${props.label}, ${props.modelCount} models`}
+        accessibilityLabel={gt("{provider}, {count} models", {
+          provider: props.label,
+          count: props.modelCount,
+        })}
         accessibilityRole="button"
         accessibilityState={{ expanded: !props.collapsed }}
         className="mx-4 mt-1 flex-row items-center gap-2 rounded-xl px-1 pt-2 active:opacity-60"
@@ -357,6 +362,7 @@ const ThreadSettingsSessionContext = createContext<ThreadSettingsSessionValue | 
 function ThreadSettingsSessionProvider(
   props: ThreadSettingsSessionProps & { readonly children: ReactNode },
 ) {
+  const gt = useGT();
   const registry = use(RegistryContext);
   const preferences = useAtomValue(mobilePreferencesAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
@@ -564,8 +570,8 @@ function ThreadSettingsSessionProvider(
   const commitModel = (model: ModelOption) => {
     if (!canCommitPendingModel(model, props.providerGroups)) {
       Dialog.alert(
-        "Model unavailable",
-        "Set up this provider on web or desktop, or select another model.",
+        gt("Model unavailable"),
+        gt("Set up this provider on web or desktop, or select another model."),
       );
       return false;
     }
@@ -1093,6 +1099,7 @@ function ThreadSettingsMainContent(props: {
   readonly bottomInset: number;
   readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
 }) {
+  const gt = useGT();
   const colors = useModelPopupColors();
   const session = useThreadSettingsSession();
   const refreshProvidersCommand = useAtomCommand(serverEnvironment.refreshProviders, {
@@ -1133,7 +1140,7 @@ function ThreadSettingsMainContent(props: {
       .then((result) => {
         setIsRefreshingProviders(false);
         const error = providerCatalogRefreshError(result);
-        if (error) Dialog.alert("Could not refresh models", error);
+        if (error) Dialog.alert(gt("Could not refresh models"), error);
       });
   };
   const [listLoaded, setListLoaded] = useState(false);
@@ -1239,6 +1246,7 @@ function ThreadSettingsChoiceContent(props: {
   readonly submenu: ThreadSettingsSubmenuPage;
   readonly onSelected: () => void;
 }) {
+  const gt = useGT();
   const insets = useSafeAreaInsets();
   const session = useThreadSettingsSession();
   const descriptorId = props.submenu.kind === "descriptor" ? props.submenu.id : null;
@@ -1290,8 +1298,10 @@ function ThreadSettingsChoiceContent(props: {
                   activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
                 ) {
                   Dialog.alert(
-                    "Reasoning controlled by prompt",
-                    'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
+                    gt("Reasoning controlled by prompt"),
+                    gt(
+                      'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
+                    ),
                   );
                   return;
                 }
@@ -1359,6 +1369,7 @@ function useThreadSettingsPickerPresentation() {
 }
 
 function ThreadSettingsModelsScreen() {
+  const gt = useGT();
   const session = useThreadSettingsSession();
   const presentation = useThreadSettingsPickerPresentation();
   const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
@@ -1371,7 +1382,7 @@ function ThreadSettingsModelsScreen() {
     value: session.searchQuery,
     onChangeText: session.setSearchQuery,
     placeholder: "查找模型",
-    clearAccessibilityLabel: "Clear model search",
+    clearAccessibilityLabel: gt("Clear model search"),
     mode: "inline",
     compactToolbar: true,
   };
@@ -1391,7 +1402,7 @@ function ThreadSettingsModelsScreen() {
       <AppBar
         title="任务设置"
         onClose={presentation.onClose}
-        closeAccessibilityLabel="Cancel thread settings"
+        closeAccessibilityLabel={gt("Cancel thread settings")}
         search={search}
         menus={[
           {
@@ -1441,10 +1452,10 @@ function ThreadSettingsModelsScreen() {
           onOpenSubmenu={(submenu) => {
             const title =
               submenu.kind === "runtime"
-                ? "Runtime"
+                ? gt("Runtime")
                 : (session.displayedDescriptors.find(
                     (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-                  )?.label ?? "Option");
+                  )?.label ?? gt("Option"));
             navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
           }}
         />

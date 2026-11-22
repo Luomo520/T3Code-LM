@@ -1,11 +1,9 @@
-import { useAtomValue } from "@effect/atom-react";
-import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
-import { hostEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { AttachmentLimitSettingsRow } from "./AttachmentLimitSettingsRow";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
-import { APP_VERSION, DESKTOP_APP_VERSION, DESKTOP_DEVICE_NAME } from "../../branding";
+import { APP_VERSION, DESKTOP_APP_VERSION } from "../../branding";
 import { isHostedStaticApp } from "../../hostedPairing";
+import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { CheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -13,11 +11,9 @@ import { useRef, useState } from "react";
 import {
   IDLE_COMPACTION_MODES,
   globalIdleCompaction,
-  managedUpdatesDenial,
   ProviderDriverKind,
   type ProviderInstanceId,
   type SidebarProjectGroupingMode,
-  type DesktopUpdateState,
 } from "@t3tools/contracts";
 import {
   DEFAULT_UNIFIED_SETTINGS,
@@ -39,14 +35,6 @@ import * as Schema from "effect/Schema";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
-import {
-  canCheckForUpdate,
-  getDesktopUpdateButtonTooltip,
-  getDesktopUpdateDisabledReason,
-  getDesktopUpdateInstallConfirmationMessage,
-  isDesktopUpdateButtonDisabled,
-  resolveDesktopUpdateButtonAction,
-} from "../../components/desktopUpdate.logic";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
@@ -67,7 +55,6 @@ import { scopedIdleCompaction } from "./scopedSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
-import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { managedTelemetryOffMessage, usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import {
   getTextGenerationModelOptionsByInstance,
@@ -79,7 +66,6 @@ import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/utils";
 import {
   useEnvironmentProviders,
-  useEnvironments,
   usePrimaryEnvironment,
   usePrimaryEnvironmentId,
   type EnvironmentPresentation,
@@ -92,7 +78,6 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   autoSettleDaysField,
   cancelAutoSettleDaysField,
@@ -123,13 +108,8 @@ import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
 import { StorageCleanupSections } from "./StorageSettings";
 import { BackendRestartSection } from "./BackendRestartSection";
-import { UpdateDownloadProgress } from "../ServerUpdateAction";
-import {
-  ServerVersionUpdateRow,
-  desktopUpdateAvailability,
-  useServerVersionUpdate,
-} from "./ServerVersionUpdate";
-import { downloadLocalUpdate } from "../sidebar/SidebarUpdatePill";
+import { useServerVersionUpdate } from "./ServerVersionUpdate";
+import { UpdateCenter } from "../sidebar/UpdateCenter";
 
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
   turn: "Wait for the full response",
@@ -174,158 +154,6 @@ const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
 };
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
-function AboutVersionSection({ updateState }: { readonly updateState: DesktopUpdateState | null }) {
-  const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
-
-  const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
-  // The desktop updates this machine, whose policy the primary environment reports.
-  const primaryPolicy = usePrimaryManagedPolicy();
-  const updatesDenial = hasDesktopBridge ? managedUpdatesDenial(primaryPolicy) : undefined;
-  const handleButtonClick = async () => {
-    const bridge = window.desktopBridge;
-    if (!bridge) return;
-
-    const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-
-    if (action === "download") {
-      void downloadLocalUpdate(bridge, { notifyDownloaded: false });
-      return;
-    }
-
-    if (action === "install") {
-      if (isUpdateActionPending) return;
-      setIsUpdateActionPending(true);
-      let confirmed = false;
-      try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(
-            updateState ?? { availableVersion: null, downloadedVersion: null },
-          ),
-          { initialFocus: "confirm" },
-        );
-      } catch (error) {
-        setIsUpdateActionPending(false);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not confirm update",
-            description: error instanceof Error ? error.message : "Update confirmation failed.",
-          }),
-        );
-        return;
-      }
-      if (!confirmed) {
-        setIsUpdateActionPending(false);
-        return;
-      }
-      void bridge
-        .installUpdate()
-        .catch((error: unknown) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not install update",
-              description: error instanceof Error ? error.message : "Install failed.",
-            }),
-          );
-        })
-        .finally(() => setIsUpdateActionPending(false));
-      return;
-    }
-
-    if (typeof bridge.checkForUpdate !== "function") return;
-    void bridge
-      .checkForUpdate()
-      .then((result) => {
-        if (!result.checked) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not check for updates",
-              description:
-                updatesDenial ??
-                result.state.message ??
-                "Automatic updates are not available in this build.",
-            }),
-          );
-        }
-      })
-      .catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not check for updates",
-            description: error instanceof Error ? error.message : "Update check failed.",
-          }),
-        );
-      });
-  };
-
-  const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-  const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
-  const buttonDisabled =
-    action === "none"
-      ? !canCheckForUpdate(updateState)
-      : isDesktopUpdateButtonDisabled(updateState);
-
-  const actionLabel: Record<string, string> = { download: "更新 PC 客户端", install: "安装并重启" };
-  const statusLabel: Record<string, string> = {
-    checking: "正在检查…",
-    downloading: "正在下载…",
-    "up-to-date": "重新检查更新",
-  };
-  const buttonLabel =
-    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "检查 PC 客户端更新";
-  const device = DESKTOP_DEVICE_NAME ?? "本机";
-  const version = DESKTOP_APP_VERSION ?? updateState?.currentVersion ?? APP_VERSION;
-  const disabledReason = getDesktopUpdateDisabledReason(updateState, updatesDenial);
-
-  return (
-    <>
-      <SettingsRow
-        id={searchableSetting("app-version").id}
-        title={`PC 客户端 · ${device}`}
-        description={<AboutVersionTitle version={version} />}
-        status={
-          <>
-            <p>可更新版本 {desktopUpdateAvailability(updateState)}</p>
-            {disabledReason ? <p>{disabledReason}</p> : null}
-            {!disabledReason && updateState?.status === "error" && updateState.message ? (
-              <p role="alert">{updateState.message}</p>
-            ) : null}
-            {updateState?.status === "downloading" ? (
-              <UpdateDownloadProgress
-                label="PC 客户端更新下载进度"
-                detail="正在下载 PC 客户端…"
-                percent={updateState.downloadPercent ?? undefined}
-              />
-            ) : null}
-          </>
-        }
-        managed={updatesDenial}
-        control={
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={buttonDisabled || isUpdateActionPending}
-                  onClick={handleButtonClick}
-                >
-                  {buttonLabel}
-                </Button>
-              }
-            />
-            {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
-          </Tooltip>
-        }
-      />
-      {hasDesktopBridge ? <CliCommandSettingsRow /> : null}
-    </>
-  );
-}
-
 export function useSettingsRestore(onRestored?: () => void) {
   const m = useMessages();
   const {
@@ -2238,35 +2066,6 @@ export function MaintenanceSettingsPanel() {
   );
 }
 
-function AboutServerUpdates({
-  desktopUpdate,
-}: {
-  readonly desktopUpdate: DesktopUpdateState | null;
-}) {
-  const { environments } = useEnvironments();
-  const primaryId = usePrimaryEnvironmentId();
-  const hostId = useAtomValue(hostEnvironmentIdAtom);
-  const targets = environments.filter((environment) => environment.entry.enabled);
-  if (targets.length === 0) return null;
-  return (
-    <SettingsSection id="about-server-updates" title="服务端">
-      {targets.map((environment) => (
-        <ServerVersionUpdateRow
-          key={environment.environmentId}
-          environmentId={environment.environmentId}
-          servesWeb={servesCurrentWebsite(environment)}
-          {...(isElectron &&
-          (environment.environmentId === primaryId ||
-            environment.environmentId === hostId ||
-            isDesktopLocalConnectionTarget(environment.entry.target))
-            ? { bundledDesktop: { updateState: desktopUpdate } }
-            : {})}
-        />
-      ))}
-    </SettingsSection>
-  );
-}
-
 function servesCurrentWebsite(environment: EnvironmentPresentation | null) {
   const target = environment?.entry.target;
   return (
@@ -2318,12 +2117,29 @@ function AboutWebVersionSection() {
   );
 }
 
+function AboutDesktopVersion() {
+  const updateState = useDesktopUpdateState();
+  return (
+    <>
+      <SettingsRow
+        id={searchableSetting("app-version").id}
+        title="PC 客户端"
+        description={
+          <AboutVersionTitle
+            version={DESKTOP_APP_VERSION ?? updateState?.currentVersion ?? APP_VERSION}
+          />
+        }
+      />
+      {typeof window !== "undefined" && window.desktopBridge ? <CliCommandSettingsRow /> : null}
+    </>
+  );
+}
+
 export function AboutSettingsPanel() {
   const primaryPolicy = usePrimaryManagedPolicy();
   // The Welcome page sets up this computer, so it needs one.
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const telemetryOff = managedTelemetryOffMessage(primaryPolicy);
-  const desktopUpdate = useDesktopUpdateState();
   return (
     <SettingsPageContainer>
       <SettingsSection id="about" title="客户端">
@@ -2346,11 +2162,7 @@ export function AboutSettingsPanel() {
             }
           />
         ) : null}
-        {isElectron ? (
-          <AboutVersionSection updateState={desktopUpdate} />
-        ) : (
-          <AboutWebVersionSection />
-        )}
+        {isElectron ? <AboutDesktopVersion /> : <AboutWebVersionSection />}
         <MobileAppSettingsRow />
         {primaryEnvironmentId === null ? null : (
           <SettingsRow
@@ -2365,7 +2177,9 @@ export function AboutSettingsPanel() {
         )}
       </SettingsSection>
 
-      <AboutServerUpdates desktopUpdate={desktopUpdate} />
+      <SettingsSection id="about-server-updates" title="更新中心">
+        <UpdateCenter surface="about" />
+      </SettingsSection>
       <SettingsSection id="legal" title="Legal">
         <SettingsRow
           {...searchableSetting("privacy-policy")}

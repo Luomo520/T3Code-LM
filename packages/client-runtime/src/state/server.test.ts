@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ServerSelfUpdateError,
+  ServerSelfUpdateInput,
   ProviderInstanceId,
   type ProviderInstallState,
   type ProviderSetupInput,
@@ -395,6 +396,140 @@ describe("accepted server update recovery", () => {
         status: "idle",
       });
     }),
+  );
+});
+
+describe("confirmed remote desktop update", () => {
+  it.effect.each([
+    { strict: true, supported: true, preparedVersion: "0.0.31", commitExpected: true },
+    { strict: true, supported: true, preparedVersion: "0.0.32", commitExpected: false },
+    { strict: true, supported: false, preparedVersion: "0.0.32", commitExpected: false },
+    { strict: false, supported: false, preparedVersion: "0.0.32", commitExpected: true },
+  ])(
+    "checks the connected host before committing (strict=$strict, supported=$supported, prepared=$preparedVersion)",
+    ({ strict, supported, preparedVersion, commitExpected }) =>
+      Effect.gen(function* () {
+        const requested: ServerSelfUpdateInput[] = [];
+        const commits: string[] = [];
+        const result = {
+          method: "desktop-app" as const,
+          targetVersion: preparedVersion,
+          desktopUpdateToken: "prepared-token",
+        };
+        const client = {
+          [WS_METHODS.subscribeServerConfig]: () => Stream.never,
+          [WS_METHODS.subscribeServerLifecycle]: () =>
+            Stream.make({
+              version: 1,
+              sequence: 1,
+              type: "ready",
+              payload: {
+                at: "2026-09-01T00:00:00.000Z",
+                environment: { serverVersion: preparedVersion },
+              },
+            } as ServerLifecycleStreamEvent),
+          [WS_METHODS.serverUpdateServerWithProgress]: (input: ServerSelfUpdateInput) =>
+            Stream.fromEffect(
+              Effect.sync(() => {
+                requested.push(input);
+                return { type: "complete" as const, result };
+              }),
+            ),
+          [WS_METHODS.serverCommitDesktopUpdate]: ({ requestId }: { requestId: string }) =>
+            Effect.sync(() => void commits.push(requestId)),
+        } as unknown as WsRpcProtocolClient;
+        const config = {
+          ...CONFIG,
+          environment: {
+            ...CONFIG.environment,
+            serverVersion: "0.0.30",
+            capabilities: {
+              repositoryIdentity: true,
+              serverSelfUpdate: "desktop-managed",
+              serverSelfUpdateProgress: true,
+              ...(supported ? { confirmedDesktopUpdateVersion: true } : {}),
+            },
+          },
+        } satisfies ServerConfig;
+        const previousConfig: ServerConfig = {
+          ...config,
+          environment: {
+            ...config.environment,
+            capabilities: {
+              ...config.environment.capabilities,
+              confirmedDesktopUpdateVersion: true,
+            },
+          },
+        };
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+          session: yield* SubscriptionRef.make<Option.Option<RpcSession>>(
+            Option.some({ ...session(client), initialConfig: Effect.succeed(config) }),
+          ),
+          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        });
+        type Environments = EnvironmentRegistry.EnvironmentRegistry["Service"];
+        const run: Environments["run"] = (_id, effect) =>
+          Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+        const runStream: Environments["runStream"] = (_id, stream) =>
+          Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+        const environments = EnvironmentRegistry.EnvironmentRegistry.of({
+          run,
+          runStream,
+          followStream: runStream,
+          stateChanges: () =>
+            Stream.succeed<SupervisorConnectionState>({
+              ...AVAILABLE_CONNECTION_STATE,
+              phase: "connected",
+            }).pipe(Stream.concat(Stream.never)),
+          retryNow: () => Effect.void,
+        } as unknown as Environments);
+        const atoms = createServerEnvironmentAtoms(
+          Atom.runtime(
+            Layer.mergeAll(
+              Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environments),
+              Layer.succeed(RpcPermissionGuard, { authorize: () => Effect.void }),
+              Layer.succeed(Persistence.EnvironmentCacheStore, {
+                loadServerConfig: () => Effect.succeedNone,
+              } as unknown as Persistence.EnvironmentCacheStore["Service"]),
+            ),
+          ),
+          { initialConfigValueAtom: () => Atom.make(previousConfig) },
+        );
+        const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (value) =>
+          Effect.sync(() => value.dispose()),
+        );
+        const input = { targetVersion: "0.0.31" };
+        const outcome = yield* Effect.promise(() =>
+          atoms.updateServer.run(registry, {
+            environmentId: TARGET.environmentId,
+            ...(strict ? { requireConfirmedDesktopVersion: true } : {}),
+            input,
+          }),
+        );
+
+        expect(requested).toEqual(
+          strict
+            ? supported
+              ? [{ ...input, requireConfirmedDesktopVersion: true }]
+              : []
+            : [input],
+        );
+        expect(commits).toEqual(commitExpected ? [result.desktopUpdateToken] : []);
+        if (commitExpected) {
+          expect(outcome).toMatchObject({ _tag: "Success", value: result });
+        } else {
+          expect(outcome._tag).toBe("Failure");
+          expect(registry.get(serverUpdateStateAtom(TARGET.environmentId))).toMatchObject({
+            status: "failed",
+            targetVersion: input.targetVersion,
+          });
+        }
+      }),
   );
 });
 

@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import { isDraftThreadRoute } from "./thread-route-state";
 import * as Dialog from "../../components/ui/Dialog";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -54,7 +55,7 @@ type NewTaskRouteParams = {
   readonly model?: string | string[];
 };
 
-function deriveProjectEmptyState(catalogState: WorkspaceState): {
+function deriveProjectEmptyState(catalogState: WorkspaceState, gt: ReturnType<typeof useGT>): {
   readonly title: string;
   readonly detail: string;
   readonly loading: boolean;
@@ -62,7 +63,7 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
   if (catalogState.isLoadingConnections) {
     return {
       title: "正在加载环境",
-      detail: "Checking saved environments on this device.",
+      detail: gt("Checking saved environments on this device."),
       loading: true,
     };
   }
@@ -70,7 +71,7 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
   if (!catalogState.hasConnections) {
     return {
       title: "尚未连接环境",
-      detail: "Add an environment before creating a task.",
+      detail: gt("Add an environment before creating a task."),
       loading: false,
     };
   }
@@ -89,7 +90,7 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
           : "环境不可用",
       detail:
         catalogState.connectionError ??
-        "The saved environment is offline. Check the URL or start the environment, then retry.",
+        gt("The saved environment is offline. Check the URL or start the environment, then retry."),
       loading: false,
     };
   }
@@ -101,14 +102,14 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
   ) {
     return {
       title: "正在连接环境",
-      detail: "Loading projects from the saved environment.",
+      detail: gt("Loading projects from the saved environment."),
       loading: true,
     };
   }
 
   return {
     title: "未找到项目",
-    detail: "The connected environment did not report any projects.",
+    detail: gt("The connected environment did not report any projects."),
     loading: false,
   };
 }
@@ -154,6 +155,7 @@ function NewTaskHeader(props: {
 }
 
 export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRouteParams | undefined>) {
+  const gt = useGT();
   const projects = useProjects();
   const [searchText, setSearchText] = useState("");
   const { projectScopes, selectedEnvironmentId, setProject } = useNewTaskFlow();
@@ -178,7 +180,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
         : `Choose a project for the ${incomingShare.attachments.length} ${incomingShare.attachments.every((attachment) => attachment.type === "image") ? "images" : "files"} you shared`
     : null;
   const screenTitle = incomingShare ? "开始任务" : "选择项目";
-  const projectEmptyState = deriveProjectEmptyState(catalogState);
+  const projectEmptyState = deriveProjectEmptyState(catalogState, gt);
   const serverConfigs = useServerConfigs();
   const listScopes = pickableProjectGroups(projectScopes).filter(
     (scope) =>

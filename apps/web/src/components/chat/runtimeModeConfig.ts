@@ -1,3 +1,4 @@
+import { localizeInterfaceText } from "~/i18n/runtime";
 import {
   managedRuntimeModeDenial,
   type ManagedPolicySummary,
@@ -37,6 +38,10 @@ export const runtimeModeConfig: Record<
     icon: ShieldOffIcon,
   },
 };
+
+export function runtimeModeAriaLabel(label: string) {
+  return localizeInterfaceText(`Permissions: ${localizeInterfaceText(label)}`);
+}
 
 export const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
 

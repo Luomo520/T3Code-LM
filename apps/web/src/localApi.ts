@@ -1,3 +1,4 @@
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
 import type {
   ConfirmDialogOptions,
   ContextMenuItem,
@@ -11,6 +12,18 @@ import { dismissContextMenu, showContextMenuFallback } from "./contextMenuFallba
 import { readBrowserClientSettings, writeBrowserClientSettings } from "./clientPersistenceStorage";
 
 let cachedApi: LocalApi | undefined;
+
+function readLegacyLanguage(): string | undefined {
+  try {
+    const language = window.localStorage.getItem("t3code-zh.locale");
+    if (language === "en" || language === "system" || language === "zh-CN") {
+      return language === "zh-CN" ? "zh" : language;
+    }
+  } catch {
+    // 本地存储不可用时沿用应用默认语言。
+  }
+  return undefined;
+}
 
 export function createLocalApi(): LocalApi {
   return {
@@ -66,10 +79,12 @@ export function createLocalApi(): LocalApi {
     },
     persistence: {
       getClientSettings: async () => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.getClientSettings();
-        }
-        return readBrowserClientSettings();
+        const stored = window.desktopBridge
+          ? await window.desktopBridge.getClientSettings()
+          : readBrowserClientSettings(readLegacyLanguage);
+        if (stored) return stored;
+        const language = readLegacyLanguage();
+        return language ? { ...DEFAULT_CLIENT_SETTINGS, language } : null;
       },
       setClientSettings: async (settings) => {
         if (window.desktopBridge) {

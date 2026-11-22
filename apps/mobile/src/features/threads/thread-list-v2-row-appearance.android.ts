@@ -28,17 +28,37 @@ export function getThreadListV2NewBranchMenuTitle(branch: string) {
 }
 
 export function getThreadListV2RowAppearance(
-  theme: MobileThemeVariables,
+  theme: Pick<
+    MobileThemeVariables,
+    "--color-thread-selected" | "--color-grouped-card" | "--color-drawer" | "--color-screen"
+  >,
   sidebarPane: boolean,
   selected: boolean,
+  homeGroup?: "only" | "first" | "middle" | "last",
 ) {
   const selectedBackgroundColor = theme["--color-thread-selected"];
-  const backgroundColor = theme[sidebarPane ? "--color-drawer" : "--color-screen"];
+  const backgroundColor = theme["--color-grouped-card"];
+  const first = homeGroup === undefined || homeGroup === "only" || homeGroup === "first";
+  const last = homeGroup === undefined || homeGroup === "only" || homeGroup === "last";
+  const groupCorners = homeGroup
+    ? {
+        borderTopLeftRadius: first ? 18 : 0,
+        borderTopRightRadius: first ? 18 : 0,
+        borderBottomLeftRadius: last ? 18 : 0,
+        borderBottomRightRadius: last ? 18 : 0,
+      }
+    : {};
   const style: ViewStyle = {
     backgroundColor: selected ? selectedBackgroundColor : backgroundColor,
     borderRadius: THREAD_LIST_V2_SIDEBAR_ROW_STYLE.borderRadius,
+    ...groupCorners,
   };
-  const swipeContainerStyle = THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE;
+  const swipeContainerStyle = {
+    ...THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE,
+    ...groupCorners,
+    marginTop: homeGroup && !first ? 0 : 2,
+    marginBottom: homeGroup && !last ? 0 : 2,
+  };
 
   return {
     className: undefined,
@@ -58,7 +78,7 @@ export function getThreadListV2RowAppearance(
       ? "accent-drawer-foreground-muted"
       : "accent-foreground-tertiary",
     style,
-    cardStyle: sidebarPane ? { ...style, ...THREAD_LIST_V2_SIDEBAR_ROW_STYLE } : style,
+    cardStyle: sidebarPane ? { ...THREAD_LIST_V2_SIDEBAR_ROW_STYLE, ...style } : style,
     swipeContainerStyle,
     swipeBackgroundColor: backgroundColor,
     providerIconSurfaceColor: selected ? selectedBackgroundColor : backgroundColor,

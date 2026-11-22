@@ -1,3 +1,4 @@
+import { runtimeModeAriaLabel } from "./runtimeModeConfig";
 import "./model-picker.css";
 import {
   buildTraitsTriggerDisplay,
@@ -759,7 +760,7 @@ export function ComposerPickerPermissionsMenu(props: {
             ref={triggerRef}
             type="button"
             data-composer-permissions-trigger
-            aria-label={`Permissions: ${current.label}`}
+            aria-label={runtimeModeAriaLabel(current.label)}
             className="flex h-8 min-w-0 max-w-1/2 cursor-pointer items-center gap-1.5 rounded-md bg-foreground/[0.05] px-2 text-muted-foreground text-xs outline-none hover:bg-foreground/[0.09] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset data-popup-open:bg-foreground/[0.09] data-popup-open:text-foreground pointer-coarse:h-10"
           />
         }

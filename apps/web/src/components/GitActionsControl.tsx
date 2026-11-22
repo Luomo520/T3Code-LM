@@ -1,3 +1,4 @@
+import { localizeInterfaceText } from "../i18n/runtime";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import {
@@ -1151,7 +1152,7 @@ export default function GitActionsControl({
   const changesTotals = resolvedChangesTotals ?? { insertions: 0, deletions: 0 };
   const changesBaseLabel = resolvedChangesTotals
     ? resolvedChangesTotals.baseRef === null
-      ? "Uncommitted"
+      ? localizeInterfaceText("Uncommitted")
       : `vs ${resolvedChangesTotals.baseRef}`
     : null;
 
@@ -1220,6 +1221,7 @@ export default function GitActionsControl({
     isDefaultRef,
     hasPrimaryRemote,
   );
+  const quickActionLabel = localizeInterfaceText(quickAction.label);
   const quickActionDisabledReason = !canWriteSourceControl
     ? "This connection cannot change source control."
     : quickAction.disabled
@@ -1440,7 +1442,7 @@ export default function GitActionsControl({
     if (quickAction.kind === "show_hint") {
       toastManager.add({
         type: "info",
-        title: quickAction.label,
+        title: quickActionLabel,
         description: quickAction.hint,
         data: threadToastData,
       });
@@ -1563,7 +1565,7 @@ export default function GitActionsControl({
               >
                 <MenuItem className="w-full" disabled>
                   <GitActionItemIcon icon={item.icon} SourceControlIcon={SourceControlIcon} />
-                  <MenuItemLabel>{item.label}</MenuItemLabel>
+                  <MenuItemLabel>{localizeInterfaceText(item.label)}</MenuItemLabel>
                 </MenuItem>
               </PopoverTrigger>
               <PopoverPopup tooltipStyle side="left" align="center">
@@ -1582,7 +1584,7 @@ export default function GitActionsControl({
             }}
           >
             <GitActionItemIcon icon={item.icon} SourceControlIcon={SourceControlIcon} />
-            <MenuItemLabel>{item.label}</MenuItemLabel>
+            <MenuItemLabel>{localizeInterfaceText(item.label)}</MenuItemLabel>
           </MenuItem>
         );
       })}
@@ -1682,7 +1684,7 @@ export default function GitActionsControl({
                     cn("not-sr-only ml-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
                   )}
                 >
-                  {quickAction.label}
+                  {quickActionLabel}
                 </span>
               </PopoverTrigger>
               <PopoverPopup tooltipStyle side="bottom" align="start">
@@ -1715,10 +1717,10 @@ export default function GitActionsControl({
                     cn("not-sr-only ml-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
                   )}
                 >
-                  {quickAction.label}
+                  {quickActionLabel}
                 </span>
               </TooltipTrigger>
-              <TooltipPopup side="top">{quickAction.label}</TooltipPopup>
+              <TooltipPopup side="top">{quickActionLabel}</TooltipPopup>
             </Tooltip>
           )}
           {!gitActionProgress ? (

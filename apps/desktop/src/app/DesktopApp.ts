@@ -31,6 +31,8 @@ import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
+import { desktopTranslatorForLanguage } from "../t3zh/t3zh-desktop.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopStartupRecovery from "./DesktopStartupRecovery.ts";
@@ -128,6 +130,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   never,
   | DesktopShutdown.DesktopShutdown
   | DesktopState.DesktopState
+  | DesktopClientSettings.DesktopClientSettings
   | ElectronApp.ElectronApp
   | ElectronDialog.ElectronDialog
 > {
@@ -145,9 +148,12 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   });
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
+    const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
+    const settings = yield* clientSettings.get.pipe(Effect.orElseSucceed(Option.none));
+    const { t } = desktopTranslatorForLanguage(Option.getOrUndefined(settings)?.language);
     yield* electronDialog.showErrorBox(
-      "T3 Code failed to start",
-      `Stage: ${stage}\n${message}${detail}`,
+      t("T3 Code failed to start"),
+      `${t(`Stage: ${stage}`)}\n${message}${detail}`,
     );
   }
   yield* shutdown.request;

@@ -65,13 +65,11 @@ vi.mock("@tabler/icons-react-native/IconMessages", () => ({ default: () => <svg 
 vi.mock("@tabler/icons-react-native/IconGitPullRequest", () => ({ default: () => <svg /> }));
 vi.mock("@tabler/icons-react-native/IconChartBar", () => ({ default: () => <svg /> }));
 vi.mock("@tabler/icons-react-native/IconEdit", () => ({ default: () => <svg /> }));
-vi.mock("../../../lib/mobileTheme", () => ({
-  themeColorWithAlpha: (color: string, alpha: number) => `${color}:${alpha}`,
-}));
 vi.mock("@tabler/icons-react-native/IconSettings", () => ({ default: () => <svg /> }));
 vi.mock("@react-navigation/native", () => ({
   CommonActions: { reset: (value: unknown) => ({ type: "RESET", payload: value }) },
   useNavigation: () => ({ dispatch: state.navigate }),
+  useIsFocused: () => true,
   useFocusEffect: (effect: () => void) => {
     state.focusEffects.add(effect);
   },
@@ -185,7 +183,6 @@ it("keeps the dock centered on a narrow screen with an asymmetric inset and the 
   expect(style.right).toBe(0);
   expect(style.paddingHorizontal).toBe(32);
   expect(style.paddingBottom).toBe(36);
-  expect(container.innerHTML).toContain("linear-gradient(to bottom");
   const dock = container.querySelector('[role="tablist"]')!;
   const compose = container.querySelector('[aria-label="新会话"]')!;
   const pill = JSON.parse(dock.getAttribute("data-style")!);
@@ -283,4 +280,19 @@ it("hides compose when no environment is connected", async () => {
   state.connected = false;
   const { container } = await mount(<FloatingWorkspaceTabs onNewThread={() => {}} />);
   expect(container.querySelectorAll("button")).toHaveLength(4);
+});
+
+it("keeps the sides and bottom of the floating navigation clear", async () => {
+  const { container } = await mount(<FloatingWorkspaceTabs onNewThread={() => {}} />);
+  const dock = container.querySelector('[role="tablist"]')!;
+  expect(dock.contains(container.querySelector("[data-material]"))).toBe(true);
+  const overlay = dock.parentElement?.parentElement;
+  expect(overlay?.getAttribute("data-style")).not.toMatch(
+    /backgroundColor|experimental_backgroundImage/,
+  );
+  expect(
+    [...overlay!.querySelectorAll("[data-style]")].some((node) =>
+      node.getAttribute("data-style")?.includes("experimental_backgroundImage"),
+    ),
+  ).toBe(false);
 });

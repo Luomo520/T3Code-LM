@@ -240,6 +240,9 @@ vi.mock("../../../components/ui/useAndroidControlSizing", () => ({
   useAndroidControlSizing: () => ({ fabClearance: 64, scale: 1, fabSize: 56 }),
 }));
 vi.mock("../../home/HomeRouteScreen", () => ({ HomeRouteScreen: () => null }));
+vi.mock("../../../state/workspace", () => ({
+  useWorkspaceConnectionState: () => ({ hasConnections: true }),
+}));
 vi.mock("../../pull-requests/PullRequestFilterMenuContext", () => ({
   PullRequestFilterMenuProvider: ({ children }: { children: ReactNode }) =>
     createElement("div", null, children),

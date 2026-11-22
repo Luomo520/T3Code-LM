@@ -1,3 +1,7 @@
+import { Platform } from "react-native";
+import { ScopedVariables } from "uniwind";
+import { useAppearancePreferences } from "../../settings/appearance/AppearancePreferencesProvider";
+import { androidHomeTheme } from "../../home/androidHomeTheme";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -42,6 +46,7 @@ function selectedThreadKey(state: { readonly index: number; readonly routes: rea
 /** The thread list in the workspace's sidebar column. */
 export function WorkspaceThreadSidebar() {
   const navigation = useNavigation();
+  const { themeId, themeAppearance, themeVariables } = useAppearancePreferences();
   const { layout, setPrimarySidebarSearchQuery, revealPrimarySidebar, openWorkspaceTab } =
     useAdaptiveWorkspaceLayout();
   const { panes, primarySidebarSearchQuery } = useWorkspacePaneState();
@@ -51,7 +56,7 @@ export function WorkspaceThreadSidebar() {
   const selectThreadRoute = (params: ReactNavigation.RootParamList["Thread"]) =>
     selectDetail({ name: "Thread", params });
   const { openPendingTask } = usePendingTaskListActions(selectThreadRoute);
-  return (
+  const sidebar = (
     <ThreadNavigationSidebar
       width={layout.listPaneWidth ?? 0}
       visible={panes.primarySidebarVisible}
@@ -91,5 +96,12 @@ export function WorkspaceThreadSidebar() {
       onSearchQueryChange={setPrimarySidebarSearchQuery}
       searchQuery={primarySidebarSearchQuery}
     />
+  );
+  return Platform.OS === "android" ? (
+    <ScopedVariables variables={androidHomeTheme(themeId, themeAppearance) ?? themeVariables}>
+      {sidebar}
+    </ScopedVariables>
+  ) : (
+    sidebar
   );
 }

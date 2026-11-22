@@ -19,6 +19,11 @@ import {
 } from "@t3tools/shared/remote";
 
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
+import {
+  DesktopEnvironmentBootstrapIncompleteError,
+  PrimaryEnvironmentProtocolUnsupportedError,
+  PrimaryEnvironmentUrlInvalidError,
+} from "./target";
 import { runPrimaryHttp } from "../../lib/runtime";
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
@@ -103,6 +108,66 @@ export class PrimaryEnvironmentPairingCredentialRequiredError extends Schema.Tag
 }
 
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
+const isPairingCredentialRejected = Schema.is(PrimaryEnvironmentPairingCredentialRejectedError);
+const isPairingCredentialRequired = Schema.is(PrimaryEnvironmentPairingCredentialRequiredError);
+const isAuthSessionTimeout = Schema.is(PrimaryEnvironmentAuthSessionTimeoutError);
+const isDesktopBootstrapIncomplete = Schema.is(DesktopEnvironmentBootstrapIncompleteError);
+const isPrimaryEnvironmentAddressError = Schema.is(
+  Schema.Union([PrimaryEnvironmentProtocolUnsupportedError, PrimaryEnvironmentUrlInvalidError]),
+);
+
+// 状态摘要只用已知错误类型和响应状态。原始错误、请求阶段与堆栈交给诊断报告。
+export function primaryEnvironmentAuthFailureSummary(error: unknown): string | null {
+  if (isPairingCredentialRejected(error)) {
+    return "Invalid pairing token. Check the token and try again.";
+  }
+  if (isPairingCredentialRequired(error)) {
+    return "Enter a pairing token to continue.";
+  }
+  if (isAuthSessionTimeout(error)) {
+    return "Sign-in did not finish. Make sure cookies are allowed for this site, then try again.";
+  }
+
+  const cause = isPrimaryEnvironmentRequestError(error) ? error.cause : error;
+  if (isDesktopBootstrapIncomplete(cause)) {
+    return "The desktop app could not find the local server address. Restart T3 Code and try again.";
+  }
+  if (isPrimaryEnvironmentAddressError(cause)) {
+    return "The server address is invalid. Open a valid HTTP or HTTPS address for T3 Code and try again.";
+  }
+  if (!isPrimaryEnvironmentRequestError(error)) return null;
+
+  if (cause instanceof DOMException && cause.name === "AbortError") {
+    return "The connection timed out. Check that T3 Code is running on the server, then try again.";
+  }
+  const status = readHttpApiStatus(cause);
+  if (status === null) {
+    return "Could not reach the server. Check your network connection and the server address, then try again.";
+  }
+  if (
+    isEnvironmentHttpCommonError(cause) &&
+    cause._tag === "EnvironmentConnectApprovalPendingError"
+  ) {
+    return `This device is waiting for approval (HTTP ${status}). Approve it from a connected device, then try again.`;
+  }
+  switch (status) {
+    case 400:
+      return `The server rejected the request (HTTP ${status}). Check the server address or request a new pairing link.`;
+    case 401:
+      return `The server requires a new sign-in (HTTP ${status}). Sign in again or open a new pairing link.`;
+    case 403:
+      return `This device does not have permission to connect (HTTP ${status}). Ask the server administrator for access.`;
+    case 404:
+      return `The server endpoint was not found (HTTP ${status}). Check that the address points to a T3 Code server.`;
+    case 429:
+      return `The server is receiving too many requests (HTTP ${status}). Wait a moment before trying again.`;
+    default:
+      if (status >= 500) {
+        return `The server could not complete the connection (HTTP ${status}). Check that T3 Code is running on the server, then try again.`;
+      }
+      return `The server returned an unexpected response (HTTP ${status}). Check that the address points to a T3 Code server.`;
+  }
+}
 
 export interface ServerPairingLinkRecord {
   readonly id: string;
@@ -326,7 +391,7 @@ async function bootstrapServerAuth(urlCredential: string | null): Promise<Server
     return {
       status: "requires-auth",
       auth: currentSession.auth,
-      errorMessage: error instanceof Error ? error.message : "Authentication failed.",
+      errorMessage: primaryEnvironmentAuthFailureSummary(error) ?? "Authentication failed.",
     };
   }
 }

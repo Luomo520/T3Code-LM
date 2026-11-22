@@ -1,0 +1,181 @@
+[data-miuix-home] {
+  --miuix-home-paper: var(--card);
+  --miuix-home-divider: var(--border);
+  --miuix-heading-size: 1.9375rem;
+  background-color: var(--background);
+  background-image: none;
+}
+
+[data-app-sidebar] {
+  --miuix-sidebar-paper: var(--card);
+  --miuix-sidebar-current-text: var(--sidebar-foreground);
+  --miuix-sidebar-action: var(--primary);
+  --miuix-sidebar-action-text: var(--primary-foreground);
+  --miuix-thread-radius: 1.125rem;
+  background-color: var(--sidebar);
+}
+
+/* 标准外观取样于首页样板，自定义主题沿用自己的配色。 */
+html:not([data-theme-id]) [data-miuix-home] {
+  --background: #f4f5f8;
+  --miuix-home-paper: #fff;
+  --miuix-home-divider: #e9eaf0;
+}
+
+html.dark:not([data-theme-id]) [data-miuix-home] {
+  --background: #17191e;
+  --miuix-home-paper: #24262d;
+  --miuix-home-divider: #323640;
+}
+
+html:not([data-theme-id]) [data-app-sidebar] {
+  --sidebar: #eaedf3;
+  --sidebar-foreground: #171b23;
+  --sidebar-muted-foreground: #626978;
+  --sidebar-row-hover: #f4f7fd;
+  --sidebar-row-active: #e7efff;
+  --sidebar-row-selected: #f1f5ff;
+  --sidebar-stage-fade: var(--sidebar);
+  --miuix-sidebar-paper: #fff;
+  --miuix-sidebar-current-text: #2056c0;
+  --miuix-sidebar-action: #2362e5;
+  --miuix-sidebar-action-text: #fff;
+  --secondary-label: #626978;
+}
+
+html.dark:not([data-theme-id]) [data-app-sidebar] {
+  --sidebar: #1e2027;
+  --sidebar-foreground: #f1f2f5;
+  --sidebar-muted-foreground: #adb2bf;
+  --sidebar-row-hover: #303440;
+  --sidebar-row-active: #293853;
+  --sidebar-row-selected: #323b4e;
+  --miuix-sidebar-paper: #24262d;
+  --miuix-sidebar-current-text: #8db5ff;
+  --miuix-sidebar-action: #8db5ff;
+  --miuix-sidebar-action-text: #17191e;
+  --secondary-label: #adb2bf;
+}
+
+[data-miuix-home] [data-miuix-home-header] {
+  background-color: var(--background);
+  border-block-end: 1px solid var(--miuix-home-divider);
+}
+
+[data-miuix-home] [data-miuix-home-card] {
+  border-radius: 1.125rem;
+  background-color: var(--miuix-home-paper);
+}
+
+[data-miuix-home] [data-miuix-home-title] {
+  font-size: var(--miuix-heading-size);
+  font-weight: 680;
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+}
+
+[data-miuix-home] [data-inline="true"] [data-miuix-home-project] {
+  @media (min-width: 64rem) {
+    font-size: inherit;
+    letter-spacing: inherit;
+  }
+}
+
+[data-miuix-home] [data-slot="empty"] {
+  overflow-y: auto;
+  justify-content: safe center;
+}
+
+@media (max-width: 35rem) {
+  [data-miuix-home] {
+    --miuix-heading-size: 1.5625rem;
+  }
+}
+
+[data-app-sidebar] [data-sidebar-thread-search] {
+  border-radius: 0.75rem;
+  background-color: var(--miuix-sidebar-paper);
+}
+
+[data-app-sidebar] [data-sidebar-new-thread]:not(:disabled, [aria-disabled="true"]) {
+  border-radius: 999px;
+  background-color: var(--miuix-sidebar-action);
+  color: var(--miuix-sidebar-action-text);
+}
+
+[data-app-sidebar] [data-sidebar-new-thread]:not(:disabled, [aria-disabled="true"]):hover {
+  background-color: color-mix(
+    in srgb,
+    var(--miuix-sidebar-action) 90%,
+    var(--miuix-sidebar-action-text)
+  );
+}
+
+[data-app-sidebar] [data-sidebar-new-thread]:not(:disabled, [aria-disabled="true"]) > svg {
+  color: inherit;
+}
+
+[data-app-sidebar] [data-sidebar-task-controls] [role="group"] {
+  border-radius: 999px;
+  background-color: var(--miuix-sidebar-paper);
+  padding: 0.125rem;
+}
+
+[data-app-sidebar] [data-sidebar-task-controls] [aria-pressed] {
+  border-radius: 999px;
+}
+
+[data-app-sidebar] [data-sidebar-thread-title] {
+  color: var(--sidebar-foreground);
+}
+
+[data-app-sidebar] [data-sidebar-thread-title][data-receded] {
+  color: var(--sidebar-muted-foreground);
+}
+
+[data-app-sidebar] [data-sidebar-task-controls] [aria-pressed="true"],
+[data-app-sidebar] [data-sidebar-row][aria-current="page"] [data-sidebar-thread-title] {
+  color: var(--miuix-sidebar-current-text);
+  font-weight: 650;
+}
+
+/* 保留拖放与键盘导航依赖的平铺行结构，用相邻行决定分组边缘。 */
+[data-app-sidebar] [data-sidebar-thread-list] > [data-sidebar-thread-group] {
+  --miuix-thread-start: var(--miuix-thread-radius);
+  --miuix-thread-end: var(--miuix-thread-radius);
+  border-start-start-radius: var(--miuix-thread-start);
+  border-start-end-radius: var(--miuix-thread-start);
+  border-end-start-radius: var(--miuix-thread-end);
+  border-end-end-radius: var(--miuix-thread-end);
+  background-color: var(--miuix-sidebar-paper);
+}
+
+[data-app-sidebar]
+  [data-sidebar-thread-list]
+  > :is(
+    [data-sidebar-thread-group="pinned"] + [data-sidebar-thread-group="pinned"],
+    [data-sidebar-thread-group="threads"] + [data-sidebar-thread-group="threads"]
+  ) {
+  --miuix-thread-start: 0px;
+}
+
+[data-app-sidebar]
+  [data-sidebar-thread-list]
+  > :is(
+    [data-sidebar-thread-group="pinned"]:has(+ [data-sidebar-thread-group="pinned"]),
+    [data-sidebar-thread-group="threads"]:has(+ [data-sidebar-thread-group="threads"])
+  ) {
+  --miuix-thread-end: 0px;
+}
+
+[data-app-sidebar] [data-sidebar-thread-group] > [data-sidebar-row] {
+  border-radius: inherit;
+}
+
+@media (forced-colors: active) {
+  [data-app-sidebar] [data-sidebar-task-controls] [aria-pressed="true"],
+  [data-app-sidebar] [data-sidebar-row][aria-current="page"] {
+    outline: 1px solid Highlight;
+    outline-offset: -2px;
+  }
+}

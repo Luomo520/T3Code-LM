@@ -1,3 +1,6 @@
+import { ScopedVariables } from "uniwind";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { androidHomeTheme } from "./androidHomeTheme";
 import { HeaderUsageStats } from "../usage/HeaderUsageStats";
 import { resolveHeaderUsageTarget } from "../usage/headerUsageTarget";
 import { headerUsageTargetAtom } from "../usage/headerUsageTargetState";
@@ -50,6 +53,9 @@ import { buildHomeListFilterMenuItems } from "./home-list-filter-menu";
 
 export function HomeRouteScreen() {
   const nativePrimaryColumn = use(NativePrimaryColumnContext);
+  const { themeId, themeAppearance, themeVariables } = useAppearancePreferences();
+  const homeTheme =
+    Platform.OS === "android" ? androidHomeTheme(themeId, themeAppearance) : undefined;
   const { layout, setPrimarySidebarSearchQuery, startNewTask } = useAdaptiveWorkspaceLayout();
   const { primarySidebarSearchQuery } = useWorkspacePaneState();
   const selectDetail = useSelectWorkspaceDetail();
@@ -182,7 +188,7 @@ export function HomeRouteScreen() {
     );
   }
 
-  return (
+  const home = (
     <AndroidHomeFabLayout onStartNewTask={startNewTask}>
       <>
         <WorkspaceListHeader
@@ -265,5 +271,10 @@ export function HomeRouteScreen() {
         <ThreadUndoNotice visible={visible} />
       </>
     </AndroidHomeFabLayout>
+  );
+  return Platform.OS === "android" ? (
+    <ScopedVariables variables={homeTheme ?? themeVariables}>{home}</ScopedVariables>
+  ) : (
+    home
   );
 }

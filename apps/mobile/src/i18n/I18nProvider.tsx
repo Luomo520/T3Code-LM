@@ -7,7 +7,7 @@ import { useDeferredValue, type ReactNode } from "react";
 import { Platform, TurboModuleRegistry, View, type TurboModule } from "react-native";
 
 import { mobilePreferencesAtom } from "../state/preferences";
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";
+import { DEFAULT_INTERFACE_LOCALE, DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";
 import de from "./translations/de.json";
 import es from "./translations/es.json";
 import fr from "./translations/fr.json";
@@ -57,8 +57,8 @@ function readSystemLocales(): ReadonlyArray<string> {
 export function useLanguagePreference(): string {
   const preferences = useAtomValue(mobilePreferencesAtom);
   return AsyncResult.isSuccess(preferences)
-    ? (preferences.value.language ?? DEFAULT_LOCALE)
-    : DEFAULT_LOCALE;
+    ? (preferences.value.language ?? DEFAULT_INTERFACE_LOCALE)
+     : DEFAULT_INTERFACE_LOCALE;
 }
 
 /** Translates the screens inside it into the saved language; "system" follows the device. */
@@ -66,7 +66,7 @@ export function I18nProvider(props: { readonly children: ReactNode }) {
   // GT suspends while a locale's catalog loads. Deferring the switch keeps the current language
   // on screen until then, instead of GT's full-screen spinner.
   const locale = useDeferredValue(
-    resolveLocale(useLanguagePreference(), readSystemLocales(), SUPPORTED_LOCALES, DEFAULT_LOCALE),
+    resolveLocale(useLanguagePreference(), readSystemLocales(), SUPPORTED_LOCALES, DEFAULT_INTERFACE_LOCALE),
   );
   return (
     <GTProvider locale={locale} fallback={<View className="flex-1 bg-screen" />}>

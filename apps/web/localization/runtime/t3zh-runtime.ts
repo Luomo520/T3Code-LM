@@ -21,6 +21,7 @@ export interface T3zhDict {
 }
 
 export const LOCALE_STORAGE_KEY = "t3code-zh.locale";
+const ACTIVE_LOCALE_STORAGE_KEY = "t3code-zh.active-locale";
 export const LOCALE_PREFERENCES: readonly LocalePreference[] = ["system", "en", "zh-CN"];
 
 /** 查表结果缓存的上限。超过后整体清空，避免动态文本（计时、计数）让缓存无限增长。 */
@@ -266,6 +267,8 @@ export interface T3zhGlobalApi {
   getLocale(): LocalePreference;
   getResolvedLocale(): Locale;
   setLocale(value: LocalePreference): void;
+  followClientSettings(request: (value: LocalePreference) => void): void;
+  syncClientLocale(value: Locale): void;
   /** 与注入的 `__t3zh_t` 是同一个函数；供补丁在显示位置翻译那些同时被代码当作值比较的文字（§5，2026-10-05 追加）。 */
   t(value: unknown): unknown;
 }
@@ -335,7 +338,15 @@ export function systemLanguageList(env: RuntimeEnv): string[] {
  */
 export function installT3zhRuntime(dict: T3zhDict | string, env: RuntimeEnv = defaultEnv()): InstalledRuntime {
   const preference = readPreference(env);
-  const locale = resolveLocale(preference, systemLanguageList(env));
+  let locale = resolveLocale(preference, systemLanguageList(env));
+  try {
+    const active = env.localStorage?.getItem(ACTIVE_LOCALE_STORAGE_KEY);
+    if (active === "en" || active === "zh-CN") locale = active;
+  } catch {
+    // 隐私模式下本地存储可能不可用。
+  }
+  let requestLocale: ((value: LocalePreference) => void) | undefined;
+  let reloadRequested = false;
 
   let t: (value: unknown) => unknown;
   if (locale === "en") {
@@ -352,7 +363,29 @@ export function installT3zhRuntime(dict: T3zhDict | string, env: RuntimeEnv = de
       if (!isLocalePreference(value)) {
         throw new TypeError(`t3code-zh: unsupported locale preference ${JSON.stringify(value)}`);
       }
+      if (requestLocale) {
+        requestLocale(value);
+        return;
+      }
       env.localStorage?.setItem(LOCALE_STORAGE_KEY, value);
+      if (env.localStorage?.getItem(ACTIVE_LOCALE_STORAGE_KEY)) {
+        env.localStorage.setItem(ACTIVE_LOCALE_STORAGE_KEY, resolveLocale(value, systemLanguageList(env)));
+      }
+      env.location?.reload();
+    },
+    followClientSettings(request) {
+      requestLocale = request;
+    },
+    syncClientLocale(value) {
+      if (value === locale || reloadRequested) return;
+      try {
+        if (!env.localStorage) return;
+        env.localStorage.setItem(ACTIVE_LOCALE_STORAGE_KEY, value);
+      } catch {
+        return;
+      }
+      reloadRequested = true;
+      // 模块级文案已在加载时求值，通过刷新让它们与 React 界面一起切换。
       env.location?.reload();
     },
     t,

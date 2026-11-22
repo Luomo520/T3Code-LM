@@ -51,6 +51,8 @@ interface AppearancePreferencesContextValue {
   readonly themeMode: MobileThemeMode;
   readonly androidNavigationStyle: AndroidNavigationStyle;
   readonly setAndroidNavigationStyle: (value: AndroidNavigationStyle) => void;
+  readonly dockGlassEnabled: boolean;
+  readonly setDockGlassEnabled: (value: boolean) => void;
   readonly themeAppearance: MobileThemeAppearance;
   readonly systemColorsAvailable: boolean;
   readonly systemColorsActive: boolean;
@@ -201,6 +203,7 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
     manufacturer,
     process.env.EXPO_PUBLIC_T3_FLOATING_TABS === "1",
   );
+  const dockGlassEnabled = storedPreferences?.dockGlassEnabled !== false;
   const themeMode = normalizeMobileThemeMode(storedPreferences?.themeMode);
   const themeAppearance = themeMode === "system" ? systemColorScheme : themeMode;
   const resolvedThemeIds = resolveMobileThemeIds(storedPreferences ?? {});
@@ -272,6 +275,8 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
   const setAndroidNavigationStyle = (value: AndroidNavigationStyle) =>
     updatePreferences({ androidNavigationStyle: value });
 
+  const setDockGlassEnabled = (value: boolean) => updatePreferences({ dockGlassEnabled: value });
+
   const setBaseFontSize = (value: number) => {
     applyThemeRuntime({ ...currentRuntimeState(), baseFontSize: value });
     updatePreferences({ baseFontSize: value });
@@ -301,6 +306,8 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       themeMode,
       androidNavigationStyle,
       setAndroidNavigationStyle,
+      dockGlassEnabled,
+      setDockGlassEnabled,
       themeAppearance,
       systemColorsAvailable: isSystemColorsAvailable,
       systemColorsActive,
@@ -325,6 +332,8 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       themeMode,
       androidNavigationStyle,
       setAndroidNavigationStyle,
+      dockGlassEnabled,
+      setDockGlassEnabled,
       themeAppearance,
       systemColorsActive,
       themeVariables,

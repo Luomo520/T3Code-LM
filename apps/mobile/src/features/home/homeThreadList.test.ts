@@ -11,7 +11,7 @@ import {
   findHomeProjectScope,
   selectHomeCatalog,
 } from "./homeThreadList";
-import { arrangeHomeList, homeConversationTimestamp } from "./homeListView";
+import { arrangeHomeList, homeConversationTimestamp, type HomeListView } from "./homeListView";
 import { makeThreadShellFixture } from "../../test-fixtures";
 import { buildThreadListV2Items } from "../threads/threadListV2";
 
@@ -51,7 +51,7 @@ function makeThread(
 }
 
 describe("home project scopes", () => {
-  it("includes unarchived history in both views and keeps pins first in the time view", () => {
+  it("includes unarchived history and places pins above both time and project lists", () => {
     const environmentId = EnvironmentId.make("local");
     const projects = ["one", "two"].map((id) =>
       makeProject({ environmentId, id: ProjectId.make(id), title: id }),
@@ -63,9 +63,13 @@ describe("home project scopes", () => {
         id: ThreadId.make(`thread-${index}`),
         title: `${index}`,
         latestUserMessageAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
-        updatedAt: `2026-07-${String(20 - index).padStart(2, "0")}T00:00:00.000Z`,
+        latestConversationMessageAt: index === 4 ? "2026-06-21T00:00:00.000Z" : null,
+        updatedAt:
+          index === 13
+            ? "2026-07-21T00:00:00.000Z"
+            : `2026-07-${String(20 - index).padStart(2, "0")}T00:00:00.000Z`,
         settledOverride: index < 13 ? "settled" : "active",
-        pinnedAt: index === 13 ? "2026-06-01T00:00:00.000Z" : null,
+        pinnedAt: index === 4 || index === 13 ? "2026-06-01T00:00:00.000Z" : null,
         snoozedUntil: index === 14 ? "2026-08-01T00:00:00.000Z" : null,
       }),
     );
@@ -74,40 +78,39 @@ describe("home project scopes", () => {
       environmentId: null,
       searchQuery: "",
       now: "2026-07-01T00:00:00.000Z",
+      pinnedBeforeSettled: true,
       settledLimit: 1,
       settledShelfExpanded: false,
       snoozedShelfExpanded: false,
     });
     expect(layout.items).toHaveLength(16);
     expect(layout.hiddenSettledCount).toBe(0);
-    const rows = layout.items.map(({ thread }) => ({ key: thread.id, thread }));
+    const rows = layout.items.map(({ thread, pinned }) => ({ key: thread.id, thread, pinned }));
     const describe = (row: (typeof rows)[number]) => ({
       projectKey: row.thread.projectId,
       title: row.thread.projectId,
       timestamp: homeConversationTimestamp(row.thread),
-      pinned: row.thread.pinnedAt !== null,
+      pinned: row.pinned,
     });
-    expect(
-      arrangeHomeList({ rows, describe, mode: "time", collapsed: new Set() }).map((row) => row.key),
-    ).toEqual([
-      threads[13]!.id,
-      ...threads
-        .toReversed()
-        .filter((thread) => thread.pinnedAt === null)
-        .map((thread) => thread.id),
+    const expectThread = (thread: EnvironmentThreadShell) => ({
+      key: thread.id,
+      thread: { projectId: thread.projectId },
+      pinned: thread.pinnedAt !== null,
+    });
+    const pinned = [expectThread(threads[4]!), expectThread(threads[13]!)];
+    const unpinned = threads.toReversed().filter((thread) => thread.pinnedAt === null);
+    expect(arrangeHomeList({ rows, describe, mode: "time", collapsed: new Set() })).toMatchObject([
+      ...pinned,
+      ...unpinned.map(expectThread),
     ]);
-    const grouped = arrangeHomeList({ rows, describe, mode: "projects", collapsed: new Set() });
-    expect(grouped.map((row) => row.key)).toEqual([
-      "home-project:0:two",
-      ...threads
-        .toReversed()
-        .filter((thread) => thread.projectId === projects[1]!.id)
-        .map((thread) => thread.id),
-      "home-project:0:one",
-      ...threads
-        .toReversed()
-        .filter((thread) => thread.projectId === projects[0]!.id)
-        .map((thread) => thread.id),
+    expect(
+      arrangeHomeList({ rows, describe, mode: "projects", collapsed: new Set() }),
+    ).toMatchObject([
+      ...pinned,
+      ...[projects[1]!, projects[0]!].flatMap(({ id }) => [
+        { type: "home-project", projectKey: id, count: 7, expanded: true },
+        ...unpinned.filter((thread) => thread.projectId === id).map(expectThread),
+      ]),
     ]);
     const search = buildHomeThreadList({
       threads,
@@ -117,21 +120,22 @@ describe("home project scopes", () => {
     });
     expect(search.items.map((item) => item.thread.id)).toEqual([threads[15]!.id]);
   });
-  it("keeps scoped pins above active and settled rows as older history pages load", () => {
+  it("sorts scoped pins by conversation time as history loads and new replies arrive", () => {
     const environmentId = EnvironmentId.make("local");
     const projectId = ProjectId.make("scoped");
     const now = "2026-07-01T00:00:00.000Z";
     const thread = (id: string, overrides: Partial<EnvironmentThreadShell> = {}) =>
       makeThread({ environmentId, projectId, id: ThreadId.make(id), title: id, ...overrides });
-    const first = thread("first", {
-      pinnedAt: now,
+    const olderPin = thread("older-pin", {
+      pinnedAt: "2026-06-30T00:00:00.000Z",
       pinOrderKey: "a",
       settledOverride: "settled",
       settledAt: "2026-06-01T00:00:00.000Z",
       latestUserMessageAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-30T00:00:00.000Z",
     });
-    const second = thread("second", {
-      pinnedAt: now,
+    const newerPin = thread("newer-pin", {
+      pinnedAt: "2026-06-02T00:00:00.000Z",
       pinOrderKey: "b",
       latestUserMessageAt: "2026-06-02T00:00:00.000Z",
     });
@@ -150,13 +154,18 @@ describe("home project scopes", () => {
       projectId: ProjectId.make("other"),
       pinnedAt: now,
       pinOrderKey: "0",
+      latestConversationMessageAt: "2026-06-29T00:00:00.000Z",
     });
     const snoozedPin = thread("snoozed", {
       pinnedAt: now,
       pinOrderKey: "0",
       snoozedUntil: "2099-01-01T00:00:00.000Z",
     });
-    const recentKeys = (rows: readonly EnvironmentThreadShell[], settledLimit: number) => {
+    const displayedKeys = (
+      rows: readonly EnvironmentThreadShell[],
+      settledLimit: number,
+      mode: HomeListView,
+    ) => {
       const layout = buildThreadListV2Items({
         threads: rows,
         projectRefs: [{ environmentId, projectId }],
@@ -166,34 +175,44 @@ describe("home project scopes", () => {
         now,
         settledLimit,
         settledShelfExpanded: true,
+        snoozedShelfExpanded: false,
       });
       return arrangeHomeList({
         rows: layout.items.map((item) => ({ ...item, key: item.thread.id })),
-        mode: "time",
+        mode,
         collapsed: new Set(),
         describe: ({ thread, pinned }) => ({
           projectKey: thread.projectId,
-          title: thread.title,
+          title: thread.projectId,
           timestamp: homeConversationTimestamp(thread),
           pinned,
         }),
       }).map((row) => row.key);
     };
-    const threads = [second, newSettled, other, active, first, olderSettled, snoozedPin];
-    expect(recentKeys(threads, 1)).toEqual(["first", "second", "new-settled", "active"]);
-    expect(recentKeys(threads, 2)).toEqual([
-      "first",
-      "second",
-      "new-settled",
-      "active",
-      "older-settled",
-    ]);
-    expect(
-      recentKeys(
-        threads.map((row) => (row === first ? { ...row, pinnedAt: null, pinOrderKey: null } : row)),
-        3,
-      ),
-    ).toEqual(["second", "new-settled", "active", "older-settled", "first"]);
+    const threads = [newerPin, newSettled, other, active, olderPin, olderSettled, snoozedPin];
+    const afterReply = threads.map((row) =>
+      row === olderPin ? { ...row, latestConversationMessageAt: "2026-06-08T00:00:00.000Z" } : row,
+    );
+    const afterUnpin = threads.map((row) =>
+      row === olderPin ? { ...row, pinnedAt: null, pinOrderKey: null } : row,
+    );
+    for (const mode of ["time", "projects"] as const) {
+      const heading = mode === "projects" ? ["home-project:0:scoped"] : [];
+      const activePage = [...heading, "new-settled", "active"];
+      const moreHistory = [...activePage, "older-settled"];
+      expect(displayedKeys(threads, 1, mode)).toEqual(["newer-pin", "older-pin", ...activePage]);
+      expect(displayedKeys(threads, 2, mode)).toEqual(["newer-pin", "older-pin", ...moreHistory]);
+      expect(displayedKeys(afterReply, 2, mode)).toEqual([
+        "older-pin",
+        "newer-pin",
+        ...moreHistory,
+      ]);
+      expect(displayedKeys(afterUnpin, 3, mode)).toEqual([
+        "newer-pin",
+        ...moreHistory,
+        "older-pin",
+      ]);
+    }
   });
 
   it("derives the catalog from existing unarchived conversations and keeps environments separate", () => {

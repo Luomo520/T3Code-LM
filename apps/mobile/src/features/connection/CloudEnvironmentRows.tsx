@@ -1,3 +1,4 @@
+import { useGT } from "../../i18n/I18nProvider";
 import { Button } from "../../components/ui/Button";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { ConnectionTraceId } from "./ConnectionTraceId";
@@ -294,6 +295,7 @@ function CloudEnvironmentRowShell(props: {
 }) {
   const isRetrying =
     props.connectionState === "connecting" || props.connectionState === "reconnecting";
+  const gt = useGT();
   const shouldPulse = isRetrying;
   const statusText =
     props.statusText ??
@@ -302,7 +304,7 @@ function CloudEnvironmentRowShell(props: {
       error: props.connectionError,
       traceId: props.connectionErrorTraceId,
       ...(props.awaitingApproval ? { awaitingApproval: true as const } : {}),
-    });
+    }, gt);
   const statusClassName =
     props.connectionError && props.connectionState !== "unsupported" && !props.awaitingApproval
       ? "text-danger-foreground"

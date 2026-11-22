@@ -12,6 +12,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -19,7 +21,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
@@ -327,6 +329,85 @@ describe("providerMaintenanceRunner", () => {
       ),
     );
   });
+
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "updates only the selected remote CLI and reports the version returned by its probe",
+    () => {
+      const claude = ProviderDriverKind.make("claudeAgent");
+      const selected = ProviderInstanceId.make("remote-claude");
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const temp = yield* fs.makeTempDirectoryScoped();
+        const cli = path.join(temp, "claude");
+        // 临时 CLI 的更新动作和版本探测都走真实子进程，不调用宿主机上的供应商程序。
+        yield* fs.writeFileString(
+          cli,
+          [
+            "#!/bin/sh",
+            'case "$1" in',
+            '  update) echo 2.1.310 > "$0.version";;',
+            '  --version) cat "$0.version";;',
+            "  *) exit 2;;",
+            "esac",
+          ].join("\n"),
+        );
+        yield* fs.chmod(cli, 0o755);
+        yield* fs.writeFileString(cli + ".version", "2.1.309");
+        const { registry, providersRef } = yield* makeRegistry([
+          baseProvider,
+          { ...baseProvider, driver: claude, instanceId: selected, version: "2.1.309" },
+        ]);
+        const updater = yield* makeTestRunner({
+          ...registry,
+          getProviderMaintenanceCapabilitiesForInstance: (id, driver) => {
+            assert.strictEqual(id, selected);
+            assert.strictEqual(driver, claude);
+            return Effect.succeed(
+              makeProviderMaintenanceCapabilities({
+                provider: claude,
+                packageName: "@anthropic-ai/claude-code",
+                updateExecutable: cli,
+                updateArgs: ["update"],
+                updateLockKey: "claude-native",
+              }),
+            );
+          },
+          refreshAfterUpdate: (driver, id) =>
+            Effect.gen(function* () {
+              assert.strictEqual(driver, claude);
+              assert.strictEqual(id, selected);
+              const stdout = yield* spawner
+                .string(ChildProcess.make(cli, ["--version"]))
+                .pipe(Effect.orDie);
+              return yield* Ref.updateAndGet(providersRef, (providers) =>
+                providers.map((entry) =>
+                  entry.instanceId === id ? { ...entry, version: stdout.trim() } : entry,
+                ),
+              );
+            }),
+        });
+        const result = yield* updater.updateProvider({ provider: claude, instanceId: selected });
+        assert.deepStrictEqual(
+          result.providers.find((entry) => entry.instanceId === CODEX_INSTANCE_ID),
+          baseProvider,
+        );
+        const refreshed = result.providers.find((entry) => entry.instanceId === selected);
+        assert.strictEqual(refreshed?.version, "2.1.310");
+        assert.strictEqual(refreshed?.updateState?.status, "succeeded");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            layerNonWindowsPlatform,
+            layerLatestVersionHttpClient("2.1.310"),
+          ),
+        ),
+      );
+    },
+  );
 
   it.effect.each([
     { name: "current", probe: {}, skip: true },
