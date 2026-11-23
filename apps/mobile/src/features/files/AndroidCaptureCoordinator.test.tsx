@@ -26,8 +26,10 @@ vi.mock("expo-file-system", () => ({
     }
   },
 }));
-vi.mock("react-native", () => ({ ToastAndroid: { show: vi.fn(), SHORT: 0 } }));
-vi.mock("../../components/ui/Dialog", () => ({ alert: state.alert }));
+vi.mock("react-native", () => ({
+  Alert: { alert: state.alert },
+  ToastAndroid: { show: vi.fn(), SHORT: 0 },
+}));
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
 vi.mock("../../lib/appState", () => ({ isAppActive: () => true, useAppActive: () => true }));
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));

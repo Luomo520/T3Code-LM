@@ -10,9 +10,8 @@ import {
 import * as Device from "expo-device";
 import { File } from "expo-file-system";
 import { useEffect, useEffectEvent, useRef } from "react";
-import { ToastAndroid } from "react-native";
+import { Alert, ToastAndroid } from "react-native";
 
-import * as Dialog from "../../components/ui/Dialog";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { isAppActive, useAppActive } from "../../lib/appState";
 import { useEnvironmentScope } from "../../state/session";
@@ -195,7 +194,8 @@ function EnvironmentCaptureCoordinator({
         if (approved) void capture(job);
         else void finish({ _tag: "reject", id: job.id, reason: "denied" });
       };
-      Dialog.alert(
+      // 使用独立的 Android 原生对话框承接这次明确授权。
+      Alert.alert(
         isRecording ? "允许本次录屏？" : "允许本次截图？",
         isRecording
           ? `「${environmentLabel}」的会话请求录屏，最长 ${job.durationSeconds} 秒。授权后，结果将发送回发起请求的会话。`
