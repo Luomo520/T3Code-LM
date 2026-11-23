@@ -415,10 +415,23 @@ export const DeviceForegroundApp = Schema.Struct({
 });
 export type DeviceForegroundApp = typeof DeviceForegroundApp.Type;
 
+export const AndroidPhysicalDeviceStatus = Schema.Struct({
+  connection: Schema.Literals([
+    "connected",
+    "disconnected",
+    "unauthorized",
+    "permissionDenied",
+    "unknown",
+  ]),
+  screen: Schema.Literals(["unlocked", "locked", "off", "unknown"]),
+});
+export type AndroidPhysicalDeviceStatus = typeof AndroidPhysicalDeviceStatus.Type;
+
 export const DeviceDetail = Schema.Struct({
   hostId: DeviceHostId,
   deviceId: DeviceId,
   settings: DeviceSettings,
+  androidPhysical: Schema.optionalKey(AndroidPhysicalDeviceStatus),
   foregroundApp: Schema.NullOr(DeviceForegroundApp),
   readAt: Schema.String,
 });
@@ -442,7 +455,27 @@ export type DevicePermission = typeof DevicePermission.Type;
 const DeviceTarget = {
   hostId: Schema.optional(DeviceHostId),
   deviceId: DeviceId,
+  inputLease: Schema.optionalKey(Schema.String),
 };
+
+const DeviceInputTicket = Schema.String.check(Schema.isPattern(/^[0-9a-f-]{36}$/));
+export const DeviceInputQueueInput = Schema.Struct({
+  hostId: DeviceHostId,
+  deviceId: DeviceId,
+  threadId: ThreadId,
+  panelId: DeviceInputTicket,
+  action: Schema.Literals(["status", "join", "activate", "release"]),
+  lease: Schema.optionalKey(DeviceInputTicket),
+});
+export type DeviceInputQueueInput = typeof DeviceInputQueueInput.Type;
+
+export const DeviceInputQueueReply = Schema.Struct({
+  state: Schema.Literals(["idle", "waiting", "ready", "active"]),
+  ownerThreadId: Schema.NullOr(ThreadId),
+  ahead: Schema.Int,
+  lease: Schema.optionalKey(DeviceInputTicket),
+});
+export type DeviceInputQueueReply = typeof DeviceInputQueueReply.Type;
 
 export const DeviceActionInput = Schema.Union([
   Schema.Struct({

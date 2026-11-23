@@ -108,9 +108,10 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
-import { ThreadListFilters } from "./ThreadListFilters";
+import { ActiveProjectFilter, ThreadListFilters } from "./ThreadListFilters";
 import { useGT } from "../../i18n/I18nProvider";
-import { deriveHomeEmptyState } from "./home-empty-state";
+import { deriveHomeEmptyState, deriveHomeListStatus } from "./home-empty-state";
+import { useEnvironmentShellReadiness } from "../../state/shell";
 
 type HomeListItem = ThreadListV2ListItem | ProjectHeading;
 
@@ -765,9 +766,18 @@ export function HomeScreen(props: HomeScreenProps) {
       ? null
       : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
         gt("this environment"));
-  const emptyState = deriveHomeEmptyState(props.catalogState, props.projects.length, gt);
+  const { status: shellStatus } = useEnvironmentShellReadiness(props.selectedEnvironmentId);
+  const selectedEnvironment = props.environments.find(
+    (environment) => environment.environmentId === props.selectedEnvironmentId,
+  );
+  const listStatus = deriveHomeListStatus(props.catalogState, selectedEnvironment, shellStatus);
+  const scopedProjectCount = props.projects.filter(
+    (project) =>
+      props.selectedEnvironmentId === null || project.environmentId === props.selectedEnvironmentId,
+  ).length;
+  const emptyState = deriveHomeEmptyState(props.catalogState, scopedProjectCount, gt);
 
-  if (!hasAnyThreads) {
+  if (!hasAnyThreads && v2ScopedProjectGroup === null && !hasSearchQuery && listStatus === null) {
     return (
       <View className={containerClassName}>
         <ScreenContent surface={sidebarSurface ? "drawer" : "screen"}>
@@ -838,8 +848,22 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     ) : null;
 
+  const activeProjectFilter =
+    v2ScopedProjectGroup === null ? null : (
+      <ActiveProjectFilter
+        title={v2ScopedProjectGroup.title}
+        onClear={() => props.onProjectChange(null)}
+      />
+    );
+  const listStatusTitle = listStatus === "loading" ? "正在载入会话…" : "环境连接已中断";
   const v2ListEmpty =
-    hasSearchQuery && threadSearch.isPending ? (
+    listStatus !== null ? (
+      <EmptyState
+        title={listStatusTitle}
+        detail={listStatus === "loading" ? "正在同步项目和会话。" : "重新连接环境后即可载入会话。"}
+        variant={Platform.OS === "android" ? "plain" : undefined}
+      />
+    ) : hasSearchQuery && threadSearch.isPending ? (
       <EmptyState
         title={gt("Searching thread messages…")}
         detail={gt("Searching messages for “{query}”.", { query: props.searchQuery })}
@@ -849,12 +873,16 @@ export function HomeScreen(props: HomeScreenProps) {
       <EmptyState
         title={gt("No results")}
         detail={gt("No threads match “{query}”.", { query: props.searchQuery })}
+        actionLabel={v2ScopedProjectGroup === null ? undefined : "查看全部项目"}
+        onAction={v2ScopedProjectGroup === null ? undefined : () => props.onProjectChange(null)}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : v2ScopedProjectGroup !== null ? (
       <EmptyState
         title={gt("No threads in {scope}", { scope: v2ScopedProjectGroup.title })}
         detail={gt("Choose another project or create a new task.")}
+        actionLabel="查看全部项目"
+        onAction={() => props.onProjectChange(null)}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : selectedEnvironmentLabel ? (
@@ -871,9 +899,14 @@ export function HomeScreen(props: HomeScreenProps) {
       />
     );
 
-  if (Platform.OS === "android" && threadListV2Items.length === 0) {
+  if (
+    Platform.OS === "android" &&
+    displayedItems.length === 0 &&
+    !(settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0)
+  ) {
     return (
       <ScreenContent surface="screen">
+        {activeProjectFilter}
         <View
           className="flex-1 items-center justify-center px-4"
           style={{ paddingBottom: insets.bottom }}
@@ -959,6 +992,15 @@ export function HomeScreen(props: HomeScreenProps) {
                       />
                     </View>
                     {v2ListHeader}
+                    {activeProjectFilter}
+                    {listStatus !== null && displayedItems.length > 0 ? (
+                      <Text
+                        accessibilityLiveRegion="polite"
+                        className="mx-4 my-1 text-sm text-foreground-muted"
+                      >
+                        {listStatusTitle}
+                      </Text>
+                    ) : null}
                   </>
                 }
                 // Lifted above the rows so an iOS filter menu's dismissal morph is not covered.

@@ -1,4 +1,5 @@
-import type { MessageId, RunId } from "@t3tools/contracts";
+import type { MessageId, RunAttemptId, RunId } from "@t3tools/contracts";
+import { createDeferredStorage } from "../../lib/storage";
 
 export interface TimelineRunObservation {
   readonly threadKey: string | null;
@@ -32,8 +33,6 @@ export function observeTimelineRun(
   }
   return { observation, anchorMessageId: input.messageId };
 }
-import type { RunAttemptId } from "@t3tools/contracts";
-
 // Match the titlebar fade inset so draft promotion preserves the first row's position.
 export const CHAT_TIMELINE_ANCHOR_OFFSET = 24;
 
@@ -128,10 +127,69 @@ export interface RememberedTimelinePosition {
   };
 }
 
+type StoredTimelinePosition = Omit<RememberedTimelinePosition, "disclosures">;
+const POSITION_LIMIT = 100;
+const POSITION_STORAGE_KEY = "t3code:timeline-reading-positions:v1";
 const rememberedTimelinePositions = new Map<string, RememberedTimelinePosition>();
+const pendingPositions = new Map<string, StoredTimelinePosition | null>();
 
-export function readTimelinePosition(threadKey: string) {
-  return rememberedTimelinePositions.get(threadKey);
+function readStoredTimelinePositions(): Map<string, StoredTimelinePosition> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(POSITION_STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(parsed)) return new Map();
+    const positions = new Map<string, StoredTimelinePosition>();
+    for (const entry of parsed.slice(-POSITION_LIMIT)) {
+      if (!Array.isArray(entry) || typeof entry[0] !== "string") continue;
+      const [key, position] = entry;
+      if (
+        typeof position?.rowId === "string" &&
+        Number.isFinite(position.offsetWithinRow) &&
+        Number.isFinite(position.scrollOffset) &&
+        position.atEnd === false
+      ) {
+        positions.set(key, position);
+      }
+    }
+    return positions;
+  } catch {
+    return new Map();
+  }
+}
+
+const deferredPositions = createDeferredStorage(
+  {
+    getItem: () => null,
+    removeItem: () => {},
+    setItem: (name, value) => {
+      try {
+        window.localStorage.setItem(name, value);
+        pendingPositions.clear();
+      } catch {
+        // 存储不可写时仍可在当前窗口恢复。
+      }
+    },
+  },
+  () => {
+    const positions = readStoredTimelinePositions();
+    for (const [key, position] of pendingPositions) {
+      positions.delete(key);
+      if (position !== null) positions.set(key, position);
+    }
+    return JSON.stringify([...positions].slice(-POSITION_LIMIT));
+  },
+);
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", deferredPositions.flush);
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") deferredPositions.flush();
+  });
+}
+
+export function readTimelinePosition(threadKey: string): RememberedTimelinePosition | undefined {
+  return rememberedTimelinePositions.get(threadKey) ?? readStoredTimelinePositions().get(threadKey);
 }
 
 export function rememberTimelinePosition(
@@ -139,13 +197,18 @@ export function rememberTimelinePosition(
   position: RememberedTimelinePosition,
   liveFollowEnabled: boolean,
 ) {
+  const prior = rememberedTimelinePositions.get(threadKey);
+  const atEnd = liveFollowEnabled || position.atEnd;
   rememberedTimelinePositions.delete(threadKey);
-  rememberedTimelinePositions.set(threadKey, {
-    ...position,
-    atEnd: liveFollowEnabled || position.atEnd,
-  });
-  if (rememberedTimelinePositions.size > 100) {
+  rememberedTimelinePositions.set(threadKey, { ...position, atEnd });
+  if (rememberedTimelinePositions.size > POSITION_LIMIT) {
     const oldest = rememberedTimelinePositions.keys().next().value;
     if (oldest !== undefined) rememberedTimelinePositions.delete(oldest);
   }
+
+  if (typeof window === "undefined" || (atEnd && prior?.atEnd === true)) return;
+  const { rowId, offsetWithinRow, scrollOffset } = position;
+  pendingPositions.delete(threadKey);
+  pendingPositions.set(threadKey, atEnd ? null : { rowId, offsetWithinRow, scrollOffset, atEnd });
+  deferredPositions.setItem(POSITION_STORAGE_KEY, undefined);
 }

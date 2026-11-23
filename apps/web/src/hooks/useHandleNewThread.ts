@@ -20,7 +20,11 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
-import { resolveNewThreadEnvMode, resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import {
+  resolveNewThreadEnvMode,
+  resolveProjectSettings,
+  selectPreferredProjectBackend,
+} from "@t3tools/shared/projectSettings";
 import {
   readProject,
   readProjects,
@@ -93,13 +97,14 @@ export function createNewThreadHandler(router: AnyRouter) {
   };
 
   return (
-    projectRef: ScopedProjectRef,
+    requestedProjectRef: ScopedProjectRef,
     options?: {
       branch?: string | null;
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       replace?: boolean;
+      usePreferredBackend?: boolean;
       /** Composer text for the draft, set before it shows. A draft with user text keeps it. */
       prompt?: string;
     },
@@ -108,6 +113,30 @@ export function createNewThreadHandler(router: AnyRouter) {
     const projectGroupingSettings = selectProjectGroupingSettings(getClientSettings());
     // Read at call time; status pushes replace the config map and would recreate every sidebar handler.
     const environmentServerConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
+    let projectRef = requestedProjectRef;
+    if (options?.usePreferredBackend) {
+      const requestedProject = projects.find(
+        (project) =>
+          project.environmentId === requestedProjectRef.environmentId &&
+          project.id === requestedProjectRef.projectId,
+      );
+      if (requestedProject) {
+        const groupKey = deriveLogicalProjectKeyFromSettings(
+          requestedProject,
+          projectGroupingSettings,
+        );
+        const preferred = selectPreferredProjectBackend(
+          projects.filter(
+            (project) =>
+              project.archivedAt == null &&
+              deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings) === groupKey,
+          ),
+          environmentServerConfigs,
+          new Set(appAtomRegistry.get(environmentSummaries.connectedEnvironmentIdsAtom)),
+        );
+        if (preferred) projectRef = scopeProjectRef(preferred.environmentId, preferred.id);
+      }
+    }
     const targetServerSettings =
       environmentServerConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
     const {

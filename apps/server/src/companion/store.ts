@@ -16,6 +16,7 @@ const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 const PAIRING_TTL = 5 * MINUTE;
 const QUEUED_TTL = 5 * MINUTE;
+const CAPTURE_QUEUED_TTL = 30_000;
 const RUNNING_TTL = 2 * MINUTE;
 const ONLINE_TTL = 15_000;
 const HISTORY_TTL = 2 * DAY;
@@ -29,10 +30,20 @@ const MAX_IMAGE_PIXELS = 32 * 1024 * 1024;
 const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const CODE_FORMAT = /^[2-9A-HJ-NP-Z]{10}$/;
 const TOKEN_FORMAT = /^[A-Za-z0-9_-]{43}$/;
-const IMAGE_NAME_FORMAT = /^[0-9a-f-]{36}\.png$/;
+const MEDIA_NAME_FORMAT = /^[0-9a-f-]{36}\.(png|avi|bin)$/;
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
-const actions = ["screenshot", "open-t3", "open-notepad", "close-window"] as const;
+const actions = [
+  "screenshot",
+  "record-screen",
+  "open-t3",
+  "open-notepad",
+  "close-window",
+  "send-file",
+  "receive-file",
+  "write-notepad",
+  "read-notepad",
+] as const;
 type Action = (typeof actions)[number];
 type TaskStatus = CompanionDevice["recentTasks"][number]["status"];
 type Strings = Readonly<Record<string, string>>;
@@ -53,6 +64,14 @@ interface Task {
   readonly message: string;
   readonly deviceName: string;
   readonly imagePath?: string;
+  readonly recordingPath?: string;
+  readonly stopRequested?: true;
+  readonly transferredFile?: {
+    readonly path: string;
+    readonly name: string;
+    readonly sha256: string;
+  };
+  readonly savedFile?: NonNullable<Completion["savedFile"]>;
 }
 
 interface TaskRow {
@@ -67,6 +86,8 @@ interface TaskRow {
   readonly message: string;
   readonly image_name: string | null;
   readonly result_hash: string | null;
+  readonly transfer_receipt: string | null;
+  readonly stop_requested_at: number | null;
 }
 
 interface DeviceRow {
@@ -74,6 +95,7 @@ interface DeviceRow {
   readonly name: string;
   readonly info: string;
   readonly last_seen: number;
+  readonly details_updated_at: number | null;
 }
 
 // 同步存储异常由 HTTP 和 MCP 入口转换为各自的响应格式。
@@ -114,6 +136,26 @@ function encodeStrings(data: Strings): string {
     throw new CompanionError(400, "Invalid Windows companion fields.");
   }
   return JSON.stringify(Object.fromEntries(entries));
+}
+
+function decodeRecording(source: string): Buffer {
+  if (source.length > COMPANION_MAX_IMAGE_BASE64_LENGTH) {
+    throw new CompanionError(413, "Recording exceeds 5 MiB.");
+  }
+  const bytes = Buffer.from(source, "base64");
+  if (bytes.length > COMPANION_MAX_IMAGE_BYTES) {
+    throw new CompanionError(413, "Recording exceeds 5 MiB.");
+  }
+  if (
+    bytes.length < 224 ||
+    bytes.toString("ascii", 0, 4) !== "RIFF" ||
+    bytes.readUInt32LE(4) !== bytes.length - 8 ||
+    bytes.toString("ascii", 8, 12) !== "AVI " ||
+    bytes.toString("ascii", 16, 20) !== "hdrl"
+  ) {
+    throw new CompanionError(415, "Invalid Windows companion AVI recording.");
+  }
+  return bytes;
 }
 
 function decodePng(source: string): Buffer {
@@ -216,7 +258,8 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       token_digest TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       info TEXT NOT NULL,
-      last_seen INTEGER NOT NULL
+      last_seen INTEGER NOT NULL,
+      details_updated_at INTEGER
     ) STRICT;
     CREATE TABLE IF NOT EXISTS tasks (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -233,6 +276,8 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       expires_at INTEGER NOT NULL,
       image_name TEXT,
       result_hash TEXT,
+      transfer_receipt TEXT,
+      stop_requested_at INTEGER,
       UNIQUE(thread_id, request_id)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS tasks_by_device ON tasks(device_id, sequence);
@@ -255,8 +300,9 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
   function cleanup(time: number): void {
     db.prepare(`
       UPDATE tasks SET status = 'failed', message = 'The Windows request expired.', updated_at = ?
-      WHERE status IN ('queued', 'running') AND expires_at <= ?
-    `).run(time, time);
+      WHERE (status IN ('queued', 'running') AND expires_at <= ?)
+        OR (status = 'queued' AND action IN ('screenshot', 'record-screen') AND updated_at <= ?)
+    `).run(time, time, time - CAPTURE_QUEUED_TTL);
     if (time < nextCleanup) return;
     db.prepare("DELETE FROM codes WHERE expires_at <= ?").run(time);
     db.prepare(
@@ -277,11 +323,25 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         .map((row) => String(row.image_name)),
     );
     for (const imageName of NodeFS.readdirSync(screenshots)) {
-      if (IMAGE_NAME_FORMAT.test(imageName) && !names.has(imageName)) {
+      if (MEDIA_NAME_FORMAT.test(imageName) && !names.has(imageName)) {
         NodeFS.unlinkSync(NodePath.join(screenshots, imageName));
       }
     }
   }
+
+  transaction(() => {
+    const columns = db.prepare("PRAGMA table_info(devices)").all();
+    if (!columns.some((column) => column.name === "details_updated_at")) {
+      db.exec("ALTER TABLE devices ADD COLUMN details_updated_at INTEGER");
+    }
+    const taskColumns = db.prepare("PRAGMA table_info(tasks)").all();
+    if (!taskColumns.some((column) => column.name === "transfer_receipt")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN transfer_receipt TEXT");
+    }
+    if (!taskColumns.some((column) => column.name === "stop_requested_at")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN stop_requested_at INTEGER");
+    }
+  });
 
   function maintenance(time: number): void {
     const sweep = time >= nextCleanup;
@@ -293,13 +353,23 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
     const unauthorized = new CompanionError(401, "Invalid Windows companion token.");
     if (!TOKEN_FORMAT.test(token)) throw unauthorized;
     const row = db
-      .prepare("SELECT id, name, info, last_seen FROM devices WHERE token_digest = ?")
+      .prepare(
+        "SELECT id, name, info, last_seen, details_updated_at FROM devices WHERE token_digest = ?",
+      )
       .get(hash(token)) as DeviceRow | undefined;
     if (row === undefined) throw unauthorized;
     return row;
   }
 
   function taskView(task: TaskRow): Task {
+    const receipt =
+      task.transfer_receipt === null
+        ? null
+        : (JSON.parse(task.transfer_receipt) as {
+            readonly name?: string;
+            readonly sha256: string;
+            readonly path?: string;
+          });
     return {
       id: task.id,
       action: task.action,
@@ -307,8 +377,26 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       updatedAt: timestamp(task.updated_at),
       message: task.message,
       deviceName: task.device_name,
-      ...(task.image_name !== null && IMAGE_NAME_FORMAT.test(task.image_name)
-        ? { imagePath: NodePath.join(screenshots, task.image_name) }
+      ...(task.status === "running" && task.stop_requested_at !== null
+        ? { stopRequested: true }
+        : {}),
+      ...(task.image_name !== null && MEDIA_NAME_FORMAT.test(task.image_name)
+        ? task.action === "record-screen" && task.image_name.endsWith(".avi")
+          ? { recordingPath: NodePath.join(screenshots, task.image_name) }
+          : task.action === "screenshot" && task.image_name.endsWith(".png")
+            ? { imagePath: NodePath.join(screenshots, task.image_name) }
+            : task.action === "send-file" && task.image_name.endsWith(".bin") && receipt?.name
+              ? {
+                  transferredFile: {
+                    path: NodePath.join(screenshots, task.image_name),
+                    name: receipt.name,
+                    sha256: receipt.sha256,
+                  },
+                }
+              : {}
+        : {}),
+      ...(task.action === "receive-file" && receipt?.path
+        ? { savedFile: { path: receipt.path, sha256: receipt.sha256 } }
         : {}),
     };
   }
@@ -380,13 +468,9 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         if (count("devices") >= MAX_DEVICES) {
           throw new CompanionError(429, "Windows companion device capacity reached.");
         }
-        db.prepare("INSERT INTO devices VALUES (?, ?, ?, ?, ?)").run(
-          deviceId,
-          hash(token),
-          label(name, 128),
-          encodeStrings(info),
-          time,
-        );
+        db.prepare(
+          "INSERT INTO devices (id, token_digest, name, info, last_seen, details_updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ).run(deviceId, hash(token), label(name, 128), encodeStrings(info), time, time);
         return { deviceId, token };
       });
     },
@@ -396,18 +480,30 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       return { deviceId: device.id, name: device.name };
     },
 
-    poll(token: string, _name: string, info: Strings): { name: string; job: Job | null } {
-      getDevice(token);
+    poll(
+      token: string,
+      _name: string,
+      info: Strings,
+      watchRecordingId?: string,
+    ): { readonly name: string; readonly job: Job | null; readonly stopRequested?: boolean } {
+      const device = getDevice(token);
       const time = now();
       maintenance(time);
+      if (watchRecordingId !== undefined) {
+        const row = db
+          .prepare(`
+          SELECT stop_requested_at FROM tasks
+          WHERE id = ? AND device_id = ? AND action = 'record-screen' AND status = 'running'
+        `)
+          .get(watchRecordingId, device.id);
+        return { name: device.name, job: null, stopRequested: row?.stop_requested_at != null };
+      }
       return transaction(() => {
         const device = getDevice(token);
         // 管理员修改的名称由服务端持有，心跳只更新设备信息和在线时间。
-        db.prepare("UPDATE devices SET info = ?, last_seen = ? WHERE id = ?").run(
-          encodeStrings(info),
-          time,
-          device.id,
-        );
+        db.prepare(
+          "UPDATE devices SET info = ?, last_seen = ?, details_updated_at = ? WHERE id = ?",
+        ).run(encodeStrings(info), time, time, device.id);
         if (
           db
             .prepare("SELECT 1 FROM tasks WHERE device_id = ? AND status = 'running'")
@@ -435,6 +531,36 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
           },
         };
       });
+    },
+
+    checkDevice(
+      token: string,
+      info: Strings,
+      renamedTo?: string,
+    ): { readonly name: string; readonly detailsUpdatedAt: string } {
+      const time = now();
+      return transaction(() => {
+        const device = getDevice(token);
+        const name = renamedTo === undefined ? device.name : label(renamedTo, 128);
+        // 受控端暂停时也可刷新资料，领取队列的在线时间仍由 poll 维护。
+        db.prepare(
+          "UPDATE devices SET name = ?, info = ?, details_updated_at = ? WHERE id = ?",
+        ).run(name, encodeStrings(info), time, device.id);
+        return { name, detailsUpdatedAt: timestamp(time) };
+      });
+    },
+
+    receiveTransfer(token: string, id: string) {
+      const time = now();
+      const device = getDevice(token);
+      maintenance(time);
+      const task = db
+        .prepare("SELECT * FROM tasks WHERE id = ? AND device_id = ?")
+        .get(id, device.id) as TaskRow | undefined;
+      if (!task || task.action !== "receive-file" || task.status !== "running") {
+        throw new CompanionError(404, "No active file transfer for this Windows companion.");
+      }
+      return JSON.parse(task.params) as Strings;
     },
 
     complete(token: string, input: Completion): void {
@@ -469,33 +595,104 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
           ) {
             throw new CompanionError(400, "A successful screenshot requires an image.");
           }
+          if (
+            input.recordingBase64 !== undefined &&
+            (task.action !== "record-screen" || input.status !== "done")
+          ) {
+            throw new CompanionError(400, "Only a successful recording may submit a video.");
+          }
+          if (
+            input.status === "done" &&
+            task.action === "record-screen" &&
+            input.recordingBase64 === undefined
+          ) {
+            throw new CompanionError(400, "A successful recording requires a video.");
+          }
+          if (
+            (input.file !== undefined ||
+              (input.status === "done" && task.action === "send-file")) &&
+            (task.action !== "send-file" || input.status !== "done" || input.file === undefined)
+          ) {
+            throw new CompanionError(400, "A completed device upload requires a file.");
+          }
+          if (
+            (input.savedFile !== undefined ||
+              (input.status === "done" && task.action === "receive-file")) &&
+            (task.action !== "receive-file" ||
+              input.status !== "done" ||
+              input.savedFile === undefined ||
+              input.savedFile.sha256 !== (JSON.parse(task.params) as Strings).sha256)
+          ) {
+            throw new CompanionError(
+              400,
+              "The file confirmation does not match the requested transfer.",
+            );
+          }
           if (task.status !== "running" && task.result_hash === null) {
             throw new CompanionError(409, "Windows request is no longer running.");
           }
-          const image = input.imageBase64 === undefined ? undefined : decodePng(input.imageBase64);
+          const recording =
+            input.recordingBase64 === undefined
+              ? undefined
+              : decodeRecording(input.recordingBase64);
+          const transferred =
+            input.file === undefined ? undefined : Buffer.from(input.file.data, "base64");
+          if (
+            transferred !== undefined &&
+            (transferred.length > COMPANION_MAX_IMAGE_BYTES ||
+              hash(transferred) !== input.file?.sha256)
+          ) {
+            throw new CompanionError(422, "Windows companion file size or SHA-256 is invalid.");
+          }
+          const media =
+            transferred ??
+            recording ??
+            (input.imageBase64 === undefined ? undefined : decodePng(input.imageBase64));
+          const receipt =
+            input.file !== undefined
+              ? {
+                  name: label(input.file.name, 240).replace(/[\\/]/gu, "_"),
+                  sha256: input.file.sha256,
+                }
+              : (input.savedFile ?? null);
           const resultHash = hash(
-            JSON.stringify([input.status, input.message, image === undefined ? null : hash(image)]),
+            JSON.stringify(
+              receipt === null
+                ? [input.status, input.message, media === undefined ? null : hash(media)]
+                : [input.status, input.message, media === undefined ? null : hash(media), receipt],
+            ),
           );
           if (task.result_hash === resultHash) return;
           if (task.status !== "running") {
             throw new CompanionError(409, "Windows request already has a different result.");
           }
 
-          const imageName = image === undefined ? null : NodeCrypto.randomUUID() + ".png";
-          if (image !== undefined && imageName !== null) {
+          const imageName =
+            media === undefined
+              ? null
+              : NodeCrypto.randomUUID() + (transferred ? ".bin" : recording ? ".avi" : ".png");
+          if (media !== undefined && imageName !== null) {
             const imagePath = NodePath.join(screenshots, imageName);
             const file = NodeFS.openSync(imagePath, "wx", 0o600);
             written = imagePath;
             try {
-              NodeFS.writeFileSync(file, image);
+              NodeFS.writeFileSync(file, media);
             } finally {
               NodeFS.closeSync(file);
             }
             shouldSweep = true;
           }
           db.prepare(`
-            UPDATE tasks SET status = ?, message = ?, image_name = ?, result_hash = ?, updated_at = ? WHERE id = ?
-          `).run(input.status, input.message, imageName, resultHash, time, task.id);
+            UPDATE tasks SET status = ?, message = ?, image_name = ?, result_hash = ?, transfer_receipt = ?, updated_at = ? WHERE id = ?
+          `).run(
+            input.status,
+            input.message,
+            imageName,
+            resultHash,
+            receipt === null ? null : JSON.stringify(receipt),
+            time,
+            task.id,
+          );
           if (shouldSweep) {
             db.prepare(`
               UPDATE tasks SET image_name = NULL WHERE id IN (
@@ -516,7 +713,9 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       const time = now();
       maintenance(time);
       const devices = db
-        .prepare("SELECT id, name, info, last_seen FROM devices ORDER BY name, id")
+        .prepare(
+          "SELECT id, name, info, last_seen, details_updated_at FROM devices ORDER BY name, id",
+        )
         .all() as unknown as DeviceRow[];
       const history = db.prepare(`
         SELECT id, action, status, updated_at FROM tasks WHERE device_id = ?
@@ -527,6 +726,7 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         name: device.name,
         info: JSON.parse(device.info) as Strings,
         lastSeen: timestamp(device.last_seen),
+        detailsUpdatedAt: timestamp(device.details_updated_at ?? device.last_seen),
         online: time - device.last_seen < ONLINE_TTL,
         recentTasks: (history.all(device.id) as unknown as TaskRow[]).map((task) => ({
           id: task.id,
@@ -606,7 +806,10 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
           action,
           encodedParams,
           time,
-          time + QUEUED_TTL,
+          time +
+            (action === "screenshot" || action === "record-screen"
+              ? CAPTURE_QUEUED_TTL
+              : QUEUED_TTL),
         );
         return taskView(scopedTask(thread, id));
       });
@@ -623,9 +826,24 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       return transaction(() => {
         const task = scopedTask(threadId, id);
         if (!isActive(task.status)) return taskView(task);
-        // 领取后设备可能已开始执行，本地批准和暂停由 Windows 用户控制。
         if (task.status === "running") {
-          throw new CompanionError(409, "The Windows device has already claimed this request.");
+          if (task.action !== "record-screen") {
+            throw new CompanionError(409, "The Windows device has already claimed this request.");
+          }
+          if (task.stop_requested_at !== null) return taskView(task);
+          const device = db.prepare("SELECT info FROM devices WHERE id = ?").get(task.device_id);
+          if (!device || (JSON.parse(String(device.info)) as Strings).recordingStop !== "true") {
+            throw new CompanionError(
+              409,
+              "This Windows companion cannot stop a running recording remotely. Stop it on Windows.",
+            );
+          }
+          // 设备收到停止请求后沿用本机停止流程，已录制片段仍可正常回传。
+          db.prepare(`
+            UPDATE tasks SET stop_requested_at = ?, updated_at = ?, message = 'Waiting for Windows to stop recording.'
+            WHERE id = ?
+          `).run(time, time, id);
+          return taskView(scopedTask(threadId, id));
         }
         db.prepare(`
           UPDATE tasks SET status = 'canceled', message = 'The Windows request was canceled.', updated_at = ?

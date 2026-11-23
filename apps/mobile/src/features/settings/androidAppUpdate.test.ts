@@ -113,6 +113,45 @@ describe("Android release selection", () => {
     ).toBeNull();
   });
 
+  it("compares Android builds across a product release and its earlier build pages", async () => {
+    const tag = "v0.1.0";
+    const older = asset("arm64", 2, 36);
+    using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const address = String(url);
+      if (address.includes("api.github.com")) {
+        return Response.json([
+          {
+            tag_name: tag,
+            assets: [{ name: "T3Code-LM-platforms.json" }, { name: older.fileName }],
+          },
+          release(3),
+        ]);
+      }
+      if (address.endsWith("T3Code-LM-platforms.json")) {
+        return Response.json({
+          ...manifest(2),
+          schemaVersion: 2,
+          tag,
+          productVersion: "0.1.0",
+          assets: [
+            {
+              ...older,
+              sourceCommit: "b".repeat(40),
+              url: older.url.replace("/v0.1.0-2/", "/v0.1.0/"),
+            },
+          ],
+        });
+      }
+      return Response.json(manifest(3, 37));
+    });
+    const signal = new AbortController().signal;
+    const result = await findAndroidAppUpdate(
+      { installedBuild: 35, architectures: ["arm64-v8a"] },
+      signal,
+    );
+    expect(result).toMatchObject({ build: 3, androidVersionCode: 37 });
+  });
+
   it("rejects a manifest redirected to another package origin before offering a download", async () => {
     let calls = 0;
     using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
@@ -135,7 +174,10 @@ describe("Android release selection", () => {
   });
 });
 
-describe.each(["v0.1.0", "v0.1.0-2"])("grouped release %s", (tag) => {
+describe.each([
+  ["v0.1.0", false],
+  ["v0.1.0-2", true],
+] as const)("grouped release %s", (tag, prerelease) => {
   it("finds the Android build by its own code and uses the grouped manifest before the legacy manifest", async () => {
     const file = (build: number, code: number, arch: "arm64" | "universal") => {
       const row = asset(arch, build, code);
@@ -155,6 +197,7 @@ describe.each(["v0.1.0", "v0.1.0-2"])("grouped release %s", (tag) => {
         return Response.json([
           {
             tag_name: tag,
+            prerelease,
             assets: [
               { name: "T3Code-LM-platforms.json" },
               { name: "T3Code-LM-release.json" },
@@ -179,7 +222,7 @@ describe.each(["v0.1.0", "v0.1.0-2"])("grouped release %s", (tag) => {
     });
     const find = (installedBuild: number) =>
       findAndroidAppUpdate(
-        { installedBuild, architectures: ["arm64-v8a"] },
+        { installedBuild, architectures: ["arm64-v8a"], channel: prerelease ? "beta" : "stable" },
         new AbortController().signal,
       );
     expect(await find(35)).toMatchObject({

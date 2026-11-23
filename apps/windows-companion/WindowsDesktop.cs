@@ -11,11 +11,21 @@ using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Automation;
 
 internal sealed class WindowsDesktop : IDisposable
 {
     private Process ownedWindow;
+    private bool ownsNotepad;
     private readonly string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
@@ -55,6 +65,7 @@ internal sealed class WindowsDesktop : IDisposable
         if (next == null) throw new InvalidOperationException("Windows 未返回新进程。");
         Dispose();
         ownedWindow = next;
+        ownsNotepad = action == "open-notepad";
         return action == "open-notepad" ? "已请求打开记事本。" : "已请求打开 T3Code-LM。";
     }
 
@@ -71,6 +82,68 @@ internal sealed class WindowsDesktop : IDisposable
             if (File.Exists(path)) return path;
         }
         return null;
+    }
+
+    internal string NotepadText(string replacement)
+    {
+        RequireDesktop();
+        if (!ownsNotepad || ownedWindow == null || ownedWindow.HasExited)
+            throw new InvalidOperationException("请先通过受控端新开记事本。");
+        ownedWindow.Refresh();
+        IntPtr window = ownedWindow.MainWindowHandle;
+        uint process;
+        if (window == IntPtr.Zero || GetWindowThreadProcessId(window, out process) == 0 ||
+            process != (uint)ownedWindow.Id)
+            throw new InvalidOperationException("找不到受控端新打开的记事本。");
+        if (GetForegroundWindow() != window)
+        {
+            SetForegroundWindow(window);
+            RequireForegroundWindow(window);
+        }
+        var root = AutomationElement.FromHandle(window);
+        var fields = root.FindAll(TreeScope.Descendants, new OrCondition(
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Document),
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit)));
+        AutomationElement editor = null;
+        foreach (AutomationElement field in fields)
+        {
+            if (field.Current.ProcessId != ownedWindow.Id || field.Current.IsOffscreen ||
+                !field.Current.IsEnabled) continue;
+            object candidate;
+            if (!field.TryGetCurrentPattern(TextPattern.Pattern, out candidate) &&
+                !field.TryGetCurrentPattern(ValuePattern.Pattern, out candidate)) continue;
+            if (editor != null) throw new InvalidOperationException("记事本中有多个可编辑控件。");
+            editor = field;
+        }
+        if (editor == null) throw new InvalidOperationException("找不到记事本编辑区。");
+        if (replacement != null)
+        {
+            object pattern;
+            if (!editor.TryGetCurrentPattern(ValuePattern.Pattern, out pattern) || ((ValuePattern)pattern).Current.IsReadOnly)
+                throw new InvalidOperationException("当前记事本编辑区不支持写入。");
+            RequireForegroundWindow(window);
+            ((ValuePattern)pattern).SetValue(replacement);
+        }
+        RequireForegroundWindow(window);
+        object readable;
+        string text;
+        if (editor.TryGetCurrentPattern(TextPattern.Pattern, out readable))
+            text = ((TextPattern)readable).DocumentRange.GetText(3890);
+        else if (editor.TryGetCurrentPattern(ValuePattern.Pattern, out readable))
+            text = ((ValuePattern)readable).Current.Value;
+        else throw new InvalidOperationException("无法读回记事本文字。");
+        RequireForegroundWindow(window);
+        if (text.Length > 3889)
+            throw new InvalidOperationException("记事本文字超过可返回的长度。");
+        return replacement == null ? "读回的记事本文字：" + Environment.NewLine + text :
+            "已填写并读回记事本文字：" + Environment.NewLine + text;
+    }
+
+    private static void RequireForegroundWindow(IntPtr expected)
+    {
+        RequireDesktop();
+        if (GetForegroundWindow() != expected)
+            throw new InvalidOperationException("记事本已失去前台焦点，本次操作已停止。");
     }
 
     internal string Close()
@@ -94,6 +167,7 @@ internal sealed class WindowsDesktop : IDisposable
         if (ownedWindow == null) return;
         ownedWindow.Dispose();
         ownedWindow = null;
+        ownsNotepad = false;
     }
 }
 

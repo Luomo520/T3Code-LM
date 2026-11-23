@@ -89,6 +89,12 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("requires filesystem read permission to list project deliveries", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.projectsListDeliveries)).toBe(
+      AuthFilesystemReadScope,
+    );
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

@@ -1352,6 +1352,7 @@ type ThreadSettingsPickerStackParams = {
 
 type ThreadSettingsPickerPresentation = {
   readonly onClose: () => void;
+  readonly defaultModelUnavailable?: string | undefined;
 };
 
 const ThreadSettingsPickerStack = createNativeStackNavigator<ThreadSettingsPickerStackParams>();
@@ -2101,6 +2102,11 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
                   )}
                 </View>
               </ScrollView>
+              {props.defaultModelUnavailable ? (
+                <Text accessibilityRole="alert" className="px-3 py-1 text-foreground-muted">
+                  {props.defaultModelUnavailable}
+                </Text>
+              ) : null}
               <ChatGptSharingStatus provider={selectedProvider ?? null} />
             </ScrollView>
             <View style={{ height: catalogHeight }}>
@@ -2154,12 +2160,15 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
 }
 
 export function ThreadSettingsPickerScreen(
-  props: ThreadSettingsSessionProps & { readonly onClose: () => void },
+  props: ThreadSettingsSessionProps & ThreadSettingsPickerPresentation,
 ) {
   return (
     <ThreadSettingsSessionProvider {...props}>
       {Platform.OS === "android" ? (
-        <ThreadSettingsPopup onClose={props.onClose} />
+        <ThreadSettingsPopup
+          onClose={props.onClose}
+          defaultModelUnavailable={props.defaultModelUnavailable}
+        />
       ) : (
         <ThreadSettingsPickerNavigator onClose={props.onClose} />
       )}
@@ -2260,6 +2269,7 @@ export function NewTaskThreadSettingsRouteScreen() {
       cwd={flow.workspaceCwd}
       {...(flow.selectedModel ? { providerInstanceId: flow.selectedModel.instanceId } : {})}
       providerGroups={flow.providerGroups}
+      defaultModelUnavailable={flow.defaultModelUnavailable}
       selectedModel={flow.selectedModel}
       prompt={flow.prompt}
       onPromptChange={flow.setPrompt}

@@ -167,6 +167,7 @@ type NewTaskFlowContextValue = {
   readonly modelOptions: ReadonlyArray<ModelOption>;
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
+  readonly defaultModelUnavailable?: string | undefined;
   readonly selectedProviderStatus: ServerProvider | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly setProject: (project: EnvironmentProject) => void;
@@ -455,6 +456,23 @@ export function NewTaskFlowProvider(
     selectedProject?.id ?? null,
   );
 
+  const storedProjectDefault = selectedProject
+    ? projectSettings.overrides.defaultModelSelection
+    : undefined;
+  const defaultModelUnavailable =
+    !draftModelSelection &&
+    storedProjectDefault &&
+    selectedEnvironmentServerConfig &&
+    !modelOptions.some(
+      (option) =>
+        option.selection.instanceId === storedProjectDefault.instanceId &&
+        option.selection.model === storedProjectDefault.model &&
+        !option.isUnavailable &&
+        !option.isLegacy,
+    )
+      ? `项目默认模型 ${storedProjectDefault.model} 在当前后端不可用。`
+      : undefined;
+
   const selectedDefaultModel = resolveNewTaskModelSelection({
     draftSelection: draftModelSelection,
     projectDefaultSelection: projectDefaultModelSelection,
@@ -503,13 +521,14 @@ export function NewTaskFlowProvider(
       options ? { ...option.selection, options } : option.selection,
     );
     updateComposerDraftSettings(selectedProjectDraftKey, { modelSelection: selection });
-    setStickyComposerModelSelection(selection);
+    if (isScratchDraft) setStickyComposerModelSelection(selection);
   };
   const setSelectedModelOptions = (options: ReadonlyArray<ProviderOptionSelection> | undefined) => {
     if (!selectedModel || !selectedProjectDraftKey) {
       return;
     }
-    rememberModelOptions(selectedModel.instanceId, selectedModel.model, options ?? []);
+    if (isScratchDraft)
+      rememberModelOptions(selectedModel.instanceId, selectedModel.model, options ?? []);
     const nextSelection: ModelSelection = options
       ? { ...selectedModel, options }
       : {
@@ -519,7 +538,7 @@ export function NewTaskFlowProvider(
     updateComposerDraftSettings(selectedProjectDraftKey, {
       modelSelection: nextSelection,
     });
-    setStickyComposerModelSelection(nextSelection);
+    if (isScratchDraft) setStickyComposerModelSelection(nextSelection);
   };
 
   const providerGroups = groupByProvider(modelOptions);
@@ -891,6 +910,7 @@ export function NewTaskFlowProvider(
     modelOptions,
     selectedModel,
     selectedModelOption,
+    defaultModelUnavailable,
     selectedProviderStatus,
     providerGroups,
     setProject,

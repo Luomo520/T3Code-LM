@@ -307,6 +307,41 @@ export const ProjectListEntriesResult = Schema.Struct({
 });
 export type ProjectListEntriesResult = typeof ProjectListEntriesResult.Type;
 
+export const ProjectDeliveryPlatform = Schema.Literals([
+  "android",
+  "windows",
+  "linux",
+  "macos",
+  "other",
+]);
+export type ProjectDeliveryPlatform = typeof ProjectDeliveryPlatform.Type;
+
+export const ProjectDelivery = Schema.Struct({
+  projectId: ProjectId,
+  projectTitle: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  relativePath: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  version: Schema.NullOr(TrimmedNonEmptyString),
+  platform: ProjectDeliveryPlatform,
+  date: Schema.NullOr(Schema.String),
+  notesPath: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProjectDelivery = typeof ProjectDelivery.Type;
+
+export const ProjectListDeliveriesInput = Schema.Struct({
+  projectId: Schema.optional(ProjectId),
+  query: Schema.optional(TrimmedString.check(Schema.isMaxLength(256))),
+  preferredPlatform: Schema.optional(ProjectDeliveryPlatform),
+  offset: Schema.optional(NonNegativeInt),
+});
+
+export const ProjectListDeliveriesResult = Schema.Struct({
+  files: Schema.Array(ProjectDelivery),
+  nextOffset: Schema.NullOr(NonNegativeInt),
+  incomplete: Schema.Boolean,
+});
+
 // Untracked files git ignores. Wholly ignored folders such as `node_modules`
 // are left out, so the list stays small enough to pick from.
 export const ProjectListIgnoredFilesInput = Schema.Struct({

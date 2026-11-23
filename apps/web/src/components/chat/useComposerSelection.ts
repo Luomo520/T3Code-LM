@@ -36,7 +36,10 @@ interface ComposerSelectionInput {
   readonly activeThread: EnvironmentThreadShell | undefined;
   readonly activeRuntime: ReturnType<typeof deriveThreadStructureRuntime>;
   readonly activeProjectSettings: {
-    readonly settings: { readonly newWorktreesStartFromOrigin: boolean };
+    readonly settings: {
+      readonly newWorktreesStartFromOrigin: boolean;
+      readonly defaultModelSelection?: ModelSelection | null;
+    };
   };
   readonly settings: UnifiedSettings;
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
@@ -212,7 +215,9 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       explicit: true,
       replaceOptions: true,
     });
-    setStickyComposerModelSelection(nextModelSelection);
+    if (activeProjectSettings.settings.defaultModelSelection == null) {
+      setStickyComposerModelSelection(nextModelSelection);
+    }
     if (!isLocalDraftThread) applyThreadModelPick(threadRef);
     if (options?.focusComposer !== false) scheduleComposerFocus();
   };

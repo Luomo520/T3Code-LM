@@ -42,6 +42,7 @@ internal data class DownloadState(
     put("status", status)
     put("bytesDownloaded", bytes.toDouble())
     total?.let { put("totalBytes", it.toDouble()) }
+    uri?.let { put("uri", it.toString()) }
     error?.let { put("error", it) }
     if (retryable) put("retryable", true)
   }
@@ -54,6 +55,7 @@ internal class DownloadTask(
   updateBytes: Long? = null,
   fileBytes: Long? = null,
   val expectedSha256: String? = null,
+  val handoffKey: String? = null,
   private val saveUpdate: ((String, Uri) -> Unit)? = null,
 ) {
   val id = UUID.randomUUID().toString()
@@ -78,6 +80,10 @@ internal class DownloadTask(
   }
 
   fun complete(context: Context, uri: Uri) {
+    if (handoffKey != null) {
+      transition(DownloadState("downloaded", state.total ?: state.bytes, state.total, uri))
+      return
+    }
     try {
       checkRunning()
       saveUpdate?.invoke(id, uri)
@@ -130,6 +136,12 @@ internal object T3Downloads {
   fun findVerified(url: URL) = tasks.values.firstOrNull {
     it.expectedSha256 != null && it.url.toExternalForm() == url.toExternalForm() &&
       it.state.status !in listOf("failed", "cancelled")
+  }
+
+  @Synchronized
+  fun findHandoff(key: String, size: Long, sha256: String) = tasks.values.firstOrNull {
+    it.handoffKey == key && it.expectedBytes == size && it.expectedSha256 == sha256 &&
+      it.state.status in setOf("pending", "downloading", "paused") && !it.cancelled.get()
   }
 
   @Synchronized
@@ -296,7 +308,8 @@ class T3DownloadService : Service() {
     val key = MessageDigest.getInstance("SHA-256")
       .digest(task.url.toExternalForm().toByteArray(Charsets.UTF_8))
       .joinToString("") { "%02x".format(it) }
-    val partial = File(folder, "$key.part")
+    val partial = task.handoffKey?.let { T3FileDownloads.partialFile(this, it, sha256) }
+      ?: File(folder, "$key.part")
     val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
     folder.listFiles()?.filter { it != partial && it.lastModified() < cutoff }?.forEach { it.delete() }
     RandomAccessFile(partial, "rw").use { file ->
@@ -321,19 +334,22 @@ class T3DownloadService : Service() {
       partial.delete()
       throw DownloadFailure("文件 SHA-256 与发送记录不一致，请重试。", retryable = true)
     }
-    T3DownloadDestination.create(this, task.fileName, false).use { destination ->
-      partial.inputStream().use { input ->
-        while (true) {
-          task.checkRunning()
-          val count = input.read(buffer)
-          if (count < 0) break
-          val bytes = java.nio.ByteBuffer.wrap(buffer, 0, count)
-          while (bytes.hasRemaining()) destination.channel.write(bytes)
+    val saved = T3FileDownloads.saveHandoff(this, task.handoffKey, expected, sha256) { record ->
+      T3DownloadDestination.create(this, task.fileName, false).use { destination ->
+        partial.inputStream().use { input ->
+          while (true) {
+            task.checkRunning()
+            val count = input.read(buffer)
+            if (count < 0) break
+            val bytes = java.nio.ByteBuffer.wrap(buffer, 0, count)
+            while (bytes.hasRemaining()) destination.channel.write(bytes)
+          }
         }
+        task.checkRunning()
+        destination.publish(record)
       }
-      task.checkRunning()
-      task.complete(this, destination.publish())
     }
+    task.complete(this, saved)
     partial.delete()
   }
 

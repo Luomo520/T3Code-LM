@@ -1,5 +1,7 @@
 import { OrchestratorMcpFailure, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { AssetSigner } from "../../../assets/AssetSigner.ts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import { ServerConfig } from "../../../config.ts";
@@ -15,7 +17,17 @@ const dependencies = [
 ];
 
 const identifier = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
-const action = Schema.Literals(["screenshot", "open-t3", "open-notepad", "close-window"]);
+const action = Schema.Literals([
+  "screenshot",
+  "record-screen",
+  "open-t3",
+  "open-notepad",
+  "close-window",
+  "send-file",
+  "receive-file",
+  "write-notepad",
+  "read-notepad",
+]);
 const task = Schema.Struct({
   id: identifier,
   action,
@@ -23,6 +35,7 @@ const task = Schema.Struct({
   updatedAt: Schema.String,
   message: Schema.String,
   deviceName: Schema.String,
+  stopRequested: Schema.optionalKey(Schema.Literal(true)),
 });
 
 const list = Tool.make("t3_companion_list", {
@@ -41,8 +54,14 @@ const list = Tool.make("t3_companion_list", {
 
 const enqueue = Tool.make("t3_companion_enqueue", {
   description:
-    "Request one approved action on a paired Windows companion. The device user approves each request. Reuse clientRequestId for retries. A screenshot is returned to this thread by t3_companion_result.",
-  parameters: Schema.Struct({ deviceId: identifier, action, clientRequestId: identifier }),
+    "Request one approved action on a paired Windows companion. The device user approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. It records the primary screen for up to 10 seconds after local approval. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. write-notepad replaces the text in the companion's own foreground Notepad with the approved text; read-notepad returns that document's text. Read the original thread result with t3_companion_result.",
+  parameters: Schema.Struct({
+    deviceId: identifier,
+    action,
+    clientRequestId: identifier,
+    attachmentId: Schema.optionalKey(identifier),
+    text: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+  }),
   success: task,
   failure: OrchestratorMcpFailure,
   dependencies,
@@ -54,12 +73,22 @@ const enqueue = Tool.make("t3_companion_enqueue", {
 
 export const CompanionResultTool = Tool.make("t3_companion_result", {
   description:
-    "Check a task in this thread. Completed screenshots appear inline. To save one later, reuse its task ID and direct the user to “保存到我的设备” on the image. This call only displays it.",
+    "Check a task in this thread. Completed screenshots appear inline. For a completed recording or a file sent by the Windows user, include its download link in the reply. A received file returns the confirmed local save path.",
   parameters: Schema.Struct({ id: identifier }),
   success: Schema.Struct({
     ...task.fields,
     captureScope: Schema.optionalKey(Schema.Literal("primary-display")),
     summary: Schema.optionalKey(Schema.String),
+    recording: Schema.optionalKey(Schema.Struct({ url: Schema.String, expiresAt: Schema.Number })),
+    file: Schema.optionalKey(
+      Schema.Struct({
+        url: Schema.String,
+        name: Schema.String,
+        sha256: Schema.String,
+        expiresAt: Schema.Number,
+      }),
+    ),
+    savedFile: Schema.optionalKey(Schema.Struct({ path: Schema.String, sha256: Schema.String })),
     screenshot: Schema.optionalKey(
       Schema.Struct({
         mimeType: Schema.Literal("image/png"),
@@ -70,13 +99,14 @@ export const CompanionResultTool = Tool.make("t3_companion_result", {
     ),
   }),
   failure: OrchestratorMcpFailure,
-  dependencies: [...dependencies, FileSystem.FileSystem],
+  dependencies: [...dependencies, FileSystem.FileSystem, Path.Path, AssetSigner],
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Idempotent, true);
 
 const cancel = Tool.make("t3_companion_cancel", {
-  description: "Cancel a queued companion task in this thread.",
+  description:
+    "Cancel a queued companion task in this thread, or stop its running Windows recording. Check the result for the saved clip after Windows confirms the stop.",
   parameters: Schema.Struct({ id: identifier }),
   success: task,
   failure: OrchestratorMcpFailure,

@@ -48,9 +48,15 @@ vi.mock(import("~/state/windowsCompanion"), async (original) => {
         {
           deviceId: "windows-test",
           name: "Windows test device",
-          info: {},
+          info: {
+            hostname: "PC-TEST",
+            gpu: "Sample Graphics",
+            memory: "32 GiB",
+            network1: "LAN · IP 192.0.2.1",
+          },
           online: false,
           lastSeen: "2026-11-23T01:00:00Z",
+          detailsUpdatedAt: "2026-11-23T03:30:00Z",
           recentTasks: [],
         },
       ],
@@ -78,6 +84,13 @@ it("preserves device management when new pairing is turned off", async () => {
 
   await expect.element(screen.getByRole("heading", { name: "Windows test device" })).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Unpair" })).toBeVisible();
+  await expect.element(screen.getByText("Sample Graphics")).not.toBeVisible();
+  await userEvent.click(screen.getByText("Device details"));
+  await expect.element(screen.getByText("PC-TEST")).toBeVisible();
+  await expect.element(screen.getByText("Sample Graphics")).toBeVisible();
+  await expect.element(screen.getByText("32 GiB")).toBeVisible();
+  await expect.element(screen.getByText("LAN · IP 192.0.2.1")).toBeVisible();
+  await expect.element(screen.getByText(/^Details updated/)).toBeVisible();
   expect(screen.getByRole("button", { name: "Add Windows device" }).query()).toBeNull();
   expect(server.pair).not.toHaveBeenCalled();
 });

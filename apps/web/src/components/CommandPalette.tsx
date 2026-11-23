@@ -118,6 +118,8 @@ import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
+import { useDebouncedValue } from "../state/queries";
+import { DeliveryFileDialog, type DeliveryFileTarget } from "./settings/ProjectDeliveries";
 import { serverEnvironment } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
@@ -312,6 +314,7 @@ const NEW_THREAD_NO_PROJECT_VALUE = "new-thread-in:no-project";
 
 export function CommandPalette({ children }: { children: ReactNode }) {
   useCommandPaletteMount();
+  const [deliveryFile, setDeliveryFile] = useState<DeliveryFileTarget | null>(null);
   const state = useCommandPaletteStore();
   const setOpen = (open: boolean) => dispatchCommandPalette({ _tag: "SetOpen", open });
   const openChildSearch = (mode: "files" | "content", context: CommandPaletteReturnContext) =>
@@ -342,8 +345,12 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           setOpen={setOpen}
           openChildSearch={openChildSearch}
           initialContext={state.restoredSearch}
+          onOpenDeliveryFile={setDeliveryFile}
         />
       </CommandDialog>
+      {deliveryFile && (
+        <DeliveryFileDialog target={deliveryFile} onClose={() => setDeliveryFile(null)} />
+      )}
     </ComposerHandleContext>
   );
 }
@@ -351,6 +358,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 function CommandPaletteDialog(props: {
   readonly mode: SearchOverlayMode;
   readonly session: number;
+  readonly onOpenDeliveryFile: (target: DeliveryFileTarget) => void;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
   readonly openChildSearch: (
@@ -399,6 +407,7 @@ function CommandPaletteDialog(props: {
           setOpen={props.setOpen}
           openChildSearch={props.openChildSearch}
           initialContext={props.initialContext}
+          onOpenDeliveryFile={props.onOpenDeliveryFile}
         />
       )}
     </CommandDialogPopup>
@@ -406,6 +415,7 @@ function CommandPaletteDialog(props: {
 }
 
 function OpenCommandPaletteDialog(props: {
+  readonly onOpenDeliveryFile: (target: DeliveryFileTarget) => void;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
   readonly openChildSearch: (
@@ -524,6 +534,13 @@ function OpenCommandPaletteDialog(props: {
   const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, themeEditorItem } = useCommandPaletteThemeItems();
   const currentView = viewStack.at(-1)?.view ?? null;
+  const searchEnvironmentId =
+    activeThread?.environmentId ??
+    activeDraftThread?.environmentId ??
+    primaryEnvironmentId ??
+    environments.find((environment) => environment.connection.phase === "connected")
+      ?.environmentId ??
+    null;
   const threadSearchQuery = currentView === null && !isActionsOnly ? deferredQuery : "";
   const [browseGeneration, setBrowseGeneration] = useState(0);
   const [browseNavigation] = useState(createBrowseNavigationCoordinator);
@@ -562,12 +579,26 @@ function OpenCommandPaletteDialog(props: {
     ...targetProject,
     displayName: group.displayName,
   }));
-  const projectGroupByTargetKey = new Map(
-    projectPickerEntries.map(({ group, targetProject }) => [
-      `${targetProject.environmentId}:${targetProject.id}`,
-      group,
-    ]),
+  const projectGroupByTargetKey = new Map<string, (typeof projectPickerEntries)[number]["group"]>(
+    projectPickerEntries.flatMap(({ group }) =>
+      group.memberProjects.map(
+        (project) => [`${project.environmentId}:${project.id}`, group] as const,
+      ),
+    ),
   );
+  const projectsInSearchEnvironment =
+    searchEnvironmentId === null
+      ? pickerProjects
+      : projectPickerEntries.flatMap(({ group, targetProject }) => {
+          const project =
+            targetProject.environmentId === searchEnvironmentId
+              ? targetProject
+              : group.memberProjects.find(
+                  (member) =>
+                    member.environmentId === searchEnvironmentId && member.archivedAt == null,
+                );
+          return project ? [{ ...project, displayName: group.displayName }] : [];
+        });
   const { canPinProjectGroup, toggleProjectGroupPin } = useProjectPin();
   // A row's target record can change when another machine's copy loads, so the kept
   // order follows the project group instead.
@@ -672,6 +703,25 @@ function OpenCommandPaletteDialog(props: {
     browseEnvironmentId !== null && !isRemoteProjectRepositoryStep && newProjectFlow === null;
   const browsePath = getFilesystemBrowsePath(query, browseEnvironmentPlatform, canBrowsePaths);
   const isBrowsing = browsePath.isBrowsing;
+  const searchEnvironment = environments.find(
+    (environment) => environment.environmentId === searchEnvironmentId,
+  );
+  const canReadDeliveries = useEnvironmentScope(searchEnvironmentId, AuthFilesystemReadScope);
+  const deliveryQuery = isBrowsing ? "" : threadSearchQuery.trim().slice(0, 256).trim();
+  const debouncedDeliveryQuery = useDebouncedValue(deliveryQuery, 200);
+  const deliverySearch = useEnvironmentQuery(
+    searchEnvironmentId !== null &&
+      searchEnvironment?.connection.phase === "connected" &&
+      searchEnvironment.serverConfig?.environment.capabilities.projectDeliveries === true &&
+      canReadDeliveries &&
+      deliveryQuery &&
+      deliveryQuery === debouncedDeliveryQuery
+      ? projectEnvironment.listDeliveries({
+          environmentId: searchEnvironmentId,
+          input: { query: debouncedDeliveryQuery },
+        })
+      : null,
+  );
   const browseDirectoryPath = browsePath.directoryPath;
   const paletteMode = getCommandPaletteMode({ currentView, isBrowsing });
   const getAddProjectInitialQueryForEnvironment = (environmentId: EnvironmentId | null): string => {
@@ -815,6 +865,7 @@ function OpenCommandPaletteDialog(props: {
           threads.filter(
             (thread) =>
               thread.archivedAt === null &&
+              thread.environmentId === project.environmentId &&
               groupedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`),
           ),
           clientSettings.sidebarThreadSortOrder,
@@ -838,7 +889,7 @@ function OpenCommandPaletteDialog(props: {
   // Pinning from a row keeps rows in place while the palette is open.
   const projectSearchItems = useOrderWhileOpen(
     buildProjectSearchItems({
-      projects: pickerProjects,
+      projects: projectsInSearchEnvironment,
       projectGroupByTargetKey,
       locationByEnvironmentId: projectEnvironmentLocationById,
       runProject: openProjectFromSearch,
@@ -927,6 +978,7 @@ function OpenCommandPaletteDialog(props: {
   } = useCommandPaletteThreadItems({
     activeThread: activeThread ?? null,
     threadSearchQuery,
+    searchEnvironmentId,
     rememberResults: (itemValue) => {
       const context: CommandPaletteReturnContext = {
         query,
@@ -1870,6 +1922,18 @@ function OpenCommandPaletteDialog(props: {
           })
         : allThreadItems,
     threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
+    deliveryItems:
+      isLinkedThreadSearch || searchEnvironmentId === null
+        ? []
+        : (deliverySearch.data?.files ?? []).map((file): CommandPaletteActionItem => ({
+            kind: "action",
+            title: file.name,
+            value: `delivery:${file.projectId}:${file.relativePath}`,
+            searchTerms: [file.name],
+            description: file.projectTitle,
+            icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
+            run: async () => props.onOpenDeliveryFile({ environmentId: searchEnvironmentId, file }),
+          })),
     now: searchNow,
   });
 
@@ -2959,10 +3023,12 @@ function OpenCommandPaletteDialog(props: {
     >
       {`Open in ${fileManagerName}`}
     </CommandFooterAction>
-  ) : isThreadSearchPending && !isLinkedThreadSearch && !isBrowsing ? (
+  ) : (isThreadSearchPending || deliverySearch.isPending) &&
+    !isLinkedThreadSearch &&
+    !isBrowsing ? (
     // In the footer, so the list keeps its height while message results may
     // still arrive below it.
-    <span className="text-muted-foreground text-xs">Searching messages…</span>
+    <span className="text-muted-foreground text-xs">正在搜索…</span>
   ) : null;
 
   return (
@@ -3074,9 +3140,11 @@ function OpenCommandPaletteDialog(props: {
                 ? {
                     emptyStateMessage: "Press Enter to create this folder and add it as a project.",
                   }
-                : isThreadSearchPending
-                  ? { emptyStateMessage: "Searching thread messages…" }
-                  : {})}
+                : isThreadSearchPending || deliverySearch.isPending
+                  ? { emptyStateMessage: "正在搜索…" }
+                  : deliverySearch.error && !isLinkedThreadSearch
+                    ? { emptyStateMessage: "无法搜索交付文件，请检查连接后重试。" }
+                    : {})}
       />
     </CommandPaletteContent>
   );

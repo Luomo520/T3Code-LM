@@ -845,6 +845,7 @@ function withConfigReads(
 
 function makeCodexReplayTranscript(input: {
   readonly scenario: string;
+  readonly metadata?: CodexReplay.CodexAppServerReplayTranscript["metadata"];
   readonly entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>;
 }): CodexReplay.CodexAppServerReplayTranscript {
   return {
@@ -852,6 +853,7 @@ function makeCodexReplayTranscript(input: {
     protocol: "codex.app-server",
     version: "0.144.0",
     scenario: input.scenario,
+    ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
     entries: input.entries,
   };
 }
@@ -1456,6 +1458,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     promptSuggestions: Effect.Effect<boolean> = Effect.succeed(false),
     onNotification: (method: string) => Effect.Effect<void> = () => Effect.void,
     models?: CodexAdapterV2.CodexAdapterV2Options["models"],
+    runtimePolicy = CODEX_TEST_RUNTIME_POLICY,
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1540,13 +1543,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         threadId,
         providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
         modelSelection: CODEX_TEST_MODEL_SELECTION,
-        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        runtimePolicy,
         promptSuggestions,
       });
       const providerThread = yield* runtime.ensureThread({
         threadId,
         modelSelection: CODEX_TEST_MODEL_SELECTION,
-        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        runtimePolicy,
       });
       const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
       const firstTerminal = yield* Deferred.make<void>();
@@ -1963,6 +1966,65 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ),
         ),
       ),
+  );
+
+  it.effect("passes the project subagent model and effort to the native default role", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const configs: Array<{ model: string; path: string }> = [];
+      yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({
+          scenario: "native-subagent-project-default",
+          metadata: { recorderThreadConfigKeys: ["agents.default.config_file"] },
+          entries: codexReplayPreamble({
+            nativeThreadId: "project-default-parent",
+            nativeTurnId: "unused",
+            prompt: "unused",
+          }).slice(0, 5),
+        }),
+        undefined,
+        (method, params) =>
+          Effect.sync(() => {
+            if (method !== "thread/start") return;
+            const request = params as { model: string; config: Record<string, string> };
+            configs.push({
+              model: request.model,
+              path: request.config["agents.default.config_file"]!,
+            });
+          }),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          ...CODEX_TEST_RUNTIME_POLICY,
+          defaultSubagentModelSelection: {
+            instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            model: "gpt-5.4-mini",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        },
+      );
+      assert.lengthOf(configs, 1);
+      const config = configs[0]!;
+      assert.equal(config.model, CODEX_TEST_MODEL_SELECTION.model);
+      assert.equal(
+        yield* fileSystem.readFileString(config.path),
+        'model = "gpt-5.4-mini"\nmodel_reasoning_effort = "high"\n',
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
   );
 
   it.effect("adds the session MCP server without replacing launch-argument servers", () =>

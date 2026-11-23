@@ -17,6 +17,7 @@ export function threadDevicePreviews(state: DeviceServiceState | null, threadId:
         description: [device?.version, host?.label, physicalAndroid ? "Android 真机" : null]
           .filter(Boolean)
           .join(" · "),
+        physicalAndroid,
         canShutdown: device !== undefined && !physicalAndroid,
         serveSimOnly: host?.kind === "simlock",
       };

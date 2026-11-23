@@ -1,9 +1,11 @@
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import {
+  companionRecordingOutput,
   companionScreenshotOutput,
   isJsonToolText,
   toolCallLines,
+  threadFileSaveOutput,
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
   turnItemOutputImages,
@@ -22,9 +24,11 @@ import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
 import { useTurnItemDetail } from "../../state/queries";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Button } from "../ui/button";
+import { FileHandoffPanel } from "../files/FileHandoffPanel";
 import { toastManager } from "../ui/toast";
 import { downloadMedia } from "../media/mediaContent";
 import ChatMarkdown from "../ChatMarkdown";
+import { CompanionRecordingPlayer } from "./CompanionRecordingPlayer";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPanel";
@@ -125,6 +129,7 @@ function useFetchedTurnItem(
       output: screenshot?.summary ? null : turnItemOutputText(item),
       images: turnItemOutputImages(item),
       screenshot,
+      recording: companionRecordingOutput(item),
       environmentId,
       pending: item === wireItem && detail.isPending,
       error:
@@ -142,6 +147,7 @@ interface ToolOutputState {
   readonly output: string | null;
   readonly images: ReturnType<typeof turnItemOutputImages>;
   readonly screenshot?: ReturnType<typeof companionScreenshotOutput>;
+  readonly recording?: ReturnType<typeof companionRecordingOutput>;
   readonly environmentId: EnvironmentId;
   readonly pending: boolean;
   readonly error: string | null;
@@ -224,6 +230,15 @@ function ToolOutputImages(props: ToolOutputState) {
 }
 
 function ToolOutput(props: ToolOutputState) {
+  if (props.recording) {
+    return (
+      <CompanionRecordingPlayer
+        key={props.recording.url}
+        recording={props.recording}
+        environmentId={props.environmentId}
+      />
+    );
+  }
   return props.output ? (
     <StructuredValue value={props.output} highlightJson />
   ) : props.pending ? (
@@ -242,8 +257,25 @@ export function FetchedToolOutput(props: {
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   readonly source?: TurnItemSource | undefined;
 }) {
-  const { output } = useFetchedTurnItem(props.projectedItem, props.environmentId, props.source);
+  const { item, output } = useFetchedTurnItem(
+    props.projectedItem,
+    props.environmentId,
+    props.source,
+  );
   useInitialOutputReady(output.pending, props.onInitialOutputReady);
+  const fileSave = threadFileSaveOutput(item);
+  if (fileSave) {
+    return (
+      <div className="mt-1.5 space-y-1.5 text-xs">
+        <p>{fileSave.text}</p>
+        {fileSave.status === "awaiting_save" && (
+          <FileHandoffPanel
+            thread={{ environmentId: props.environmentId, threadId: item.threadId }}
+          />
+        )}
+      </div>
+    );
+  }
   return (
     <div className={cn("mt-1.5 space-y-1.5", monoClassName)}>
       <ToolOutputImages {...output} onImageExpand={props.onImageExpand} />
@@ -308,6 +340,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
   );
   const item = fetched.item;
   const outputState = fetched.output;
+  const fileSave = threadFileSaveOutput(item);
   useInitialOutputReady(streamsOutput || outputState.pending, props.onInitialOutputReady);
   return (
     <div className="space-y-2 text-xs" data-v2-item-inspector={item.type}>
@@ -445,7 +478,16 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
         </ul>
       ) : null}
 
-      {item.type === "dynamic_tool" ? (
+      {fileSave ? (
+        <div className="space-y-1.5">
+          <p>{fileSave.text}</p>
+          {fileSave.status === "awaiting_save" && (
+            <FileHandoffPanel
+              thread={{ environmentId: props.environmentId, threadId: item.threadId }}
+            />
+          )}
+        </div>
+      ) : item.type === "dynamic_tool" ? (
         <ToolCallBody
           toolName={item.toolName}
           args={item.input}

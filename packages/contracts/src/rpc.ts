@@ -253,6 +253,8 @@ import {
   ProjectListEntriesError,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
+  ProjectListDeliveriesInput,
+  ProjectListDeliveriesResult,
   ProjectListIgnoredFilesInput,
   ProjectListIgnoredFilesResult,
   ProjectReadFileError,
@@ -302,6 +304,8 @@ import {
 } from "./preview.ts";
 import {
   DeviceActionInput,
+  DeviceInputQueueInput,
+  DeviceInputQueueReply,
   DeviceCloseInput,
   DeviceConfigureInput,
   DeviceDetail,
@@ -432,6 +436,7 @@ import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
+  projectsListDeliveries: "projects.listDeliveries",
   projectsListIgnoredFiles: "projects.listIgnoredFiles",
   projectsReadFile: "projects.readFile",
   projectsSearchContents: "projects.searchContents",
@@ -522,6 +527,7 @@ export const WS_METHODS = {
   deviceShutdown: "device.shutdown",
   deviceDetail: "device.detail",
   deviceAction: "device.action",
+  deviceInputQueue: "device.inputQueue",
 
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
@@ -1413,6 +1419,12 @@ const WsProjectsListEntriesRpc = Rpc.make(WS_METHODS.projectsListEntries, {
   error: Schema.Union([ProjectListEntriesError, EnvironmentAuthorizationError]),
 });
 
+const WsProjectsListDeliveriesRpc = Rpc.make(WS_METHODS.projectsListDeliveries, {
+  payload: ProjectListDeliveriesInput,
+  success: ProjectListDeliveriesResult,
+  error: Schema.Union([ProjectListEntriesError, EnvironmentAuthorizationError]),
+});
+
 const WsProjectsListIgnoredFilesRpc = Rpc.make(WS_METHODS.projectsListIgnoredFiles, {
   payload: ProjectListIgnoredFilesInput,
   success: ProjectListIgnoredFilesResult,
@@ -1838,6 +1850,12 @@ const WsDeviceDetailRpc = Rpc.make(WS_METHODS.deviceDetail, {
 const WsDeviceActionRpc = Rpc.make(WS_METHODS.deviceAction, {
   payload: DeviceActionInput,
   success: DeviceDetail,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
+const WsDeviceInputQueueRpc = Rpc.make(WS_METHODS.deviceInputQueue, {
+  payload: DeviceInputQueueInput,
+  success: DeviceInputQueueReply,
   error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
 });
 
@@ -2283,6 +2301,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectCloneRetryRpc,
   WsSubscribeProjectClonesRpc,
   WsProjectsListEntriesRpc,
+  WsProjectsListDeliveriesRpc,
   WsProjectsListIgnoredFilesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
@@ -2356,6 +2375,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeviceShutdownRpc,
   WsDeviceDetailRpc,
   WsDeviceActionRpc,
+  WsDeviceInputQueueRpc,
   WsSubscribeDeviceStateRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,

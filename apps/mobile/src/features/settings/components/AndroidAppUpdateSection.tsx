@@ -2,6 +2,7 @@ import { useIsFocused } from "@react-navigation/native";
 import { nativeApplicationVersion, nativeBuildVersion } from "expo-application";
 import { deviceName, modelName, supportedCpuArchitectures } from "expo-device";
 import * as Network from "expo-network";
+import type { ForkUpdateChannel } from "@t3tools/shared/forkRelease";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AppState, Platform, View } from "react-native";
 import { Progress } from "../../../components/ui/Progress";
@@ -47,10 +48,11 @@ function taskDescription(task: AppUpdateDownload): string {
   }
 }
 
-export function useAndroidAppUpdate(checkOnOpen = false) {
+export function useAndroidAppUpdate(checkOnOpen = false, channel: ForkUpdateChannel = "stable") {
   const focused = useIsFocused();
   const [checking, setChecking] = useState(false);
-  const [checkComplete, setCheckComplete] = useState(false);
+  const [checkedChannel, setCheckedChannel] = useState<ForkUpdateChannel | null>(null);
+  const checkComplete = checkedChannel === channel;
   const [working, setWorking] = useState(false);
   const [asset, setAsset] = useState<AndroidUpdateAsset | null>(null);
   const [task, setTask] = useState<AppUpdateDownload | null>(null);
@@ -59,7 +61,7 @@ export function useAndroidAppUpdate(checkOnOpen = false) {
   const mounted = useRef(true);
   const readGeneration = useRef(0);
   const busy = useRef(false);
-  const initialCheckStarted = useRef(false);
+  const initialCheckStarted = useRef<ForkUpdateChannel | null>(null);
   const activeTask =
     task?.status === "pending" || task?.status === "downloading" || task?.status === "paused";
   const fraction =
@@ -121,12 +123,13 @@ export function useAndroidAppUpdate(checkOnOpen = false) {
         {
           installedBuild: Number(nativeBuildVersion),
           architectures: supportedCpuArchitectures ?? [],
+          channel,
         },
         request.signal,
       );
       if (!mounted.current) return;
       setAsset(result);
-      setCheckComplete(true);
+      setCheckedChannel(channel);
     } catch (error) {
       if (mounted.current)
         setNotice(request.signal.aborted ? "检查更新超时，请重试。" : messageOf(error));
@@ -135,22 +138,27 @@ export function useAndroidAppUpdate(checkOnOpen = false) {
       busy.current = false;
       if (mounted.current) setChecking(false);
     }
-  }, []);
+  }, [channel]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 首次打开关于页时读取发布信息，下载仍由用户触发。
   useEffect(() => {
-    if (Platform.OS !== "android" || !checkOnOpen || !focused || initialCheckStarted.current)
+    if (
+      Platform.OS !== "android" ||
+      !checkOnOpen ||
+      !focused ||
+      initialCheckStarted.current === channel
+    )
       return;
     let active = true;
     queueMicrotask(() => {
-      if (!active || initialCheckStarted.current) return;
-      initialCheckStarted.current = true;
+      if (!active || initialCheckStarted.current === channel) return;
+      initialCheckStarted.current = channel;
       void check();
     });
     return () => {
       active = false;
     };
-  }, [check, checkOnOpen, focused]);
+  }, [channel, check, checkOnOpen, focused]);
 
   const run = async (action: () => Promise<unknown>) => {
     if (busy.current) return false;
@@ -198,7 +206,7 @@ export function useAndroidAppUpdate(checkOnOpen = false) {
 
   return {
     activeTask,
-    asset,
+    asset: checkComplete ? asset : null,
     available: !checking && !working && task === null,
     check,
     checkComplete,

@@ -388,6 +388,7 @@ function CompanionDeviceRow({
         </div>
       }
     >
+      <CompanionDeviceDetails device={device} />
       <details className="py-2 text-xs text-muted-foreground">
         <summary className="cursor-pointer">{gt("Recent tasks")}</summary>
         {device.recentTasks.length === 0 ? (
@@ -404,5 +405,46 @@ function CompanionDeviceRow({
         )}
       </details>
     </SettingsRow>
+  );
+}
+
+function CompanionDeviceDetails({ device }: { readonly device: CompanionDevice }) {
+  const gt = useGT();
+  const locale = useLocale();
+  const details = [
+    { key: "hostname", label: gt("Computer name"), value: device.info.hostname },
+    { key: "os", label: gt("Windows version"), value: device.info.os },
+    { key: "version", label: gt("Companion version"), value: device.info.version },
+    { key: "cpu", label: gt("Processor"), value: device.info.cpu },
+    { key: "gpu", label: gt("Graphics"), value: device.info.gpu },
+    { key: "memory", label: gt("Memory"), value: device.info.memory },
+    ...Object.entries(device.info)
+      .filter(([key]) => /^network(?:[1-6])?$/.test(key))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => ({ key, label: gt("Network adapter"), value })),
+  ].filter(({ value }) => value);
+  return (
+    <details className="py-2 text-xs text-muted-foreground">
+      <summary className="cursor-pointer">{gt("Device details")}</summary>
+      <p className="pt-2" role="status">
+        {gt("Details updated {time}", {
+          time: formatCompanionTime(device.detailsUpdatedAt ?? device.lastSeen, locale),
+        })}
+      </p>
+      {details.length > 0 ? (
+        <dl className="grid gap-x-3 gap-y-1 pt-2 sm:grid-cols-[max-content_minmax(0,1fr)]">
+          {details.map(({ key, label, value }) => (
+            <div key={key} className="contents">
+              <dt>{label}</dt>
+              <dd className="break-words text-foreground">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className="pt-2">
+          {gt("Run the device check in the Windows companion to send details.")}
+        </p>
+      )}
+    </details>
   );
 }

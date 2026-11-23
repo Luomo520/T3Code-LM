@@ -11,6 +11,8 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Etag from "effect/http/Etag";
 import * as HttpPlatform from "effect/http/HttpPlatform";
@@ -81,7 +83,7 @@ const setup = Effect.fnUntraced(function* () {
     Effect.sync(() => getCompanionStore(config.stateDir)),
     (store) => Effect.sync(() => store.close()),
   );
-  return { settings, request, server, store };
+  return { settings, request, server, store, config };
 });
 
 const admin = { "x-test-admin": "1" };
@@ -114,9 +116,29 @@ it.effect("authorizes management separately and keeps revoke available after dis
     const renamedPoll = yield* request("/poll", { headers: auth, body: deviceInfo });
     expect(yield* Effect.promise(() => renamedPoll.json())).toEqual({ name: "Updated", job: null });
     const task = store.enqueue("test-thread", deviceId, "open-notepad", "request-1");
+    expect((yield* request("/check", { headers: admin, body: { info: {} } })).status).toBe(401);
+    expect(
+      (yield* request("/check", {
+        headers: { ...auth, origin: "https://example.test" },
+        body: { info: {} },
+      })).status,
+    ).toBe(403);
+    const check = yield* request("/check", { headers: auth, body: { info: { memory: "32 GiB" } } });
+    expect(check.status).toBe(200);
+    expect(check.headers.get("cache-control")).toBe("no-store");
+    expect(yield* Effect.promise(() => check.json())).toMatchObject({
+      name: "Updated",
+      detailsUpdatedAt: expect.any(String),
+    });
+    const renameFromDevice = yield* request("/check", {
+      headers: auth,
+      body: { name: "Windows local name", info: { memory: "32 GiB" } },
+    });
+    expect(renameFromDevice.status).toBe(200);
+    expect(store.result("test-thread", task.id)).toMatchObject({ status: "queued" });
     const taskPoll = yield* request("/poll", { headers: auth, body: deviceInfo });
     expect(yield* Effect.promise(() => taskPoll.json())).toEqual({
-      name: "Updated",
+      name: "Windows local name",
       job: { id: task.id, action: "open-notepad", threadId: "test-thread", params: {} },
     });
     const result = yield* request("/result", {
@@ -128,9 +150,12 @@ it.effect("authorizes management separately and keeps revoke available after dis
     yield* settings.updateSettings({ windowsCompanionEnabled: false });
     const list = yield* request("", { method: "GET", headers: admin });
     expect(yield* Effect.promise(() => list.json())).toMatchObject({
-      devices: [{ deviceId, name: "Updated", recentTasks: [{ id: task.id, status: "done" }] }],
+      devices: [
+        { deviceId, name: "Windows local name", recentTasks: [{ id: task.id, status: "done" }] },
+      ],
     });
     expect((yield* request("/poll", { headers: auth, body: deviceInfo })).status).toBe(404);
+    expect((yield* request("/check", { headers: auth, body: { info: {} } })).status).toBe(404);
     expect((yield* request("/revoke", { headers: auth, body: {} })).status).toBe(200);
 
     yield* settings.updateSettings({ windowsCompanionEnabled: true });
@@ -185,4 +210,45 @@ it.effect("limits repeated anonymous pairing attempts", () =>
     );
     expect((yield* request("/enroll", { body })).status).toBe(429);
   }),
+);
+
+it.effect("serves the selected and unchanged file only to the companion with the claimed job", () =>
+  Effect.gen(function* () {
+    const { config, settings, request, store } = yield* setup();
+    yield* settings.updateSettings({ windowsCompanionEnabled: true });
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const id = "example-thread-e30a45f0-3082-49b5-84bd-46005ec67796-txt";
+    const fileName = "hello.txt";
+    const filePath = path.join(config.attachmentsDir, id + ".txt");
+    yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
+    yield* fs.writeFileString(filePath, "hello");
+    const target = store.enroll(store.pair().code, "Windows target", deviceInfo.info);
+    const other = store.enroll(store.pair().code, "Other Windows device", deviceInfo.info);
+    const sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    const task = store.enqueue("test-thread", target.deviceId, "receive-file", "transfer", {
+      attachmentId: id,
+      fileName,
+      sha256,
+    });
+    const headers = { authorization: `Bearer ${target.token}` };
+    const body = { id: task.id };
+    expect((yield* request("/read-transfer", { headers, body })).status).toBe(404);
+    expect(store.poll(target.token, "Windows target", {}).job?.id).toBe(task.id);
+    expect(
+      (yield* request("/read-transfer", {
+        headers: { authorization: `Bearer ${other.token}` },
+        body,
+      })).status,
+    ).toBe(404);
+    const download = yield* request("/read-transfer", { headers, body });
+    expect(download.headers.get("cache-control")).toBe("no-store");
+    expect(yield* Effect.promise(() => download.json())).toEqual({
+      name: fileName,
+      data: "aGVsbG8=",
+      sha256,
+    });
+    yield* fs.writeFileString(filePath, "Hello");
+    expect((yield* request("/read-transfer", { headers, body })).status).toBe(409);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

@@ -758,7 +758,7 @@ describe("composerDraftStore context persistence", () => {
         Object.assign(new Event("storage"), { key: COMPOSER_DRAFT_STORAGE_KEY }),
       );
       thisTab.useComposerDraftStore.getState().setPrompt(alphaRef, "alpha draft");
-      await vi.advanceTimersByTimeAsync(300);
+      window.dispatchEvent(new Event("pagehide"));
 
       const saved = JSON.parse(sharedStorage.getItem(COMPOSER_DRAFT_STORAGE_KEY) as string);
       expect(saved.state.draftsByThreadKey[scopedThreadKey(betaRef)]?.prompt).toBe("beta draft");

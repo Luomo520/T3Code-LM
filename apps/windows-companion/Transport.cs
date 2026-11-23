@@ -110,7 +110,7 @@ internal static class CompanionApi
     })
     {
         Timeout = TimeSpan.FromSeconds(15),
-        MaxResponseContentBufferSize = 1024 * 1024
+        MaxResponseContentBufferSize = 8 * 1024 * 1024
     };
 
     internal static async Task<Dictionary<string, object>> Post(Uri origin, string method, object payload, string token, CancellationToken cancel)

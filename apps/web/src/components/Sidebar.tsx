@@ -81,6 +81,7 @@ import {
   ListFilterIcon,
   PlusIcon,
   SettingsIcon,
+  XIcon,
 } from "lucide-react";
 import {
   useEffect,
@@ -150,6 +151,7 @@ import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
   useEnvironmentMachines,
+  useEnvironments,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
@@ -163,6 +165,7 @@ import {
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
+import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
 import { useThreadSearch } from "../state/queries";
@@ -1041,6 +1044,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { environments, isReady: environmentsReady } = useEnvironments();
+  const liveEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
@@ -1157,7 +1162,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         );
   const threads = useQuietThreadShells();
   const promotingDraftThreadKeys = usePromotingDraftThreadKeys();
-  const listedThreads =
+  const allListedThreads =
     promotingDraftThreadKeys.length === 0
       ? threads
       : threads.map((thread) =>
@@ -1245,8 +1250,52 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const scopedProjectGroups = revealWidensScope ? [] : chosenProjectGroups;
   const scopedProjectRefs = scopedProjectGroups.flatMap((project) => project.memberProjectRefs);
   const scopedProjectKeys = revealWidensScope ? null : chosenScopeProjectKeys;
+  const enabledEnvironments = environments.filter((environment) => environment.entry.enabled);
+  const currentEnvironmentId =
+    routeThreadRef?.environmentId ??
+    primaryEnvironmentId ??
+    enabledEnvironments[0]?.environmentId ??
+    null;
+  const recentEnvironmentIds =
+    taskView !== "recent"
+      ? null
+      : new Set(
+          scopedProjectRefs.length > 0
+            ? scopedProjectRefs.map((ref) => ref.environmentId)
+            : currentEnvironmentId === null
+              ? enabledEnvironments.map((environment) => environment.environmentId)
+              : [currentEnvironmentId],
+        );
+  const matchesRecentEnvironment = (environmentId: EnvironmentId) =>
+    recentEnvironmentIds === null ||
+    recentEnvironmentIds.size === 0 ||
+    recentEnvironmentIds.has(environmentId);
+  const listedThreads = allListedThreads.filter((thread) =>
+    matchesRecentEnvironment(thread.environmentId),
+  );
+  const listEnvironmentIds = connectedEnvironmentIds.filter(matchesRecentEnvironment);
+  const listServerConfigs =
+    recentEnvironmentIds === null
+      ? serverConfigs
+      : new Map(
+          [...serverConfigs].filter(([environmentId]) => matchesRecentEnvironment(environmentId)),
+        );
+  const scopeEnvironments = environments.filter((environment) =>
+    matchesRecentEnvironment(environment.environmentId),
+  );
+  const pendingList =
+    !environmentsReady ||
+    scopeEnvironments.some(
+      ({ environmentId, connection }) =>
+        connection.phase === "connecting" ||
+        (connection.phase === "connected" && !liveEnvironmentIds.has(environmentId)),
+    );
+  const disconnectedList =
+    scopeEnvironments.length > 0 &&
+    scopeEnvironments.every(({ connection }) => connection.phase !== "connected");
+  const listStatus = pendingList ? "正在载入会话…" : disconnectedList ? "环境连接已中断" : null;
   const threadSearch = useThreadSearch(
-    connectedEnvironmentIds,
+    listEnvironmentIds,
     threadSearchQuery,
     scopedProjectGroups.length === 0
       ? {}
@@ -1259,6 +1308,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       if (session.promotedTo != null) {
         continue;
       }
+      if (!matchesRecentEnvironment(session.environmentId)) continue;
       if (!composerDraftHasUserContent(store.draftsByThreadKey[draftKey])) {
         continue;
       }
@@ -1310,7 +1360,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const startThreadInProjectFolder = useStableCallback((group: SidebarProjectSnapshot) => {
     if (isMobile) setOpenMobile(false);
-    void handleNewThread(scopeProjectRef(group.environmentId, group.id));
+    void handleNewThread(scopeProjectRef(group.environmentId, group.id), {
+      usePreferredBackend: true,
+    });
   });
   const handleProjectFolderContextMenu = useStableCallback(
     (group: SidebarProjectSnapshot, position: { x: number; y: number }) => {
@@ -1394,8 +1446,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     taskView,
     projectScopeKey,
     scopedProjectKeys,
-    serverConfigs,
-    connectedEnvironmentIds,
+    serverConfigs: listServerConfigs,
+    connectedEnvironmentIds: listEnvironmentIds,
     optimisticDrop,
     threads: listedThreads,
     delegatedUnderParent,
@@ -3272,21 +3324,28 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         <SidebarGroup className="flex-1" role="presentation">
           <SidebarTaskViewControls view={taskView} onViewChange={setTaskView} />
           {scopedProjectGroups.length > 0 ? (
-            <div className="mx-2 mt-1 flex min-w-0 items-center gap-2 text-xs text-sidebar-muted-foreground">
-              <span
-                className="min-w-0 flex-1 truncate"
-                aria-label={`仅显示：${scopedProjectGroups.map((project) => project.displayName).join("、")}`}
-              >
-                仅显示：{scopedProjectGroups.map((project) => project.displayName).join("、")}
-              </span>
-              <button
-                type="button"
-                onClick={() => setProjectScopeKeys([])}
-                className="min-h-8 shrink-0 cursor-pointer rounded-md px-2 text-sidebar-foreground outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-              >
-                显示全部
-              </button>
+            <div aria-label="项目筛选" className="mx-2 mt-1 flex min-w-0 flex-wrap gap-1">
+              {scopedProjectGroups.map((project) => (
+                <button
+                  key={project.projectKey}
+                  type="button"
+                  aria-label={`清除项目筛选：${project.displayName}`}
+                  onClick={() => toggleProjectScopeKey(project.projectKey)}
+                  className="flex min-h-8 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2 text-left text-xs text-sidebar-foreground outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                >
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{project.displayName}</span>
+                  <XIcon aria-hidden="true" className="size-3 shrink-0" />
+                </button>
+              ))}
             </div>
+          ) : null}
+          {listStatus !== null ? (
+            <p
+              role="status"
+              className="px-2 py-4 text-center text-xs text-sidebar-muted-foreground"
+            >
+              {listStatus}
+            </p>
           ) : null}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
@@ -3357,17 +3416,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   </ul>
                 </DndContext>
               </TooltipProvider>
-            ) : (
+            ) : listStatus === null ? (
               <p
                 role="status"
                 className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
               >
                 {threadSearch.isPending ? "Searching thread messages…" : "No threads found"}
+                {!threadSearch.isPending && scopedProjectGroups.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setProjectScopeKeys([])}
+                    className="mx-auto mt-2 block cursor-pointer rounded-md border border-sidebar-border px-2.5 py-1 hover:bg-sidebar-row-hover"
+                  >
+                    查看全部项目
+                  </button>
+                ) : null}
               </p>
-            )
+            ) : null
           ) : null}
           {/* A scope can hide every active thread; say so even when its project still has settled ones. */}
-          {!isSearchingThreads &&
+          {listStatus === null &&
+          !isSearchingThreads &&
           !hasProjectFolders &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
@@ -3375,9 +3444,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             workingThreads.length +
             snoozedThreads.length ===
             0 &&
-          (settledCount === 0 || scopedProjectGroups.length > 0) ? (
+          (settledCount === 0 || (taskView !== "recent" && scopedProjectGroups.length > 0)) ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
-              {projects.length === 0 ? (
+              {!projects.some((project) => matchesRecentEnvironment(project.environmentId)) ? (
                 <>
                   <span>No projects yet</span>
                   <button
@@ -3403,7 +3472,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     onClick={() => setProjectScopeKeys([])}
                     className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
-                    Show all projects
+                    查看全部项目
                   </button>
                 </>
               ) : (

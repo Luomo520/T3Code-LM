@@ -20,7 +20,7 @@ internal const val APK_DOWNLOAD_MIME = "application/vnd.android.package-archive"
 
 internal interface T3DownloadDestination : Closeable {
   val channel: FileChannel
-  fun publish(): Uri
+  fun publish(record: (Uri) -> Unit = {}): Uri
 
   companion object {
     private const val FOLDER = "t3code"
@@ -33,6 +33,18 @@ internal interface T3DownloadDestination : Closeable {
         return SharedDownload(context, fileName, mimeType)
       }
       return LegacyDownload(fileName)
+    }
+
+    fun publishRecovered(context: Context, uri: Uri) {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || uri.scheme != "content") return
+      val column = MediaStore.MediaColumns.IS_PENDING
+      val pending = context.contentResolver.query(uri, arrayOf(column), null, null, null)
+        ?.use { it.moveToFirst() && it.getInt(0) != 0 } == true
+      if (!pending) return
+      val values = ContentValues().apply { put(column, 0) }
+      if (context.contentResolver.update(uri, values, null, null) != 1) {
+        throw DownloadFailure("无法恢复下载文件，请重新领取。")
+      }
     }
 
     fun remove(context: Context, uri: Uri) {
@@ -68,9 +80,10 @@ internal interface T3DownloadDestination : Closeable {
     override val channel: FileChannel = stream.channel
     private var published = false
 
-    override fun publish(): Uri {
+    override fun publish(record: (Uri) -> Unit): Uri {
       channel.force(true)
       stream.close()
+      record(uri)
       val values = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
       if (resolver.update(uri, values, null, null) != 1) {
         throw DownloadFailure("无法将文件保存到 Download/t3code。")
@@ -107,7 +120,7 @@ internal interface T3DownloadDestination : Closeable {
     }
     override val channel: FileChannel = file.channel
 
-    override fun publish(): Uri {
+    override fun publish(record: (Uri) -> Unit): Uri {
       channel.force(true)
       file.close()
       val dot = fileName.lastIndexOf('.').takeIf { it > 0 } ?: fileName.length
@@ -116,11 +129,17 @@ internal interface T3DownloadDestination : Closeable {
       var target = File(directory, fileName)
       var suffix = 1
       while (!target.createNewFile()) target = File(directory, "$stem (${suffix++})$extension")
-      if (!temporary.renameTo(target)) {
+      val uri = Uri.fromFile(target)
+      try {
+        record(uri)
+        if (!temporary.renameTo(target)) {
+          throw DownloadFailure("无法将文件保存到 Download/t3code。")
+        }
+      } catch (error: Exception) {
         target.delete()
-        throw DownloadFailure("无法将文件保存到 Download/t3code。")
+        throw error
       }
-      return Uri.fromFile(target)
+      return uri
     }
 
     override fun close() {

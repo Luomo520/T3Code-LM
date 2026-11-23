@@ -69,6 +69,7 @@ import {
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@t3tools/shared/model";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import { threadPullRequestUpdatedAtMs } from "@t3tools/shared/threadPullRequests";
 import {
@@ -2609,9 +2610,31 @@ const make = Effect.gen(function* () {
         operation: "delegate-task",
       });
       const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
+      let requestedTarget = input.target;
+      if (
+        !isRetryOfAcceptedDelegation &&
+        requestedTarget?.providerInstanceId === undefined &&
+        requestedTarget?.driverKind === undefined &&
+        requestedTarget?.model === undefined &&
+        requestedTarget?.options === undefined
+      ) {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
+        );
+        const selection = resolveProjectSettings(settings, parent.thread.projectId).settings
+          .defaultSubagentModelSelection;
+        if (selection !== null) {
+          requestedTarget = {
+            ...requestedTarget,
+            providerInstanceId: selection.instanceId,
+            model: selection.model,
+            ...(selection.options === undefined ? {} : { options: selection.options }),
+          };
+        }
+      }
       const target = yield* resolveTargetRechecking({
         parent,
-        target: input.target,
+        target: requestedTarget,
         providers,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });

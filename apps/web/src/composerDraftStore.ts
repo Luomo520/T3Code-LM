@@ -245,8 +245,11 @@ const composerPersistStorage: PersistStorage<ComposerPersistState> = {
 };
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  window.addEventListener("beforeunload", () => {
-    composerDebouncedStorage.flush();
+  window.addEventListener("pagehide", () => composerDebouncedStorage.flush());
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") composerDebouncedStorage.flush();
   });
 }
 

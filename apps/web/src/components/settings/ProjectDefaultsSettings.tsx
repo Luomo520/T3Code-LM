@@ -25,6 +25,7 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
+import { Button } from "../ui/button";
 import { resolveDefaultModelSettingsPresentation } from "./ProjectDefaultsSettings.logic";
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
 import { searchableSetting } from "./settingsSearch";
@@ -64,10 +65,15 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       ? providersByEnvironment.get(representative.environmentId)
       : undefined) ?? EMPTY_SERVER_PROVIDERS;
   const entries = providerInstanceEntriesFor(providers, settings, target?.projectId ?? null);
+  const projectOverride =
+    target?.projectId == null ? undefined : settings.projectSettingsOverrides[target.projectId];
+  const mainDefault = projectOverride?.defaultModelSelection;
+  const subagentSelection = settings.defaultSubagentModelSelection;
   const presentation = resolveDefaultModelSettingsPresentation({
     entries,
     providers,
-    settings,
+    settings:
+      mainDefault === undefined ? settings : { ...settings, defaultModelSelection: mainDefault },
     projectId: target?.projectId ?? null,
   });
   const selection = presentation.selection;
@@ -145,7 +151,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
           : (presentation.providerNote ?? effortDisabledReason)
       }
       resetAction={
-        settings.defaultModelSelection !== null ? (
+        (mainDefault === undefined ? settings.defaultModelSelection : mainDefault) !== null ? (
           <SettingResetButton label="default model" onClick={() => setModel(null)} />
         ) : null
       }
@@ -197,6 +203,111 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       }
     />
   );
+  const mixedSubagent = useScopedSettingsMixed(["defaultSubagentModelSelection"]);
+  const subagentPickerSelection = subagentSelection ?? selection;
+  const subagentEntry = entries.find((entry) => entry.instanceId === subagentSelection?.instanceId);
+  const subagentStatus = subagentSelection
+    ? (modelDisabledReason(subagentSelection.instanceId, subagentSelection.model) ??
+      (!subagentEntry?.models.some((model) => model.slug === subagentSelection.model)
+        ? `The provider no longer lists ${subagentSelection.model}.`
+        : null))
+    : null;
+  const setSubagent = (value: ModelSelection | null) => {
+    updateSettings({ defaultSubagentModelSelection: value });
+  };
+  const subagentRow = (
+    <SettingsRow
+      serverScoped
+      settingKeys={["defaultSubagentModelSelection"]}
+      mixed={mixedSubagent}
+      title="Subagent model"
+      description="Model and reasoning effort for delegated tasks that use the defaults."
+      status={subagentStatus}
+      resetAction={
+        subagentSelection !== null || mixedSubagent ? (
+          <SettingResetButton label="subagent model" onClick={() => setSubagent(null)} />
+        ) : null
+      }
+      control={
+        subagentPickerSelection ? (
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+            <ProviderModelPicker
+              environmentId={representative?.environmentId ?? null}
+              activeInstanceId={subagentPickerSelection.instanceId}
+              model={subagentPickerSelection.model}
+              lockedProvider={null}
+              instanceEntries={entries}
+              modelOptionsByInstance={getCustomModelOptionsByInstance(
+                settings,
+                providers,
+                subagentPickerSelection.instanceId,
+                subagentPickerSelection.model,
+              )}
+              triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+              triggerAriaLabel="Subagent model"
+              {...(mixedSubagent
+                ? { triggerLabel: "Mixed" }
+                : subagentSelection === null
+                  ? { triggerLabel: "Automatic" }
+                  : {})}
+              getModelDisabledReason={modelDisabledReason}
+              onInstanceModelChange={(instanceId, model) => {
+                if (!modelDisabledReason(instanceId, model)) {
+                  setSubagent(
+                    pickModelSelection(mixedSubagent ? null : subagentSelection, instanceId, model),
+                  );
+                }
+              }}
+            />
+            {subagentSelection && subagentEntry && !subagentStatus && !mixedSubagent ? (
+              <TraitsPicker
+                provider={subagentEntry.driverKind}
+                models={subagentEntry.models}
+                model={subagentSelection.model}
+                modelOptions={subagentSelection.options ?? []}
+                allowPromptInjectedEffort={false}
+                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                onModelOptionsChange={(options) =>
+                  setSubagent(
+                    createModelSelection(
+                      subagentSelection.instanceId,
+                      subagentSelection.model,
+                      options,
+                    ),
+                  )
+                }
+              />
+            ) : null}
+          </div>
+        ) : (
+          <span className="text-sm text-muted-foreground">No providers available</span>
+        )
+      }
+    />
+  );
+  const preferredBackendRow = isProjectScope ? (
+    <SettingsRow
+      serverScoped
+      settingKeys={["preferredProjectBackendAt"]}
+      title="Preferred backend"
+      description={
+        targets.length === 1
+          ? "Use this checkout first when starting a new thread from the project."
+          : "Select a single checkout to make its backend the default."
+      }
+      control={
+        targets.length === 1 && target ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => updateSettings({ preferredProjectBackendAt: new Date().toISOString() })}
+          >
+            Prefer {target.label}
+          </Button>
+        ) : null
+      }
+    />
+  ) : null;
   const workspaceRow = (
     <SettingsRow
       serverScoped
@@ -331,13 +442,16 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     >
       {category === "project" ? (
         <>
+          {preferredBackendRow}
           {modelRow}
+          {subagentRow}
           {fallbackRow}
           {workspaceRow}
         </>
       ) : category === "general" ? (
         <>
           {modelRow}
+          {subagentRow}
           {fallbackRow}
           <SettingsRow
             serverScoped

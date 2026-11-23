@@ -145,7 +145,7 @@ describe("threadRoutes", () => {
 
   it("opens an unlisted server thread once its detail arrives, without waiting for the shell", () => {
     const route = {
-      bootstrapComplete: isThreadRouteSnapshotAuthoritative("live"),
+      bootstrapComplete: isThreadRouteSnapshotAuthoritative("cached"),
       serverThreadExists: false,
       serverThreadDeleted: false,
       draftThreadExists: false,
@@ -181,7 +181,7 @@ describe("threadRoutes", () => {
         ...route,
         unlistedThreadDetail: {
           ...EMPTY_ENVIRONMENT_THREAD_STATE,
-          status: "live",
+          status: "cached",
           data: Option.some(makeThreadProjectionFixture()),
         },
       }),

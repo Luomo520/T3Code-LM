@@ -85,7 +85,7 @@ export type DesktopUpdateStatus =
 
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
-export type DesktopUpdateChannel = "latest" | "nightly";
+export type DesktopUpdateChannel = "latest" | "nightly" | "beta";
 export type DesktopAppStageLabel = "Alpha" | "Beta" | "Dev" | "Nightly";
 
 export const DesktopUpdateStatusSchema = Schema.Literals([
@@ -100,7 +100,7 @@ export const DesktopUpdateStatusSchema = Schema.Literals([
 ]);
 export const DesktopRuntimeArchSchema = Schema.Literals(["arm64", "x64", "other"]);
 export const DesktopThemeSchema = Schema.Literals(["light", "dark", "system"]);
-export const DesktopUpdateChannelSchema = Schema.Literals(["latest", "nightly"]);
+export const DesktopUpdateChannelSchema = Schema.Literals(["latest", "nightly", "beta"]);
 export const DesktopAppStageLabelSchema = Schema.Literals(["Alpha", "Beta", "Dev", "Nightly"]);
 
 export interface DesktopAppBranding {
@@ -1060,6 +1060,7 @@ export interface DesktopFileDownloadEvent {
   readonly state: "progressing" | "completed" | "cancelled" | "interrupted";
   readonly receivedBytes: number;
   readonly totalBytes: number;
+  readonly savedPath?: string;
 }
 
 export interface DesktopBridge {

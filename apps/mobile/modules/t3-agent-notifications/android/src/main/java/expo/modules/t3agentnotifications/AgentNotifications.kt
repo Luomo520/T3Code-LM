@@ -104,6 +104,13 @@ object AgentNotifications {
     activityForeground = foreground
   }
 
+  private fun isThreadOnScreen(path: String?): Boolean {
+    if (path == null || path != threadOnScreen) return false
+    return activityForeground ?: ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
+      Lifecycle.State.RESUMED
+    )
+  }
+
   fun supportsLocalTaskCompletion(context: Context): Boolean =
     FirebaseApp.getApps(context).none { it.name == FirebaseApp.DEFAULT_APP_NAME }
 
@@ -128,21 +135,23 @@ object AgentNotifications {
     val alertId = "$path\t$runId"
     val seen = prefs.getString("seen", null)?.split('\n').orEmpty()
     if (alertId in seen) return
-    channels(context)
-    try {
-      postAlert(
-        context,
-        scheme,
-        mapOf(
-          "alert_title" to if (failed) "任务失败" else "任务已完成",
-          "alert_body" to title,
-          "alert_path" to path,
-          "alert_group" to path
-        ),
-        alertId
-      )
-    } catch (_: SecurityException) {
-      return
+    if (!isThreadOnScreen(path)) {
+      channels(context)
+      try {
+        postAlert(
+          context,
+          scheme,
+          mapOf(
+            "alert_title" to if (failed) "任务失败" else "任务已完成",
+            "alert_body" to title,
+            "alert_path" to path,
+            "alert_group" to path
+          ),
+          alertId
+        )
+      } catch (_: SecurityException) {
+        return
+      }
     }
     prefs.edit().putString("seen", (seen.takeLast(255) + alertId).joinToString("\n")).apply()
   }
@@ -195,11 +204,7 @@ object AgentNotifications {
       ?: prefs.getStringSet("seenAlerts", emptySet()).orEmpty().toList()
     if (alertId != null && alertId !in seen) {
       // Consume suppressed alerts so retries cannot resurface them later.
-      val resumed = activityForeground ?: ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
-        Lifecycle.State.RESUMED
-      )
-      val visibleThread = threadOnScreen
-      val onScreen = resumed && visibleThread != null && data["alert_path"] == visibleThread
+      val onScreen = isThreadOnScreen(data["alert_path"])
       if (!onScreen) {
         postAlert(context, scheme, data, alertId)
       }

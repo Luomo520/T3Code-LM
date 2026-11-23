@@ -30,12 +30,12 @@ import {
   type WorkspaceSelectionCheck,
 } from "./workspace-tab-navigation";
 
-// Only iOS columns reopen a remembered page; Android always opens a tab on its list.
-const REMEMBERS = Platform.OS === "ios";
+const REMEMBERS = Platform.OS === "ios" || Platform.OS === "android";
 
 // Read synchronously when a tab opens, so it lives in memory and is saved when the app leaves
 // the foreground rather than on every chat switch.
-let selections: WorkspaceSelections = {};
+const initialSelections: WorkspaceSelections = {};
+let selections = initialSelections;
 let saved = selections;
 let hydration: Promise<void> | null = null;
 
@@ -68,8 +68,11 @@ export function hydrateWorkspaceSelections() {
   if (!REMEMBERS) return Promise.resolve();
   hydration ??= loadPreferences()
     .then((preferences) => {
-      selections = { ...withoutRouteKeys(preferences.workspaceSelections), ...selections };
-      saved = selections;
+      saved = withoutRouteKeys(preferences.workspaceSelections);
+      if (Platform.OS !== "android" || selections === initialSelections) {
+        selections = { ...saved, ...selections };
+        saved = selections;
+      }
       AppState.addEventListener("change", (status) => {
         if (status !== "active") save();
       });
@@ -88,7 +91,22 @@ export function currentWorkspaceSelections() {
  */
 export function recordWorkspaceSelections(state: NavigationState | undefined) {
   if (!REMEMBERS || !state) return;
-  selections = workspaceSelectionsIn(state.routes.slice(0, state.index + 1), selections);
+  const routes = state.routes.slice(0, state.index + 1);
+  if (Platform.OS === "android") {
+    const { workspace } = workspaceRoutesOf(routes);
+    const active = workspace.at(-1);
+    const thread =
+      active?.name === "Thread" ? workspaceSelectionsIn([active], {}).threads : undefined;
+    if (
+      selections.threads?.environmentId !== thread?.environmentId ||
+      selections.threads?.threadId !== thread?.threadId
+    ) {
+      selections = thread ? { threads: thread } : {};
+      save();
+    }
+    return;
+  }
+  selections = workspaceSelectionsIn(routes, selections);
 }
 
 function environmentRemoved(environmentId: string) {
@@ -131,17 +149,18 @@ export function workspaceHasColumns() {
 
 /** The Settings page a bare `settings` link opens beside the list when there are columns. */
 export function settingsLinkPage() {
-  return REMEMBERS && workspaceHasColumns() ? rememberedSettingsPage(selections) : undefined;
+  return Platform.OS === "ios" && workspaceHasColumns()
+    ? rememberedSettingsPage(selections)
+    : undefined;
 }
 
 /**
- * Where a cold start without a link opens. A window that starts with columns reopens the last
- * chat beside the list instead of an empty detail column; a compact window opens on the list.
- * It waits for the first layout metrics as long as the workspace itself does.
+ * Android 恢复退出时打开的会话。iOS 仅在分栏中恢复最近的会话。
  */
 export async function launchWorkspaceURL(): Promise<string | null> {
   if (!REMEMBERS) return null;
-  const metrics = firstNativeLayoutMetrics(NATIVE_METRICS_TIMEOUT_MS);
+  const metrics =
+    Platform.OS === "ios" ? firstNativeLayoutMetrics(NATIVE_METRICS_TIMEOUT_MS) : null;
   await hydrateWorkspaceSelections();
   const thread = selections.threads;
   // Read the chat's cached copy while the layout metrics are still on their way.
@@ -152,7 +171,8 @@ export async function launchWorkspaceURL(): Promise<string | null> {
     );
   }
   await metrics;
-  if (!thread || !workspaceHasColumns() || !workspaceSelectionCheck.thread(thread)) return null;
+  if (!thread || environmentRemoved(thread.environmentId)) return null;
+  if (Platform.OS === "ios" && !workspaceHasColumns()) return null;
   return Linking.createURL(
     `threads/${encodeURIComponent(thread.environmentId)}/${encodeURIComponent(thread.threadId)}`,
   );

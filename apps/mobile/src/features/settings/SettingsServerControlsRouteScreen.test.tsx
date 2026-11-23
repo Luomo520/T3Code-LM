@@ -1,4 +1,9 @@
-import { DEFAULT_SERVER_SETTINGS, type ServerSettingsPatch } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type ModelSelection,
+  ProviderInstanceId,
+  type ServerSettingsPatch,
+} from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { act } from "react";
@@ -144,6 +149,31 @@ vi.mock("./components/SettingsSwitchRow", () => ({
   ),
 }));
 vi.mock("./components/SettingsRow", () => ({ SettingsRow: () => null }));
+vi.mock("./SettingsProjectModelDefaults", () => ({
+  SettingsProjectModelDefault: ({
+    setting,
+    disabled,
+    onChange,
+  }: {
+    setting: string;
+    disabled: boolean;
+    onChange: (selection: ModelSelection) => void;
+  }) => (
+    <button
+      aria-label={setting}
+      disabled={disabled}
+      onClick={() =>
+        onChange({
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-test",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        })
+      }
+    >
+      {setting}
+    </button>
+  ),
+}));
 vi.mock("./components/BranchNamingSettings", () => ({
   BranchNamingSettings: (props: { onChange: (patch: ServerSettingsPatch) => void }) => {
     mocks.branchNaming.onChange = props.onChange;
@@ -230,6 +260,31 @@ describe("SettingsServerControlsRouteScreen", () => {
       environmentId: "local",
       input: {
         patch: { branchNamingMode: "custom", branchNameInstructions: "Use issue IDs." },
+      },
+    });
+  });
+
+  it("saves the subagent model and effort in the selected project's override", async () => {
+    mocks.projectSelected = true;
+    act(() => root.render(<SettingsThreadsRouteScreen />));
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="defaultSubagentModelSelection"]',
+    )!;
+    await act(async () => button.click());
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      environmentId: "local",
+      input: {
+        patch: {
+          projectSettingsOverrides: {
+            project: {
+              defaultSubagentModelSelection: {
+                instanceId: "codex",
+                model: "gpt-test",
+                options: [{ id: "reasoningEffort", value: "high" }],
+              },
+            },
+          },
+        },
       },
     });
   });

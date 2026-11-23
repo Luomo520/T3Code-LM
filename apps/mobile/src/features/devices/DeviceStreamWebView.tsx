@@ -31,6 +31,7 @@ export interface DeviceStreamRef {
 
 type NativeStreamBridge = {
   readonly ref?: Ref<DeviceStreamRef>;
+  readonly inputLease?: string | null | undefined;
   readonly onUnauthorized: () => Promise<void>;
   readonly onInputConnected: (connected: boolean) => Promise<void>;
 };
@@ -46,6 +47,7 @@ export function DeviceStreamWebView({
     platform: props.platform,
     deviceId: props.deviceId,
     ...(props.serveSimOnly ? { serveSimOnly: true } : {}),
+    ...(props.inputLease !== undefined ? { inputRequiresLease: true } : {}),
     colors: props.colors,
   });
   return (
@@ -55,6 +57,7 @@ export function DeviceStreamWebView({
       configuration={configuration}
       baseUrl={deviceStreamBaseUrl(Platform.OS, props.platform, props.access.httpBase)}
       background={props.colors.background}
+      inputLease={props.inputLease}
       onUnauthorized={props.onUnauthorized}
       onInputConnected={props.onInputConnected}
       onRetry={() => {
@@ -81,6 +84,7 @@ function DeviceStreamDocumentView({
   configuration,
   baseUrl,
   background,
+  inputLease,
   onUnauthorized,
   onInputConnected,
   onRetry,
@@ -137,7 +141,18 @@ function DeviceStreamDocumentView({
     html: deviceStreamDocument(configuration, deviceStreamScript),
     baseUrl,
   };
+  const syncInputLease = (lease: string | null | undefined) => {
+    webView.current?.injectJavaScript(
+      `window.T3DeviceStream?.setInputLease(${lease === undefined ? "undefined" : JSON.stringify(lease)}); true;`,
+    );
+  };
+  const applyInputLease = useEffectEvent(syncInputLease);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 同步当前租约到已装载的原生 WebView。
+  useLayoutEffect(() => {
+    applyInputLease(inputLease);
+  }, [inputLease]);
   const command = (button: keyof DeviceStreamRef) => {
+    if (inputLease === null) return;
     webView.current?.injectJavaScript(
       `window.T3DeviceStream?.command(${JSON.stringify(button)}); true;`,
     );
@@ -166,6 +181,7 @@ function DeviceStreamDocumentView({
         contentInsetAdjustmentBehavior="never"
         setSupportMultipleWindows={false}
         style={{ flex: 1, backgroundColor: background }}
+        onLoadEnd={() => syncInputLease(inputLease)}
         onError={() => fail("Device viewer could not load. Reconnect to try again.")}
         onHttpError={() => fail("Device viewer could not load. Reconnect to try again.")}
         onContentProcessDidTerminate={processTerminated}

@@ -1,25 +1,31 @@
 import {
   createFileHandoffAtoms,
   fileHandoffErrorMessage,
+  receiveDirectFile,
   sendHandoffFile,
   unwrapFileHandoff,
+  waitForRelayedHandoff,
 } from "@t3tools/client-runtime/state/fileHandoff";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import {
   AuthOrchestrationReadScope,
   type AuthSessionId,
+  type FileHandoffTransfer,
+  type FileHandoffRequest,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
+import { createSha256 } from "@t3tools/shared/sha256";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
-import { startFileDownload } from "~/lib/fileDownload";
+import { startFileDownload, startVerifiedDesktopDownload } from "~/lib/fileDownload";
 import { randomUUID } from "~/lib/utils";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
+import { openDesktopHandoffPeer } from "./desktopHandoffPeer";
 
 const atoms = createFileHandoffAtoms(connectionAtomRuntime);
 const quiet = { reportFailure: false, reportDefect: false };
@@ -41,6 +47,40 @@ export function FileHandoffPanel({ thread }: { readonly thread: ScopedThreadRef 
   );
 }
 
+type SavePicker = (options: { readonly suggestedName: string }) => Promise<FileSystemFileHandle>;
+
+async function saveBrowserHandoff(
+  url: string,
+  file: FileSystemFileHandle,
+  sizeBytes: number,
+  sha256: string,
+) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok || !response.body) throw new Error("无法读取文件，请重试。");
+  const reader = response.body.getReader();
+  const target = await file.createWritable();
+  const hash = createSha256();
+  let received = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > sizeBytes) throw new Error("收到的文件大小与传输记录不符。");
+      hash.update(value);
+      await target.write(value);
+    }
+    if (received !== sizeBytes || hash.digestHex() !== sha256)
+      throw new Error("文件 SHA-256 或大小校验失败，请重试。");
+    await target.close();
+  } catch (error) {
+    await target.abort().catch(() => undefined);
+    throw error;
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
   const { environmentId, threadId } = thread;
   const connection = usePreparedConnection(environmentId);
@@ -49,6 +89,7 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
   );
   const start = useAtomCommand(atoms.start, quiet);
   const receive = useAtomCommand(atoms.receive, quiet);
+  const [closing, setClosing] = useState<string | null>(null);
   const [recipient, setRecipient] = useState<AuthSessionId | null>(null);
   const [selection, setSelection] = useState<{ readonly file: File; readonly id: string } | null>(
     null,
@@ -57,11 +98,31 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyDownload, setBusyDownload] = useState<string | null>(null);
+  const [pendingReceipt, setPendingReceipt] = useState<{
+    readonly id: string;
+    readonly sizeBytes: number;
+    readonly sha256: string;
+    readonly savedPath?: string;
+  } | null>(null);
   const upload = useRef<AbortController | null>(null);
+  const directDownload = useRef<AbortController | null>(null);
+  const [transport, setTransport] = useState<"direct" | "relay">("relay");
+  const supportsDirect =
+    window.desktopBridge?.getClientPlatform() === "win32" &&
+    typeof RTCPeerConnection === "function";
+  const request = async (input: FileHandoffRequest) =>
+    unwrapFileHandoff(await receive({ environmentId, input }));
   const fileInput = useRef<HTMLInputElement>(null);
   const snapshot = list.data?._tag === "list" ? list.data : null;
-  useEffect(() => () => upload.current?.abort(), []);
-  useLiveRefresh(list.isPending ? null : list.refresh, { intervalMs: 15_000 });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 面板卸载时终止仍活跃的上传。
+  useEffect(
+    () => () => {
+      upload.current?.abort();
+      directDownload.current?.abort();
+    },
+    [],
+  );
+  useLiveRefresh(list.isPending ? null : list.refresh, { intervalMs: 5_000 });
 
   async function send() {
     if (!selection || !recipient || upload.current || connection._tag !== "Some") return;
@@ -70,13 +131,30 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
     setLockedRecipient(recipient);
     setError(null);
     setProgress(0);
+    setTransport(supportsDirect ? "direct" : "relay");
     try {
       const { file, id } = selection;
       await sendHandoffFile({
         environmentId,
         httpBaseUrl: connection.value.httpBaseUrl,
         start,
-        input: { threadId, id, recipient, sizeBytes: file.size, name: file.name },
+        input: {
+          threadId,
+          id,
+          recipient,
+          sizeBytes: file.size,
+          name: file.name,
+          ...(supportsDirect ? { direct: true } : {}),
+        },
+        ...(supportsDirect
+          ? {
+              direct: {
+                makePeer: openDesktopHandoffPeer,
+                request,
+                onFallback: () => setTransport("relay"),
+              },
+            }
+          : {}),
         slice: async (offset, length) =>
           new Uint8Array(await file.slice(offset, offset + length).arrayBuffer()),
         post: (url, body, signal) =>
@@ -106,21 +184,108 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
     }
   }
 
-  async function download(id: string) {
-    if (busyDownload || connection._tag !== "Some") return;
+  async function cancel(id: string) {
+    if (closing !== null) return;
+    setClosing(id);
+    setError(null);
+    try {
+      unwrapFileHandoff(await receive({ environmentId, input: { _tag: "cancel", threadId, id } }));
+      if (selection?.id === id) {
+        setSelection(null);
+        setLockedRecipient(null);
+        if (fileInput.current) fileInput.current.value = "";
+      }
+      list.refresh();
+    } catch (cause) {
+      setError(fileHandoffErrorMessage(cause, "取消传输失败，请重试。"));
+    } finally {
+      setClosing(null);
+    }
+  }
+
+  async function confirmSaved(receipt: NonNullable<typeof pendingReceipt>) {
+    try {
+      unwrapFileHandoff(
+        await receive({ environmentId, input: { _tag: "confirmSaved", threadId, ...receipt } }),
+      );
+      setPendingReceipt(null);
+      setError(null);
+      list.refresh();
+    } catch {
+      setPendingReceipt(receipt);
+      setError("文件已保存，接收回执暂未送达。");
+    }
+  }
+
+  async function download(item: FileHandoffTransfer) {
+    if (busyDownload || pendingReceipt || connection._tag !== "Some") return;
+    const id = item.id;
+    const controller = new AbortController();
+    directDownload.current = controller;
     setBusyDownload(id);
     setError(null);
     try {
-      const result = unwrapFileHandoff(
-        await receive({ environmentId, input: { _tag: "receive", threadId, id } }),
-      );
+      const picker = (window as Window & { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
+      const canDirect = item.directSha256 && supportsDirect && picker;
+      const destination =
+        picker && (canDirect || (!window.desktopBridge && item.expiresAt !== undefined))
+          ? await picker.call(window, { suggestedName: item.name })
+          : null;
+      if (item.directSha256) {
+        if (canDirect && destination) {
+          const target = await destination.createWritable();
+          try {
+            const receipt = await receiveDirectFile({
+              id,
+              item,
+              threadId,
+              request,
+              signal: controller.signal,
+              makePeer: openDesktopHandoffPeer,
+              write: (bytes) => target.write(bytes),
+              publish: () => target.close(),
+            });
+            await confirmSaved(receipt);
+            return;
+          } catch {
+            await target.abort().catch(() => undefined);
+            controller.signal.throwIfAborted();
+          }
+        }
+        await request({ _tag: "directAbandon", threadId, id }).catch(() => undefined);
+        setError("正在改用中转，等待发送设备上传。");
+      }
+      const result = item.directSha256
+        ? await waitForRelayedHandoff({ id, threadId, request, signal: controller.signal })
+        : await request({ _tag: "receive", threadId, id });
+      setError(null);
       if (result._tag !== "receive") throw new Error("无法领取该文件。");
       const url = resolveAssetUrl(connection.value.httpBaseUrl, result.relativeUrl);
       if (!url) throw new Error("下载地址无效，请重试。");
-      await startFileDownload({ url, fileName: result.name });
+      let verified = false;
+      let savedPath: string | undefined;
+      if (destination) {
+        await saveBrowserHandoff(url, destination, result.sizeBytes, result.sha256);
+        verified = true;
+      } else if (window.desktopBridge && item.expiresAt !== undefined) {
+        const saved = await startVerifiedDesktopDownload({ url, fileName: result.name });
+        verified = saved !== null;
+        savedPath = saved?.savedPath;
+      } else {
+        await startFileDownload({ url, fileName: result.name });
+      }
+      if (verified)
+        await confirmSaved({
+          id,
+          sizeBytes: result.sizeBytes,
+          sha256: result.sha256,
+          ...(savedPath ? { savedPath } : {}),
+        });
     } catch (cause) {
-      setError(fileHandoffErrorMessage(cause, "下载未开始，请重试。"));
+      if (!(cause instanceof DOMException && cause.name === "AbortError"))
+        setError(fileHandoffErrorMessage(cause, "下载未完成，请重试。"));
     } finally {
+      directDownload.current = null;
       setBusyDownload(null);
     }
   }
@@ -173,8 +338,26 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
           )}
         </div>
       )}
-      {progress !== null && <p role="status">已上传 {progress}%</p>}
+      {progress !== null && (
+        <p role="status">
+          {transport === "direct" ? "等待直连或正在发送" : "正在中转"} · {progress}%
+        </p>
+      )}
       {error && <p role="alert">{error}</p>}
+      {pendingReceipt && (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busyDownload !== null}
+          onClick={async () => {
+            setBusyDownload(pendingReceipt.id);
+            await confirmSaved(pendingReceipt);
+            setBusyDownload(null);
+          }}
+        >
+          重试接收回执
+        </Button>
+      )}
       {snapshot?.transfers.map((item) => (
         <div key={item.id} className="flex items-center justify-between gap-2 border-t py-1">
           <div className="min-w-0">
@@ -182,7 +365,20 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
             <div className="text-xs text-muted-foreground">
               {item.outgoing ? `发往 ${item.recipientLabel}` : `来自 ${item.senderLabel}`} ·{" "}
               {item.sizeBytes.toLocaleString()} 字节
-              {item.outgoing ? (item.sha256 ? " · 可领取" : " · 等待上传") : ""}
+              {item.disposition === "saved"
+                ? " · 已保存并校验"
+                : item.disposition === "cancelled"
+                  ? " · 已取消"
+                  : item.outgoing
+                    ? item.sha256
+                      ? " · 可领取"
+                      : " · 等待上传"
+                    : ""}
+              {item.expiresAt !== undefined && !item.disposition ? (
+                <time dateTime={new Date(item.expiresAt).toISOString()}>
+                  {" · 到期 " + new Date(item.expiresAt).toLocaleString()}
+                </time>
+              ) : null}
             </div>
             {item.sha256 && (
               <details className="text-xs">
@@ -191,14 +387,24 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
               </details>
             )}
           </div>
-          {!item.outgoing && (
+          {item.outgoing && item.expiresAt !== undefined && !item.disposition ? (
             <Button
               variant="outline"
               size="sm"
-              disabled={busyDownload !== null}
-              onClick={() => void download(item.id)}
+              disabled={closing !== null || progress !== null}
+              onClick={() => void cancel(item.id)}
             >
-              下载
+              取消传输
+            </Button>
+          ) : null}
+          {!item.outgoing && !item.disposition && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busyDownload !== null || pendingReceipt !== null}
+              onClick={() => void download(item)}
+            >
+              {item.directSha256 ? "直连接收" : "下载"}
             </Button>
           )}
         </div>

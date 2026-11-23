@@ -1076,7 +1076,7 @@ const CompanionDeviceToken = Schema.Struct({
 const CompanionDeviceParams = Schema.Struct({ deviceId: CompanionIdentifier });
 const CompanionSuccess = Schema.Struct({ ok: Schema.Literal(true) });
 const CompanionProblem = Schema.Struct({ error: Schema.String });
-const CompanionProblems = [400, 401, 403, 404, 409, 413, 415, 429].map((status) =>
+const CompanionProblems = [400, 401, 403, 404, 409, 413, 415, 422, 429].map((status) =>
   CompanionProblem.pipe(HttpApiSchema.status(status)),
 );
 const CompanionAdminErrors = [...EnvironmentScopedOperationErrors, ...CompanionProblems] as const;
@@ -1093,11 +1093,42 @@ export const CompanionEnrollInput = Schema.Struct({
 export const CompanionPollInput = Schema.Struct({
   name: CompanionName,
   info: CompanionInfo,
+  watchRecordingId: Schema.optionalKey(CompanionIdentifier),
 });
+export const CompanionCheckInput = Schema.Struct({
+  name: Schema.optionalKey(CompanionName),
+  info: CompanionInfo,
+});
+export const CompanionTransferReadInput = Schema.Struct({ id: CompanionIdentifier });
+const CompanionFileSha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u));
+const CompanionFileName = TrimmedNonEmptyString.check(Schema.isMaxLength(240));
+const CompanionFileBase64 = Schema.String.check(
+  Schema.isMaxLength(COMPANION_MAX_IMAGE_BASE64_LENGTH),
+  Schema.isBase64(),
+);
 export const CompanionResultInput = Schema.Struct({
   id: CompanionIdentifier,
   status: Schema.Literals(["done", "failed"]),
   message: Schema.String.check(Schema.isMaxLength(4096)),
+  file: Schema.optionalKey(
+    Schema.Struct({
+      name: CompanionFileName,
+      sha256: CompanionFileSha256,
+      data: CompanionFileBase64,
+    }),
+  ),
+  savedFile: Schema.optionalKey(
+    Schema.Struct({
+      path: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
+      sha256: CompanionFileSha256,
+    }),
+  ),
+  recordingBase64: Schema.optionalKey(
+    Schema.NonEmptyString.check(
+      Schema.isMaxLength(COMPANION_MAX_IMAGE_BASE64_LENGTH),
+      Schema.isBase64(),
+    ),
+  ),
   imageBase64: Schema.optionalKey(
     Schema.NonEmptyString.check(
       Schema.isMaxLength(COMPANION_MAX_IMAGE_BASE64_LENGTH),
@@ -1112,6 +1143,7 @@ export const CompanionDevice = Schema.Struct({
   name: CompanionName,
   info: CompanionInfo,
   lastSeen: Schema.String,
+  detailsUpdatedAt: Schema.optionalKey(Schema.String),
   online: Schema.Boolean,
   recentTasks: Schema.Array(
     Schema.Struct({
@@ -1169,6 +1201,7 @@ class EnvironmentCompanionsHttpApi extends HttpApiGroup.make("companions")
       payload: CompanionPollInput,
       success: Schema.Struct({
         name: CompanionName,
+        stopRequested: Schema.optionalKey(Schema.Boolean),
         job: Schema.NullOr(
           Schema.Struct({
             id: CompanionIdentifier,
@@ -1177,6 +1210,26 @@ class EnvironmentCompanionsHttpApi extends HttpApiGroup.make("companions")
             params: Schema.Record(Schema.String, Schema.Unknown),
           }),
         ),
+      }),
+      error: [...CompanionProblems, EnvironmentInternalError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("checkDevice", "/api/companions/check", {
+      headers: CompanionDeviceToken,
+      payload: CompanionCheckInput,
+      success: Schema.Struct({ name: CompanionName, detailsUpdatedAt: Schema.String }),
+      error: [...CompanionProblems, EnvironmentInternalError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("readTransfer", "/api/companions/read-transfer", {
+      headers: CompanionDeviceToken,
+      payload: CompanionTransferReadInput,
+      success: Schema.Struct({
+        name: CompanionFileName,
+        sha256: CompanionFileSha256,
+        data: CompanionFileBase64,
       }),
       error: [...CompanionProblems, EnvironmentInternalError],
     }),

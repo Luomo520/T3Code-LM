@@ -8,7 +8,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { unavailable } from "../../threadAccess.ts";
 import { FileExchangeToolkit } from "./tools.ts";
 
-const transfer = (direction: "send" | "receive") =>
+const transfer = (direction: "send" | "receive" | "move") =>
   McpToolAccess.writesEnvironment(
     (
       input: {
@@ -16,6 +16,7 @@ const transfer = (direction: "send" | "receive") =>
         readonly localName: string;
         readonly remoteName?: string;
         readonly expectedSha256?: string;
+        readonly direction?: "send" | "receive";
       },
       check,
     ) =>
@@ -42,10 +43,18 @@ const transfer = (direction: "send" | "receive") =>
         const current = yield* check;
         if (current.caller?.projectId !== caller.projectId) return yield* unavailable();
         const exchange = yield* FileExchange.FileExchange;
-        return yield* exchange
+        const transferDirection = direction === "move" ? input.direction : direction;
+        if (transferDirection === undefined) {
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "Choose send or receive for a file move.",
+          });
+        }
+        const receipt = yield* exchange
           .transfer({
             ...input,
-            direction,
+            direction: transferDirection,
+            ...(direction === "move" ? { mode: "move" as const } : {}),
             workspaceRoot: current.caller.worktreePath ?? project.value.workspaceRoot,
           })
           .pipe(
@@ -57,10 +66,18 @@ const transfer = (direction: "send" | "receive") =>
                 }),
             ),
           );
+        return {
+          ...receipt,
+          sourceDisposition: receipt.sourceDisposition ?? {
+            status: "retained" as const,
+            message: "The source removal was not confirmed.",
+          },
+        };
       }),
   );
 
 export const layer = McpToolAccess.toLayer(FileExchangeToolkit, {
   t3_file_exchange_send: transfer("send"),
   t3_file_exchange_receive: transfer("receive"),
+  t3_file_exchange_move: transfer("move"),
 });

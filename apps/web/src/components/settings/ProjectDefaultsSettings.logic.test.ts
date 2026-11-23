@@ -87,6 +87,16 @@ describe("resolveDefaultModelSettingsPresentation", () => {
     });
   });
 
+  it("shows the saved model when the provider retires it", () => {
+    const providers = [
+      provider({ instanceId: "claudeAgent", driver: "claudeAgent", models: ["claude-sonnet-5"] }),
+    ];
+    expect(present(providers)).toEqual({
+      selection: savedClaude,
+      providerNote: "Claude no longer lists claude-opus-4-8.",
+    });
+  });
+
   it("leaves effort editable when the saved provider can run", () => {
     expect(present(claudeAndCodex)).toEqual({ selection: savedClaude, providerNote: null });
   });

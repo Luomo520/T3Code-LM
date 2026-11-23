@@ -55,7 +55,10 @@ type NewTaskRouteParams = {
   readonly model?: string | string[];
 };
 
-function deriveProjectEmptyState(catalogState: WorkspaceState, gt: ReturnType<typeof useGT>): {
+function deriveProjectEmptyState(
+  catalogState: WorkspaceState,
+  gt: ReturnType<typeof useGT>,
+): {
   readonly title: string;
   readonly detail: string;
   readonly loading: boolean;
@@ -84,10 +87,7 @@ function deriveProjectEmptyState(catalogState: WorkspaceState, gt: ReturnType<ty
     !catalogState.hasLoadedShellSnapshot
   ) {
     return {
-      title:
-        catalogState.connectionState === "unsupported"
-          ? "不支持此客户端"
-          : "环境不可用",
+      title: catalogState.connectionState === "unsupported" ? "不支持此客户端" : "环境不可用",
       detail:
         catalogState.connectionError ??
         gt("The saved environment is offline. Check the URL or start the environment, then retry."),
@@ -394,7 +394,9 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                   </View>
                   <View className="min-w-0 flex-1">
                     <Text className="text-base font-t3-bold leading-snug">{"无项目"}</Text>
-                    <Text className="text-xs leading-snug text-foreground-muted" numberOfLines={1}>{"不选择项目直接开始任务"}</Text>
+                    <Text className="text-xs leading-snug text-foreground-muted" numberOfLines={1}>
+                      {"不选择项目直接开始任务"}
+                    </Text>
                   </View>
                   <SymbolView
                     name="chevron.right"
@@ -427,9 +429,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                 <>
                   <View>
                     <Button
-                      label={
-                        catalogState.hasReadyEnvironment ? "添加新项目" : "添加环境"
-                      }
+                      label={catalogState.hasReadyEnvironment ? "添加新项目" : "添加环境"}
                       tone="primary"
                       onPress={() =>
                         catalogState.hasReadyEnvironment
@@ -479,8 +479,12 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             </View>
           ) : visibleScopes.length === 0 ? (
             <View className="items-center gap-2 px-6 py-8">
-              <Text className="text-center text-lg font-t3-bold text-foreground">{"没有匹配的项目"}</Text>
-              <Text className="text-center text-sm leading-normal text-foreground-muted">{"请尝试其他项目名称或工作区路径。"}</Text>
+              <Text className="text-center text-lg font-t3-bold text-foreground">
+                {"没有匹配的项目"}
+              </Text>
+              <Text className="text-center text-sm leading-normal text-foreground-muted">
+                {"请尝试其他项目名称或工作区路径。"}
+              </Text>
             </View>
           ) : (
             <View
@@ -497,6 +501,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                   scope,
                   selectedEnvironmentId,
                   connectedEnvironmentIds,
+                  serverConfigs,
                 );
                 if (Platform.OS === "android") {
                   return (

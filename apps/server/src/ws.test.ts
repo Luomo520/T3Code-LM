@@ -8,6 +8,7 @@ import {
   AuthOrchestrationReadScope,
   AuthSessionId,
   AuthSourceControlWriteScope,
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   EventId,
   GitManagerError,
@@ -167,21 +168,61 @@ import {
   withLateConfigDiscovery,
 } from "./ws.ts";
 
-const snapshotConfig = (fields: Partial<ServerConfig>) =>
-  ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
+const snapshotConfig = (fields: Partial<ServerConfig>): ServerConfig => ({
+  environment: {
+    environmentId: EnvironmentId.make("late-discovery-test"),
+    label: "Late discovery test",
+    platform: { os: "linux", arch: "x64" },
+    serverVersion: "0.0.0",
+    capabilities: {
+      repositoryIdentity: false,
+      fileAttachments: {
+        maxUploadBytes: DEFAULT_SERVER_SETTINGS.attachmentMaxFileSizeMiB * 1024 * 1024,
+      },
+    },
+  },
+  auth: {
+    policy: "loopback-browser",
+    bootstrapMethods: [],
+    sessionMethods: ["browser-session-cookie"],
+    sessionCookieName: "late-discovery-test-session",
+  },
+  cwd: "/test",
+  keybindingsConfigPath: "/test/keybindings.json",
+  keybindings: [],
+  issues: [],
+  providers: [],
+  availableEditors: [],
+  observability: {
+    logsDirectoryPath: "/test/logs",
+    localTracingEnabled: false,
+    otlpTracesEnabled: false,
+    otlpMetricsEnabled: false,
+    otlpLogsEnabled: false,
+  },
+  settings: DEFAULT_SERVER_SETTINGS,
+  ...fields,
+});
 
-const settingsUpdated = (settings: object): ServerConfigStreamEvent => ({
+const settingsUpdated = (settings: ServerConfig["settings"]): ServerConfigStreamEvent => ({
   version: 1,
   type: "settingsUpdated",
-  payload: { settings: settings as ServerConfig["settings"] },
+  payload: { settings },
 });
 
 it.effect("resends late editors without rolling back updates already sent", () =>
   Effect.gen(function* () {
     const settingsSent = yield* Deferred.make<void>();
+    const updated = {
+      ...DEFAULT_SERVER_SETTINGS,
+      enableProviderUpdateChecks: false,
+      attachmentMaxFileSizeMiB: 256,
+    };
     const events = yield* withLateConfigDiscovery(
-      snapshotConfig({ settings: { enableProviderUpdateChecks: true } as never }),
-      Stream.make(settingsUpdated({ enableProviderUpdateChecks: false })),
+      snapshotConfig({
+        settings: { ...DEFAULT_SERVER_SETTINGS, enableProviderUpdateChecks: true },
+      }),
+      Stream.make(settingsUpdated(updated)),
       {
         resolveAvailableEditors: () => Effect.succeed(["file-manager"]),
         resolveFileManagerRevealKind: () =>
@@ -203,7 +244,11 @@ it.effect("resends late editors without rolling back updates already sent", () =
     if (second?.type === "snapshot") {
       assert.deepEqual(second.config.availableEditors, ["file-manager"]);
       assert.equal(second.config.shellRevealInFileManagerKind, "file-explorer");
-      assert.deepEqual(second.config.settings, { enableProviderUpdateChecks: false } as never);
+      assert.deepEqual(second.config.settings, updated);
+      assert.equal(
+        second.config.environment.capabilities.fileAttachments?.maxUploadBytes,
+        updated.attachmentMaxFileSizeMiB * 1024 * 1024,
+      );
     }
   }),
 );

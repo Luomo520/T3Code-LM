@@ -217,6 +217,20 @@ export function UpdateCenter({ surface }: { readonly surface: "shortcut" | "abou
     }
   };
 
+  const changeChannel = async (channel: "stable" | "beta") => {
+    if (checkPending || channel === center.channel) return;
+    setCheckPending(true);
+    setProblem(null);
+    setSelected(new Set());
+    try {
+      await center.setChannel(channel);
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : "无法切换更新通道。");
+    } finally {
+      setCheckPending(false);
+    }
+  };
+
   const reset = () => {
     setConfirmed(null);
     setSelected(new Set());
@@ -382,6 +396,22 @@ export function UpdateCenter({ surface }: { readonly surface: "shortcut" | "abou
         <p className="text-sm text-muted-foreground" aria-live="polite">
           {confirmed || progress ? `${heading} · ${summary}` : summary}
         </p>
+        {!confirmed && !progress ? (
+          <label className="flex flex-wrap items-center gap-2 text-sm">
+            更新通道
+            <select
+              className="h-9 rounded-md border border-input bg-background px-2"
+              value={center.channel}
+              disabled={checkPending || center.desktopState?.status === "downloading"}
+              onChange={(event) =>
+                void changeChannel(event.currentTarget.value === "beta" ? "beta" : "stable")
+              }
+            >
+              <option value="stable">正式版</option>
+              <option value="beta">测试版（Beta）</option>
+            </select>
+          </label>
+        ) : null}
         {contents}
       </div>
     );

@@ -2,7 +2,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspaceModel";
-import { deriveHomeEmptyState } from "./home-empty-state";
+import { deriveHomeEmptyState, deriveHomeListStatus } from "./home-empty-state";
 
 function connectingEnvironment(
   connectionState: "connecting" | "reconnecting",
@@ -101,4 +101,19 @@ describe("home empty state", () => {
     const { title, loading, showsAddEnvironment } = deriveHomeEmptyState(state, projectCount);
     expect({ title, loading, showsAddEnvironment }).toEqual(expected);
   });
+});
+
+describe("recent list status", () => {
+  it.each([
+    ["connecting", "empty", "loading"],
+    ["connected", "synchronizing", "loading"],
+    ["connected", "live", null],
+    ["reconnecting", "cached", "disconnected"],
+    ["offline", "cached", "disconnected"],
+  ] as const)(
+    "uses the selected environment while another is online (%s, %s)",
+    (connectionState, status, expected) => {
+      expect(deriveHomeListStatus(workspaceState(), { connectionState }, status)).toBe(expected);
+    },
+  );
 });

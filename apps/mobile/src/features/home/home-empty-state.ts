@@ -1,4 +1,29 @@
-import { isWorkspaceCatalogPending, type WorkspaceState } from "../../state/workspaceModel";
+import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
+import {
+  isWorkspaceCatalogPending,
+  type WorkspaceEnvironment,
+  type WorkspaceState,
+} from "../../state/workspaceModel";
+
+type HomeListStatus = "loading" | "disconnected" | null;
+
+export function deriveHomeListStatus(
+  catalogState: WorkspaceState,
+  scopedEnvironment: Pick<WorkspaceEnvironment, "connectionState"> | undefined,
+  shellStatus: EnvironmentShellStatus,
+): HomeListStatus {
+  if (catalogState.isLoadingConnections) return "loading";
+  if (!catalogState.hasConnections) return null;
+  if (catalogState.networkStatus === "offline") return "disconnected";
+  if (!scopedEnvironment) {
+    if (isWorkspaceCatalogPending(catalogState)) return "loading";
+    return catalogState.hasReadyEnvironment ? null : "disconnected";
+  }
+  if (scopedEnvironment.connectionState === "connected") {
+    return shellStatus === "live" ? null : "loading";
+  }
+  return scopedEnvironment.connectionState === "connecting" ? "loading" : "disconnected";
+}
 
 export interface HomeEmptyState {
   readonly title: string;

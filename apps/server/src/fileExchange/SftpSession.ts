@@ -23,7 +23,8 @@ const Kind = {
   extended: 200,
 } as const;
 const hardlinkExtension = "hardlink@openssh.com";
-const chunkBytes = 64 * 1024;
+const renameExtension = "posix-rename@openssh.com";
+export const sftpChunkBytes = 64 * 1024;
 const maxPacketBytes = 256 * 1024;
 
 function uint32(value: number) {
@@ -77,11 +78,20 @@ class SftpStatusError extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("SftpStatusError", { status: Schema.Int }) {}
 
+export class SftpConnectionError extends Schema.TaggedError<
+  SftpConnectionError,
+  { readonly brand: unique symbol }
+>()("SftpConnectionError", {
+  message: Schema.String,
+  cause: Schema.optionalKey(Schema.Defect()),
+}) {}
+
 export class SftpSession {
   private readonly stdout;
   private readonly child: NodeChildProcess.ChildProcessWithoutNullStreams;
   private buffered: Buffer = Buffer.alloc(0);
   private requestId = 0;
+  supportsPosixRename = false;
 
   constructor(child: NodeChildProcess.ChildProcessWithoutNullStreams) {
     this.child = child;
@@ -90,8 +100,13 @@ export class SftpSession {
 
   private async read(length: number) {
     while (this.buffered.length < length) {
-      const result = await this.stdout.next();
-      if (result.done) throw new Error("The SFTP connection closed during the file operation.");
+      const result = await this.stdout.next().catch((cause: unknown) => {
+        throw new SftpConnectionError({ message: "The SFTP connection could not be read.", cause });
+      });
+      if (result.done)
+        throw new SftpConnectionError({
+          message: "The SFTP connection closed during the file operation.",
+        });
       this.buffered = Buffer.concat([this.buffered, result.value]);
     }
     const value = this.buffered.subarray(0, length);
@@ -103,7 +118,16 @@ export class SftpSession {
     const body = Buffer.concat([Buffer.from([kind]), ...parts]);
     const framed = Buffer.concat([uint32(body.length), body]);
     await new Promise<void>((resolve, reject) => {
-      this.child.stdin.write(framed, (error) => (error ? reject(error) : resolve()));
+      this.child.stdin.write(framed, (error) =>
+        error
+          ? reject(
+              new SftpConnectionError({
+                message: "The SFTP connection could not be written.",
+                cause: error,
+              }),
+            )
+          : resolve(),
+      );
     });
     const length = (await this.read(4)).readUInt32BE();
     if (length === 0 || length > maxPacketBytes) {
@@ -118,12 +142,18 @@ export class SftpSession {
     if (kind !== Kind.version || response.uint32() !== 3) {
       throw new Error("The server must support SFTP version 3.");
     }
+    let supportsHardlink = false;
     while (response.hasData) {
       const name = response.string().toString();
       const version = response.string().toString();
-      if (name === hardlinkExtension && version === "1") return;
+      if (name === hardlinkExtension && version === "1") supportsHardlink = true;
+      if (name === renameExtension && version === "1") this.supportsPosixRename = true;
     }
-    throw new Error("The SFTP server must support creating hard links for safe file publication.");
+    if (!supportsHardlink) {
+      throw new Error(
+        "The SFTP server must support creating hard links for safe file publication.",
+      );
+    }
   }
 
   private async request(kind: number, expected: number, ...parts: ReadonlyArray<Buffer>) {
@@ -146,16 +176,48 @@ export class SftpSession {
     return reply.string().toString();
   }
 
-  async assertRegularFile(path: string, limit: number) {
+  async regularFile(path: string, limit: number) {
     const reply = await this.request(Kind.lstat, Kind.attrs, protocolString(path));
     const flags = reply.uint32();
-    if ((flags & 1) !== 0 && reply.read(8).readBigUInt64BE() > BigInt(limit)) {
-      throw new Error("The source file is larger than the transfer limit.");
-    }
+    const size = (flags & 1) !== 0 ? reply.read(8).readBigUInt64BE() : undefined;
     if ((flags & 2) !== 0) reply.read(8);
-    if ((flags & 4) === 0 || (reply.uint32() & 0o170000) !== 0o100000) {
-      throw new Error("Only regular files can be transferred.");
+    if (size === undefined || (flags & 4) === 0 || (reply.uint32() & 0o170000) !== 0o100000) {
+      throw new Error("Only regular files with a reported size can be transferred.");
     }
+    if (size > BigInt(limit)) throw new Error("The source file is larger than the transfer limit.");
+    const modifiedAt = (flags & 8) !== 0 ? reply.read(8).readUInt32BE(4) : undefined;
+    return { size: Number(size), modifiedAt };
+  }
+
+  async existingRegularFile(path: string, limit: number) {
+    try {
+      return await this.regularFile(path, limit);
+    } catch (error) {
+      if (Schema.is(SftpStatusError)(error) && error.status === 2) return null;
+      throw error;
+    }
+  }
+
+  async exists(path: string) {
+    try {
+      await this.request(Kind.lstat, Kind.attrs, protocolString(path));
+      return true;
+    } catch (error) {
+      if (Schema.is(SftpStatusError)(error) && error.status === 2) return false;
+      throw error;
+    }
+  }
+
+  async atomicRename(source: string, destination: string) {
+    if (!this.supportsPosixRename)
+      throw new Error("The SFTP server cannot capture a source atomically.");
+    await this.request(
+      Kind.extended,
+      Kind.status,
+      protocolString(renameExtension),
+      protocolString(source),
+      protocolString(destination),
+    );
   }
 
   async mkdir(path: string) {
@@ -192,49 +254,65 @@ export class SftpSession {
     return protocolString(reply.string());
   }
 
-  async writeFile(path: string, data: Buffer) {
-    // WRITE | CREAT | EXCL，原子拒绝已有路径，包括符号链接。
-    const handle = await this.open(path, 2 | 8 | 32);
+  private async withHandle<T>(path: string, flags: number, use: (handle: Buffer) => Promise<T>) {
+    const handle = await this.open(path, flags);
+    let completed = false;
     try {
-      for (let offset = 0; offset < data.length; offset += chunkBytes) {
-        const chunk = data.subarray(offset, offset + chunkBytes);
-        await this.request(Kind.write, Kind.status, handle, uint64(offset), protocolString(chunk));
-      }
+      const result = await use(handle);
+      completed = true;
+      return result;
     } finally {
-      await this.request(Kind.close, Kind.status, handle);
+      const close = this.request(Kind.close, Kind.status, handle);
+      if (completed) await close;
+      else await close.catch(() => {});
     }
   }
 
-  async readFile(path: string, limit: number) {
-    const handle = await this.open(path, 1);
-    const chunks: Array<Buffer> = [];
-    let size = 0;
-    try {
+  async writeChunks(
+    path: string,
+    offset: number,
+    create: boolean,
+    readChunk: (offset: number) => Promise<Buffer | null>,
+    acknowledge: (offset: number) => void,
+  ) {
+    // 重连复用私有目录中的暂存文件。未收到确认的块从原位置重写。
+    await this.withHandle(path, create ? 2 | 8 | 32 : 2, async (handle) => {
+      let next = offset;
       for (;;) {
-        const requested = Math.min(chunkBytes, limit - size + 1);
+        const chunk = await readChunk(next);
+        if (chunk === null) return;
+        await this.request(Kind.write, Kind.status, handle, uint64(next), protocolString(chunk));
+        next += chunk.length;
+        acknowledge(next);
+      }
+    });
+  }
+
+  async readChunks(
+    path: string,
+    limit: number,
+    offset: number,
+    onChunk: (data: Buffer) => Promise<void> | void,
+  ) {
+    return this.withHandle(path, 1, async (handle) => {
+      let size = offset;
+      for (;;) {
+        const requested = Math.min(sftpChunkBytes, limit - size + 1);
+        let reply: Packet;
         try {
-          const reply = await this.request(
-            Kind.read,
-            Kind.data,
-            handle,
-            uint64(size),
-            uint32(requested),
-          );
-          const data = reply.string();
-          if (data.length === 0 || data.length > requested) {
-            throw new Error("The SFTP server returned an invalid file data packet.");
-          }
-          size += data.length;
-          if (size > limit) throw new Error("The source file is larger than the transfer limit.");
-          chunks.push(data);
+          reply = await this.request(Kind.read, Kind.data, handle, uint64(size), uint32(requested));
         } catch (error) {
-          if (Schema.is(SftpStatusError)(error) && error.status === 1) break;
+          if (Schema.is(SftpStatusError)(error) && error.status === 1) return size;
           throw error;
         }
+        const data = reply.string();
+        if (data.length === 0 || data.length > requested) {
+          throw new Error("The SFTP server returned an invalid file data packet.");
+        }
+        size += data.length;
+        if (size > limit) throw new Error("The source file is larger than the transfer limit.");
+        await onChunk(data);
       }
-      return Buffer.concat(chunks, size);
-    } finally {
-      await this.request(Kind.close, Kind.status, handle);
-    }
+    });
   }
 }

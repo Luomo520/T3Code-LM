@@ -222,7 +222,9 @@ export const make = Effect.gen(function* () {
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     ...(databaseMigration === undefined ? {} : { databaseMigration }),
     capabilities: {
-      serverRestart: launcher.restart || (serverConfig.mode === "desktop" && serverConfig.desktopBootstrapToken !== undefined),
+      serverRestart:
+        launcher.restart ||
+        (serverConfig.mode === "desktop" && serverConfig.desktopBootstrapToken !== undefined),
       repositoryIdentity: true,
       connectionProbe: true,
       windowsCompanion: true,
@@ -279,6 +281,7 @@ export const make = Effect.gen(function* () {
       environmentIcon: true,
       projectCloneTracking: true,
       projectOrganization: true,
+      projectDeliveries: true,
       ignoredFileListing: true,
       ignoredFileSearch: true,
       triage: true,

@@ -78,3 +78,35 @@ export async function startFileDownload(file: { url: string; fileName: string })
     description: "请在浏览器下载列表查看进度。",
   });
 }
+
+export async function startVerifiedDesktopDownload(file: { url: string; fileName: string }) {
+  const bridge = window.desktopBridge;
+  if (!bridge?.downloadFile || !bridge.onFileDownload) {
+    await startFileDownload(file);
+    return null;
+  }
+  observeDownloads();
+  const terminal = new Map<string, DesktopFileDownloadEvent>();
+  let selectedId: string | undefined;
+  let announce: ((event: DesktopFileDownloadEvent) => void) | undefined;
+  const unsubscribe = bridge.onFileDownload((event) => {
+    if (event.state === "progressing") return;
+    if (selectedId === undefined) terminal.set(event.id, event);
+    else if (event.id === selectedId) announce?.(event);
+  });
+  try {
+    const result = await bridge.downloadFile(file);
+    if (result.method === "cancelled") return null;
+    if (result.method !== "builtin" || result.id === undefined) return null;
+    selectedId = result.id;
+    const event =
+      terminal.get(selectedId) ??
+      (await new Promise<DesktopFileDownloadEvent>((resolve) => {
+        announce = resolve;
+      }));
+    if (event.state === "interrupted") throw new Error("下载或校验中断，请重试。");
+    return event.state === "completed" ? event : null;
+  } finally {
+    unsubscribe();
+  }
+}

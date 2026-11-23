@@ -12,6 +12,7 @@ import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { SidebarInset } from "./ui/sidebar";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
+import { rememberDesktopThread } from "../lib/desktopThreadResume";
 import {
   useEnvironmentThreadRefs,
   useAnyEnvironmentHiding,
@@ -223,6 +224,12 @@ export function ThreadRouteView({
       />
     );
   }
+
+  const rememberOnDesktop = view !== null && redirect === null && !background;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 保存桌面下次启动时应恢复的会话
+  useEffect(() => {
+    if (rememberOnDesktop) rememberDesktopThread(target);
+  }, [rememberOnDesktop, target]);
 
   return (
     <SidebarInset

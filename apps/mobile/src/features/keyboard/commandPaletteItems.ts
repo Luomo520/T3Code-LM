@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   foldSearchQuery,
@@ -14,7 +15,8 @@ import {
 
 export interface CommandPaletteItem {
   readonly key: string;
-  readonly kind: "action" | "project" | "thread";
+  readonly kind: "action" | "project" | "thread" | "delivery";
+  readonly environmentId?: EnvironmentId;
   readonly project?: EnvironmentProject;
   readonly title: string;
   readonly detail?: string;

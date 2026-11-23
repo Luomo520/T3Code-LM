@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- 测试独立计算发送源文件的摘要。
-import { createHash, randomUUID } from "node:crypto";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -47,10 +49,73 @@ it("limits receipt to the designated device and resumes a file with the original
     client: { label: id, deviceType: "desktop" },
   }));
   let active = paired;
-  const id = randomUUID();
+  const id = NodeCrypto.randomUUID();
+  const cancelledId = NodeCrypto.randomUUID();
   const bytes = new Uint8Array(FILE_HANDOFF_CHUNK_BYTES + 3).fill(42);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const sha256 = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+  const finish = (path: `/${string}`, transferId: string, actor: AuthSessionId, digest?: string) =>
+    HttpRouter.add(
+      "POST",
+      path,
+      readFileHandoff(
+        digest === undefined
+          ? { _tag: "cancel", threadId, id: transferId }
+          : {
+              _tag: "confirmSaved",
+              threadId,
+              id: transferId,
+              sizeBytes: bytes.length,
+              sha256: digest,
+            },
+        makeSession(actor),
+      ).pipe(
+        Effect.flatMap((result) => HttpServerResponse.json(result)),
+        Effect.orElseSucceed(() => HttpServerResponse.empty({ status: 409 })),
+      ),
+    );
   const controls = Layer.mergeAll(
+    finish("/test/confirm", id, target, sha256),
+    finish("/test/invalid-hash", id, target, "0".repeat(64)),
+    finish("/test/invalid-device", id, other, sha256),
+    finish("/test/cancel", cancelledId, source),
+    finish("/test/invalid-cancel", cancelledId, target),
+    HttpRouter.add(
+      "GET",
+      "/test/list",
+      readFileHandoff({ _tag: "list", threadId }, makeSession(source)).pipe(
+        Effect.flatMap((result) => HttpServerResponse.json(result)),
+      ),
+    ),
+    HttpRouter.add(
+      "GET",
+      "/test/copy-state",
+      Effect.gen(function* () {
+        const { stateDir } = yield* ServerConfig.ServerConfig;
+        const key = NodeCrypto.createHash("sha256").update(threadId).digest("hex");
+        const pendingPath = (transferId: string) =>
+          NodePath.join(stateDir, "file-handoff", key, transferId + ".bytes");
+        return yield* HttpServerResponse.json({
+          saved: NodeFS.existsSync(pendingPath(id)),
+          cancelled: NodeFS.existsSync(pendingPath(cancelledId)),
+        });
+      }),
+    ),
+    HttpRouter.add(
+      "GET",
+      "/test/start-cancel",
+      startFileHandoff(
+        {
+          threadId,
+          id: cancelledId,
+          recipient: target,
+          name: "pending.bin",
+          sizeBytes: bytes.length,
+          sha256,
+        },
+        makeSession(source),
+      ).pipe(Effect.flatMap((upload) => HttpServerResponse.json(upload))),
+    ),
+
     HttpRouter.add(
       "GET",
       "/test/start",
@@ -117,7 +182,7 @@ it("limits receipt to the designated device and resumes a file with the original
     ),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-file-handoff-test-" })),
     Layer.provideMerge(
-      Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NodeHttpPlatform.layer),
+      Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer, NodeHttpPlatform.layer),
     ),
   );
   const { handler, dispose } = HttpRouter.toWebHandler(layerApp, { disableLogger: true });
@@ -133,6 +198,34 @@ it("limits receipt to the designated device and resumes a file with the original
 
   try {
     const upload = await getUpload();
+    const cancelled = (await (await request("/test/start-cancel")).json()) as {
+      relativeUrl: string;
+    };
+    expect(
+      (await post(cancelled.relativeUrl, 0, bytes.subarray(0, FILE_HANDOFF_CHUNK_BYTES))).status,
+    ).toBe(204);
+    expect((await request("/test/invalid-cancel", { method: "POST" })).status).toBe(409);
+    expect(await (await request("/test/copy-state")).json()).toEqual({
+      saved: false,
+      cancelled: true,
+    });
+    expect(await (await request("/test/cancel", { method: "POST" })).json()).toEqual({
+      _tag: "finished",
+      disposition: "cancelled",
+    });
+    expect(
+      (
+        await post(
+          cancelled.relativeUrl,
+          FILE_HANDOFF_CHUNK_BYTES,
+          bytes.subarray(FILE_HANDOFF_CHUNK_BYTES),
+        )
+      ).status,
+    ).toBe(404);
+    expect(await (await request("/test/copy-state")).json()).toEqual({
+      saved: false,
+      cancelled: false,
+    });
     expect(upload.offset).toBe(0);
     expect((await request("/test/receive")).status).toBe(404);
     expect((await post(upload.relativeUrl, 0, bytes.subarray(0, 17))).status).toBe(400);
@@ -166,6 +259,32 @@ it("limits receipt to the designated device and resumes a file with the original
     expect(await rest.bytes()).toEqual(bytes.subarray(18));
     active = paired.filter((item) => item.sessionId !== target);
     expect((await request(link.relativeUrl, { method: "HEAD" })).status).toBe(404);
+    active = paired;
+    expect((await request("/test/invalid-device", { method: "POST" })).status).toBe(409);
+    expect((await request("/test/invalid-hash", { method: "POST" })).status).toBe(409);
+    expect(await (await request("/test/copy-state")).json()).toEqual({
+      saved: true,
+      cancelled: false,
+    });
+    for (const _ of [1, 2]) {
+      expect(await (await request("/test/confirm", { method: "POST" })).json()).toEqual({
+        _tag: "finished",
+        disposition: "saved",
+      });
+    }
+    expect((await request(link.relativeUrl, { method: "HEAD" })).status).toBe(404);
+    expect(await (await request("/test/copy-state")).json()).toEqual({
+      saved: false,
+      cancelled: false,
+    });
+    expect(await (await request("/test/list")).json()).toMatchObject({
+      transfers: expect.arrayContaining(
+        [
+          { id, disposition: "saved", expiresAt: expect.any(Number) },
+          { id: cancelledId, disposition: "cancelled", expiresAt: expect.any(Number) },
+        ].map((entry) => expect.objectContaining(entry)),
+      ),
+    });
   } finally {
     await dispose();
   }

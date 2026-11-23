@@ -9,7 +9,7 @@ import { deviceForegroundAtom, NO_FOREGROUND_ATOM, NOOP_ATOM } from "./deviceHub
 
 type ActionBody = DeviceActionInput extends infer A
   ? A extends { readonly type: string }
-    ? Omit<A, "hostId" | "deviceId">
+    ? Omit<A, "hostId" | "deviceId" | "inputLease">
     : never
   : never;
 
@@ -19,9 +19,12 @@ export function useDeviceControls(options: {
   device: DeviceSummary;
   access: DeviceHubAccess | null;
   visible: boolean;
+  allowActions?: boolean;
+  inputLease?: string | undefined;
 }) {
   const { environmentId, device, access, visible } = options;
   const runAction = useAtomCommand(deviceEnvironment.action, { reportFailure: false });
+  const read = useAtomCommand(deviceEnvironment.detail, { reportFailure: false });
   const { hostId, id: deviceId } = device;
   const key = { environmentId, hostId, deviceId };
   const { detail, error } = useAtomValue(deviceDetailAtom(key));
@@ -37,7 +40,7 @@ export function useDeviceControls(options: {
   // rather than letting a reopened panel race the previous command.
   const busy = useRef(false);
 
-  const available = detail !== null && visible;
+  const available = detail !== null && visible && options.allowActions !== false;
   const act = async (body: ActionBody) => {
     if (busy.current || !available) return false;
     busy.current = true;
@@ -45,7 +48,12 @@ export function useDeviceControls(options: {
     setView((current) => ({ ...current, error: null }));
     return runAction({
       environmentId,
-      input: { hostId, deviceId, ...body } as DeviceActionInput,
+      input: {
+        hostId,
+        deviceId,
+        ...(options.inputLease ? { inputLease: options.inputLease } : {}),
+        ...body,
+      } as DeviceActionInput,
     })
       .then((result) => {
         setView((current) =>
@@ -61,12 +69,24 @@ export function useDeviceControls(options: {
       });
   };
 
+  const readNow = async () => {
+    if (!visible) return null;
+    const result = await read({ environmentId, input: { hostId, deviceId } });
+    if (result._tag !== "Success") {
+      setView({ detail: null, error: formatEnvironmentQueryError(result.cause) });
+      return null;
+    }
+    setView({ detail: result.value, error: null });
+    return result.value;
+  };
+
   return {
     detail,
+    readNow,
     pending,
     error,
     act,
-    disabled: pending || !detail || !visible,
+    disabled: pending || !available,
     foregroundApp: foreground === undefined ? (detail?.foregroundApp ?? null) : foreground,
   };
 }

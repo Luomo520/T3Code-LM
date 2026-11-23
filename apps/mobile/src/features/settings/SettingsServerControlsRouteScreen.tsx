@@ -33,6 +33,7 @@ import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoi
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SourceControlSignInSection } from "./components/SourceControlSignInSection";
+import { SettingsProjectModelDefault } from "./SettingsProjectModelDefaults";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { useSettingsWriter } from "./useSettingsWriter";
@@ -54,6 +55,9 @@ type SettingsPage = "threads" | "source-control" | "worktrees" | "maintenance";
 
 const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettingKey[]> = {
   threads: [
+    "defaultModelSelection",
+    "defaultSubagentModelSelection",
+    "preferredProjectBackendAt",
     "defaultThreadEnvMode",
     "defaultRuntimeMode",
     "responseStreamingMode",
@@ -318,6 +322,43 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
             ) : null}
             {props.page === "threads" ? (
               <>
+                {projectSelected && displayTargets.length === 1 ? (
+                  <SettingsSection title="常用后端">
+                    <SettingsRow
+                      icon="server.rack"
+                      label={`优先使用 ${reference.environment.label}`}
+                      value="从项目新建会话时优先使用此后端"
+                      disabled={disabledFor("preferredProjectBackendAt")}
+                      onPress={() => write({ preferredProjectBackendAt: new Date().toISOString() })}
+                    />
+                  </SettingsSection>
+                ) : null}
+                <SettingsSection title="默认模型">
+                  {displayTargets.length === 1 ? (
+                    <>
+                      <SettingsProjectModelDefault
+                        key={`main:${targetsKey}`}
+                        target={reference}
+                        setting="defaultModelSelection"
+                        disabled={disabledFor("defaultModelSelection")}
+                        onChange={(defaultModelSelection) => write({ defaultModelSelection })}
+                      />
+                      <SettingsProjectModelDefault
+                        key={`subagent:${targetsKey}`}
+                        target={reference}
+                        setting="defaultSubagentModelSelection"
+                        disabled={disabledFor("defaultSubagentModelSelection")}
+                        onChange={(defaultSubagentModelSelection) =>
+                          write({ defaultSubagentModelSelection })
+                        }
+                      />
+                    </>
+                  ) : (
+                    <Text className="px-4 py-3 text-foreground-muted">
+                      请选择单个后端以配置模型。
+                    </Text>
+                  )}
+                </SettingsSection>
                 <SettingsSection
                   title={gt("Default workspace")}
                   footer={managed("defaultThreadEnvMode")}

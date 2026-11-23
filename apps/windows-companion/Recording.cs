@@ -15,15 +15,17 @@ internal sealed class ScreenRecording : IDisposable
     private readonly List<Tuple<uint, uint>> frames = new List<Tuple<uint, uint>>();
     private readonly int width;
     private readonly int height;
+    private readonly long byteLimit;
     private readonly long totalFrames, streamLength, movieList, movieStart;
     private bool disposed;
 
     internal int Count { get { return frames.Count; } }
 
-    internal ScreenRecording(string file)
+    internal ScreenRecording(string file, int maxWidth = 1280, long maxBytes = 500000000)
     {
         WindowsDesktop.RequireDesktop();
-        width = Math.Min(1280, screen.Width);
+        width = Math.Min(maxWidth, screen.Width);
+        byteLimit = maxBytes;
         height = Math.Max(1, (int)(screen.Height * (width / (double)screen.Width)));
         writer = new BinaryWriter(new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.Read));
         try
@@ -70,7 +72,8 @@ internal sealed class ScreenRecording : IDisposable
             display.CopyFromScreen(screen.Location, Point.Empty, screen.Size);
             resize.DrawImage(source, 0, 0, width, height);
             frame.Save(jpeg, ImageFormat.Jpeg);
-            if (Position + jpeg.Length > 500000000) throw new InvalidOperationException("录像已达到 500 MB。");
+            if (Position + jpeg.Length + (frames.Count + 2L) * 16 + 16 > byteLimit)
+                throw new InvalidOperationException("录像已达到文件大小上限。");
             frames.Add(Tuple.Create((uint)(Position - movieStart), (uint)jpeg.Length));
             Four("00dc"); writer.Write((uint)jpeg.Length);
             writer.Write(jpeg.GetBuffer(), 0, (int)jpeg.Length);

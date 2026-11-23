@@ -47,3 +47,34 @@ it("saves the scope from every update made in one event", async () => {
   expect(controls!.options.selectedProjectKey).toBe("env-1:project-1");
   act(() => root.unmount());
 });
+
+it("defaults to the current environment and remembers an explicit all-environments selection", async () => {
+  harness.saved = [];
+  let controls: ReturnType<typeof useHomeListOptions> | undefined;
+  function Probe() {
+    const result = useHomeListOptions(AVAILABLE, ENVIRONMENT);
+    useLayoutEffect(() => {
+      controls = result;
+    });
+    return null;
+  }
+
+  const root = createRoot(document.createElement("div"));
+  await act(async () =>
+    root.render(
+      <HomeListOptionsProvider projectGroupingMode="repository">
+        <Probe />
+      </HomeListOptionsProvider>,
+    ),
+  );
+
+  expect(controls!.options.selectedEnvironmentId).toBe(ENVIRONMENT);
+  expect(controls!.environmentCustomized).toBe(false);
+  act(() => controls!.setSelectedEnvironmentId(null));
+  expect(controls!.options.selectedEnvironmentId).toBeNull();
+  expect(controls!.environmentCustomized).toBe(true);
+  expect(harness.saved.at(-1)).toEqual({
+    threadListFilters: { environmentId: null, projectKey: null, allEnvironments: true },
+  });
+  act(() => root.unmount());
+});

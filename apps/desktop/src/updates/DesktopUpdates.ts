@@ -39,6 +39,7 @@ import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopSshEnvironment from "../ssh/DesktopSshEnvironment.ts";
 import * as DesktopUpdatePolicy from "./DesktopUpdatePolicy.ts";
+import { findForkWindowsFeed } from "./forkWindowsFeed.ts";
 import {
   normalizeDesktopUpdateReleaseNotes,
   releaseNotesOfOfferedVersion,
@@ -383,6 +384,9 @@ export const make = Effect.gen(function* () {
   const policy = yield* DesktopUpdatePolicy.DesktopUpdatePolicy;
   // Any user can set the mock flag, so it never replaces an administrator's update source.
   const mockUpdates = config.mockUpdates && policy.message === null;
+  const useForkWindowsFeed =
+    environment.platform === "win32" && !mockUpdates && policy.feedUrl === undefined;
+  const selectedForkVersion = yield* Ref.make<string | null>(null);
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
@@ -397,8 +401,16 @@ export const make = Effect.gen(function* () {
   // through such a switch, and never below that release: version order alone cannot tell whether
   // a Stable knows a Nightly's migrations.
   const releaseFloorRef = yield* Ref.make(Option.none<string>());
-  const offerable = (version: string, state: DesktopUpdateState) =>
-    Ref.get(releaseFloorRef).pipe(
+  const offerable = (version: string, state: DesktopUpdateState) => {
+    if (useForkWindowsFeed) {
+      return Ref.get(selectedForkVersion).pipe(
+        Effect.map(
+          (selected) =>
+            version === selected && compareSemverVersions(version, environment.appVersion) > 0,
+        ),
+      );
+    }
+    return Ref.get(releaseFloorRef).pipe(
       Effect.map(
         (floor) =>
           desktopUpdateChannelOf(version) === state.channel &&
@@ -407,6 +419,7 @@ export const make = Effect.gen(function* () {
             : desktopUpdateChannelOf(environment.appVersion) === state.channel),
       ),
     );
+  };
   const updateStateRef = yield* Ref.make<DesktopUpdateState>(
     createInitialDesktopUpdateState(
       environment.appVersion,
@@ -490,11 +503,13 @@ export const make = Effect.gen(function* () {
   // Without nightly, an install on that channel stays put until its user picks stable: moving it
   // silently would be a downgrade nobody asked for, and checking nightly would break the policy.
   const channelBlockedReason = (channel: DesktopUpdateChannel): Option.Option<string> =>
-    channel === "nightly" && !policy.allowNightly
-      ? Option.some(
-          `${policy.message ?? "Nightly updates are turned off on this machine."} Switch to the stable channel to keep getting updates.`,
-        )
-      : Option.none();
+    channel === "beta" && (!useForkWindowsFeed || !policy.allowNightly)
+      ? Option.some(policy.message ?? "当前设备的更新源未提供 Beta 通道。")
+      : channel === "nightly" && !policy.allowNightly
+        ? Option.some(
+            `${policy.message ?? "Nightly updates are turned off on this machine."} Switch to the stable channel to keep getting updates.`,
+          )
+        : Option.none();
 
   const resolveStateDisabledReason = (channel: DesktopUpdateChannel) =>
     resolveDisabledReason.pipe(Effect.map(Option.orElse(() => channelBlockedReason(channel))));
@@ -527,7 +542,7 @@ export const make = Effect.gen(function* () {
   ) {
     yield* Effect.annotateCurrentSpan({ channel });
     const allowsPrerelease = true; // Product-build versions (0.1.0-1) are semver prereleases.
-    yield* electronUpdater.setChannel(channel);
+    yield* electronUpdater.setChannel(channel === "beta" ? "latest" : channel);
     yield* electronUpdater.setAllowPrerelease(allowsPrerelease);
     // An older build can lack migrations this one ran. Only a guarded track switch's own check
     // may offer one.
@@ -568,8 +583,45 @@ export const make = Effect.gen(function* () {
       yield* logUpdaterInfo("checking for updates", { reason });
 
       // The flag is shared updater state, so it flips only while this check holds the reservation.
+      if (useForkWindowsFeed) {
+        const result = yield* Effect.result(
+          Effect.tryPromise({
+            try: (signal) =>
+              findForkWindowsFeed(
+                state.channel === "beta" ? "beta" : "stable",
+                environment.runtimeInfo.appArch,
+                signal,
+              ),
+            catch: (cause) =>
+              cause instanceof Error ? cause.message : "无法读取 GitHub 发布信息。",
+          }).pipe(
+            Effect.timeout(Duration.seconds(30)),
+            Effect.catchTag("TimeoutError", () =>
+              Effect.fail("检查 GitHub 发布信息超时，请重试。"),
+            ),
+          ),
+        );
+        if (result._tag === "Failure") {
+          yield* Ref.set(selectedForkVersion, null);
+          yield* updateState((current) =>
+            reduceDesktopUpdateStateOnCheckFailure(current, result.failure, checkedAt),
+          );
+          return true;
+        }
+        const feed = result.success;
+        if (feed === null || compareSemverVersions(feed.version, environment.appVersion) <= 0) {
+          yield* Ref.set(selectedForkVersion, null);
+          yield* updateState((current) => reduceDesktopUpdateStateOnNoUpdate(current, checkedAt));
+          return true;
+        }
+        yield* Ref.set(selectedForkVersion, feed.version);
+        yield* electronUpdater.setFeedURL({ provider: "generic", url: feed.url });
+        yield* electronUpdater.setChannel(feed.channel);
+        yield* electronUpdater.setAllowDowngrade(false);
+      }
+
       const restoreDowngrade = yield* electronUpdater.allowDowngrade;
-      if (allowDowngrade) yield* electronUpdater.setAllowDowngrade(true);
+      if (allowDowngrade && !useForkWindowsFeed) yield* electronUpdater.setAllowDowngrade(true);
       return yield* electronUpdater.checkForUpdates.pipe(
         Effect.ensuring(electronUpdater.setAllowDowngrade(restoreDowngrade).pipe(Effect.ignore)),
         Effect.as(true),
@@ -1204,14 +1256,16 @@ export const make = Effect.gen(function* () {
           url: FORK_RELEASE_FEED_URL,
         } as ElectronUpdater.ElectronUpdaterFeedUrl);
       }
-      const settings = { ...(yield* desktopSettings.get), updateChannel: "latest" as const };
+      const savedChannel = (yield* desktopSettings.get).updateChannel;
+      const updateChannel: DesktopUpdateChannel =
+        savedChannel === "beta" && useForkWindowsFeed ? "beta" : "latest";
       const disabledReason = yield* resolveDisabledReason;
       // A blocked nightly channel still lets the user switch back to stable, so it stays updatable.
       yield* Ref.set(desktopState.canInstallUpdates, Option.isNone(disabledReason));
       yield* setState(
         yield* baseUpdateState(
-          settings.updateChannel,
-          Option.orElse(disabledReason, () => channelBlockedReason(settings.updateChannel)),
+          updateChannel,
+          Option.orElse(disabledReason, () => channelBlockedReason(updateChannel)),
         ),
       );
       if (Option.isSome(disabledReason)) {
@@ -1221,7 +1275,7 @@ export const make = Effect.gen(function* () {
 
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
-      yield* applyAutoUpdaterChannel(settings.updateChannel);
+      yield* applyAutoUpdaterChannel(updateChannel);
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
@@ -1261,9 +1315,7 @@ export const make = Effect.gen(function* () {
       nextChannel: DesktopUpdateChannel,
       options?: { readonly minimumVersion?: string | undefined },
     ) {
-      // Keep the old IPC method usable for old clients without allowing it to select
-      // a second feed or poison the release floor with a Nightly version.
-      if (nextChannel !== "latest") return yield* Ref.get(updateStateRef);
+      if (nextChannel === "nightly") return yield* Ref.get(updateStateRef);
       yield* Effect.annotateCurrentSpan({ channel: nextChannel });
       if (Option.isSome(channelBlockedReason(nextChannel))) {
         return yield* new DesktopUpdateChannelManagedError({
@@ -1297,7 +1349,7 @@ export const make = Effect.gen(function* () {
         // So does a retained offer below the new floor, which must not install.
         if (
           nextChannel === state.channel &&
-          nextChannel === desktopUpdateChannelOf(environment.appVersion) &&
+          (useForkWindowsFeed || nextChannel === desktopUpdateChannelOf(environment.appVersion)) &&
           (retained === null || (yield* offerable(retained, state)))
         ) {
           return state;

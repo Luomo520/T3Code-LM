@@ -1,10 +1,12 @@
 import {
   AuthAccessWriteScope,
   COMPANION_MAX_IMAGE_BASE64_LENGTH,
+  CompanionCheckInput,
   CompanionEnrollInput,
   CompanionPollInput,
   CompanionRenameInput,
   CompanionResultInput,
+  CompanionTransferReadInput,
   CompanionUnbindInput,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
@@ -22,6 +24,7 @@ import { failEnvironmentInternal, requireEnvironmentScope } from "../auth/http.t
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { CompanionError, getCompanionStore } from "./store.ts";
+import { readCompanionTransferFile } from "./transferFile.ts";
 
 const MAX_DEVICE_BODY_BYTES = 64 * 1024;
 const MAX_RESULT_BODY_BYTES = COMPANION_MAX_IMAGE_BASE64_LENGTH + MAX_DEVICE_BODY_BYTES;
@@ -105,7 +108,7 @@ export const layer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "companions",
   Effect.fnUntraced(function* (handlers) {
-    const { stateDir } = yield* ServerConfig.ServerConfig;
+    const { stateDir, attachmentsDir } = yield* ServerConfig.ServerConfig;
     const settings = yield* ServerSettingsService;
     const store = () => getCompanionStore(stateDir);
     const requireAdministrator = requireEnvironmentScope(AuthAccessWriteScope);
@@ -226,12 +229,55 @@ export const layer = HttpApiBuilder.group(
             yield* requireNativeClient(request);
             yield* requireEnabled;
             const token = yield* authenticateDevice(request);
-            const { name, info } = yield* readJson(
+            const { name, info, watchRecordingId } = yield* readJson(
               request,
               MAX_DEVICE_BODY_BYTES,
               CompanionPollInput,
             );
-            return yield* operateWhenEnabled(() => store().poll(token, name, info));
+            return yield* operateWhenEnabled(() =>
+              store().poll(token, name, info, watchRecordingId),
+            );
+          }),
+        ),
+      )
+      .handleRaw("checkDevice", ({ request }) =>
+        respond(
+          Effect.gen(function* () {
+            yield* requireNativeClient(request);
+            yield* requireEnabled;
+            const token = yield* authenticateDevice(request);
+            const { name, info } = yield* readJson(
+              request,
+              MAX_DEVICE_BODY_BYTES,
+              CompanionCheckInput,
+            );
+            return yield* operateWhenEnabled(() => store().checkDevice(token, info, name));
+          }),
+        ),
+      )
+      .handleRaw("readTransfer", ({ request }) =>
+        respond(
+          Effect.gen(function* () {
+            yield* requireNativeClient(request);
+            yield* requireEnabled;
+            const token = yield* authenticateDevice(request);
+            const { id } = yield* readJson(
+              request,
+              MAX_DEVICE_BODY_BYTES,
+              CompanionTransferReadInput,
+            );
+            return yield* operateWhenEnabled(() => {
+              const transfer = store().receiveTransfer(token, id);
+              const { attachmentId, fileName, sha256 } = transfer;
+              if (!attachmentId || !fileName || !sha256) {
+                throw new CompanionError(404, "No file was selected for this transfer.");
+              }
+              const file = readCompanionTransferFile(attachmentsDir, attachmentId);
+              if (file.sha256 !== sha256) {
+                throw new CompanionError(409, "The thread file changed. Create a new transfer.");
+              }
+              return { name: fileName, ...file };
+            });
           }),
         ),
       )

@@ -1,5 +1,5 @@
 import { MessageId, RunId } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { observeTimelineRun, resolveDisclosureRevealScrollDelta } from "./timelineScrollAnchoring";
 
 describe("observeTimelineRun", () => {
@@ -99,4 +99,41 @@ describe("resolveDisclosureRevealScrollDelta", () => {
       0,
     );
   });
+});
+
+it("restores row positions after reload without overwriting positions from other tabs", async () => {
+  const windowEvents = new EventTarget();
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  };
+  vi.stubGlobal("window", Object.assign(windowEvents, { localStorage }));
+  vi.resetModules();
+  try {
+    const firstTab = await import("./timelineScrollAnchoring");
+    vi.resetModules();
+    const secondTab = await import("./timelineScrollAnchoring");
+    const first = { rowId: "message-a", atEnd: false, scrollOffset: 360, offsetWithinRow: 32 };
+    const second = { rowId: "message-b", atEnd: false, scrollOffset: 480, offsetWithinRow: 55 };
+
+    firstTab.rememberTimelinePosition("thread-a", first, false);
+    secondTab.rememberTimelinePosition("thread-b", second, false);
+    windowEvents.dispatchEvent(new Event("pagehide"));
+    vi.resetModules();
+
+    const reloaded = await import("./timelineScrollAnchoring");
+    expect(reloaded.readTimelinePosition("thread-a")).toEqual(first);
+    expect(reloaded.readTimelinePosition("thread-b")).toEqual(second);
+    reloaded.rememberTimelinePosition("thread-a", first, true);
+    windowEvents.dispatchEvent(new Event("pagehide"));
+    vi.resetModules();
+
+    const reopened = await import("./timelineScrollAnchoring");
+    expect(reopened.readTimelinePosition("thread-a")).toBeUndefined();
+    expect(reopened.readTimelinePosition("thread-b")).toEqual(second);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  }
 });

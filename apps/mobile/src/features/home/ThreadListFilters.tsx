@@ -1,4 +1,5 @@
 import { Pressable, ScrollView } from "react-native";
+import { AppText } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -99,5 +100,27 @@ export function ThreadListFilters(props: {
         </Pressable>
       ) : null}
     </ScrollView>
+  );
+}
+
+export function ActiveProjectFilter(props: {
+  readonly title: string;
+  readonly onClear: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`清除项目筛选：${props.title}`}
+      className="mx-4 my-1 min-h-12 max-w-full flex-row items-center gap-2 self-start rounded-md border border-border bg-card px-3 py-2 active:opacity-70"
+      onPress={props.onClear}
+    >
+      <AppText className="min-w-0 shrink text-sm text-foreground">{props.title}</AppText>
+      <SymbolView
+        accessible={false}
+        name="xmark"
+        size={12}
+        tintColorClassName="accent-icon-muted"
+      />
+    </Pressable>
   );
 }

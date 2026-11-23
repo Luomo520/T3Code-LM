@@ -1,4 +1,5 @@
 import {
+  type EnvironmentId,
   type ModelSelection,
   PROJECT_FILE_BACKED_SETTINGS,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
@@ -256,6 +257,30 @@ export function resolveSendEnvMode(input: {
   readonly isGitRepo: boolean;
 }): ThreadEnvMode {
   return input.isGitRepo ? input.requestedEnvMode : "local";
+}
+
+export function selectPreferredProjectBackend<
+  Project extends { readonly environmentId: EnvironmentId; readonly id: ProjectId },
+>(
+  projects: readonly Project[],
+  serverConfigs: ReadonlyMap<EnvironmentId, { readonly settings: ServerSettings }>,
+  connectedEnvironmentIds: ReadonlySet<EnvironmentId>,
+): Project | undefined {
+  let preferred: Project | undefined;
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const project of projects) {
+    if (!connectedEnvironmentIds.has(project.environmentId)) continue;
+    const selectedAt = serverConfigs.get(project.environmentId)?.settings.projectSettingsOverrides[
+      project.id
+    ]?.preferredProjectBackendAt;
+    if (selectedAt == null) continue;
+    const time = Date.parse(selectedAt);
+    if (time > latest) {
+      preferred = project;
+      latest = time;
+    }
+  }
+  return preferred;
 }
 
 export function clearProjectSettingsOverrides(

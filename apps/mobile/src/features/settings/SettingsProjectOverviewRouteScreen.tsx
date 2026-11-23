@@ -37,6 +37,7 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
+import { ProjectDeliveries } from "../projects/ProjectDeliveries";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilterHeader";
@@ -388,6 +389,17 @@ function ProjectOverviewContent(props: {
           />
         </SettingsSection>
       ) : null}
+
+      <SettingsSection title="交付">
+        {props.members.map((member) => (
+          <ProjectDeliveries
+            key={`${member.environmentId}:${member.id}`}
+            environmentId={member.environmentId}
+            projectId={member.id}
+            {...(props.members.length > 1 ? { label: member.workspaceRoot } : {})}
+          />
+        ))}
+      </SettingsSection>
 
       <SettingsSection title="检出目录">
         {props.members.map((member, index) => {

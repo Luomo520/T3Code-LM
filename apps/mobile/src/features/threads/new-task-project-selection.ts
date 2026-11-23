@@ -2,6 +2,7 @@ import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
 import { availableScratchWorkspaceRoot } from "@t3tools/client-runtime/operations/projects";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { repositoryGroupingKeyOf, type EnvironmentId, type ServerConfig } from "@t3tools/contracts";
+import { selectPreferredProjectBackend } from "@t3tools/shared/projectSettings";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { HomeProjectScope } from "../home/homeThreadList";
@@ -20,7 +21,16 @@ export function getProjectScopeSelectionTarget(
   scope: HomeProjectScope,
   preferredEnvironmentId: EnvironmentId | null,
   connectedEnvironmentIds: ReadonlySet<EnvironmentId>,
+  serverConfigs?: ReadonlyMap<EnvironmentId, ServerConfig>,
 ): EnvironmentProject {
+  const preferred =
+    serverConfigs &&
+    selectPreferredProjectBackend(
+      scope.projects.filter((project) => project.archivedAt == null),
+      serverConfigs,
+      connectedEnvironmentIds,
+    );
+  if (preferred) return preferred;
   const rank = (project: EnvironmentProject) =>
     project.environmentId === preferredEnvironmentId ? 0 : project === scope.representative ? 1 : 2;
   const ordered = [...scope.projects].sort((left, right) => rank(left) - rank(right));
@@ -166,10 +176,14 @@ export function newTaskFilteredProject(
   preferredEnvironmentId: EnvironmentId | null,
   connectedEnvironmentIds: ReadonlySet<EnvironmentId>,
   lastProject: ProjectRef | undefined,
+  serverConfigs?: ReadonlyMap<EnvironmentId, ServerConfig>,
 ): ProjectRef | undefined {
   const live = scope.projects.filter((project) => project.archivedAt == null);
   if (live.length === 0) return undefined;
+  const preferred =
+    serverConfigs && selectPreferredProjectBackend(live, serverConfigs, connectedEnvironmentIds);
   const project =
+    preferred ??
     live.find(
       (candidate) =>
         candidate.environmentId === lastProject?.environmentId &&

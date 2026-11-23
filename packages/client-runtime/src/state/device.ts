@@ -84,6 +84,10 @@ export function createDeviceEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    inputQueue: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:input-queue",
+      tag: WS_METHODS.deviceInputQueue,
+    }),
     action: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:action",
       tag: WS_METHODS.deviceAction,

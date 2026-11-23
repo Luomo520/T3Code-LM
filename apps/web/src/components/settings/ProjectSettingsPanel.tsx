@@ -1,3 +1,4 @@
+import { ProjectDeliveries } from "./ProjectDeliveries";
 import { useComposerMenuState } from "../chat/useComposerMenuState";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
@@ -524,6 +525,14 @@ function ProjectDetail({
           </AlertDescription>
         </Alert>
         <SettingsSection id="project-overview" title="Project" hideTitle>
+          {group.memberProjects.map((member) => (
+            <ProjectDeliveries
+              key={member.physicalProjectKey}
+              environmentId={member.environmentId}
+              projectId={member.id}
+              label={group.memberProjects.length > 1 ? member.workspaceRoot : undefined}
+            />
+          ))}
           {!canEditGroup ? (
             <p className="px-3 py-2 text-sm text-muted-foreground sm:px-4">
               {group.memberProjects.length > 1

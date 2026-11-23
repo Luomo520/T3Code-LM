@@ -427,6 +427,10 @@
       "types": "./src/work-log/userInput.ts",
       "default": "./src/work-log/userInput.ts"
     },
+    "./work-log/companion-recording": {
+      "types": "./src/work-log/companionRecording.ts",
+      "default": "./src/work-log/companionRecording.ts"
+    },
     "./work-log/item-detail": {
       "types": "./src/work-log/itemDetail.ts",
       "default": "./src/work-log/itemDetail.ts"

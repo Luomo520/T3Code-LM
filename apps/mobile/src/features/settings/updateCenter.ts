@@ -14,7 +14,7 @@ import {
   isProviderUpdateActive,
 } from "@t3tools/client-runtime/providerUpdates";
 import type { EnvironmentShellState } from "@t3tools/client-runtime/state/shell";
-import { resolveForkUpdateTarget } from "@t3tools/shared/forkRelease";
+import { resolveForkUpdateTarget, type ForkUpdateChannel } from "@t3tools/shared/forkRelease";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
@@ -78,8 +78,8 @@ function cliLabel(provider: ServerProvider): string {
     : product;
 }
 
-export const remoteUpdateDeviceAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make((get) => {
+function makeRemoteUpdateDeviceAtom(environmentId: EnvironmentId, channel: ForkUpdateChannel) {
+  return Atom.make((get) => {
     const environment = get(workspaceConnections.environmentsAtom).find(
       (entry) => entry.environmentId === environmentId && entry.isEnabled,
     );
@@ -105,7 +105,10 @@ export const remoteUpdateDeviceAtom = Atom.family((environmentId: EnvironmentId)
     const denied = managedUpdatesDenial(config?.managedPolicy) !== undefined;
     const releaseAtom =
       connected && canRead && supportsLookup && !denied
-        ? serverEnvironment.npmRelease({ environmentId, input: { spec: "latest" } })
+        ? serverEnvironment.npmRelease({
+            environmentId,
+            input: { spec: channel === "beta" ? "beta" : "latest" },
+          })
         : null;
     const releaseResult = releaseAtom ? get(releaseAtom) : null;
     const releaseError =
@@ -220,17 +223,28 @@ export const remoteUpdateDeviceAtom = Atom.family((environmentId: EnvironmentId)
               ? "CLI 更新完成后可更新服务端。"
               : null,
     };
-  }),
+  });
+}
+
+export const remoteUpdateDeviceAtom = Atom.family((environmentId: EnvironmentId) =>
+  makeRemoteUpdateDeviceAtom(environmentId, "stable"),
+);
+const betaRemoteUpdateDeviceAtom = Atom.family((environmentId: EnvironmentId) =>
+  makeRemoteUpdateDeviceAtom(environmentId, "beta"),
 );
 
-export const remoteUpdateDevicesAtom = Atom.make((get) =>
-  get(workspaceConnections.environmentsAtom).flatMap(({ environmentId, isEnabled }) => {
-    const device = isEnabled ? get(remoteUpdateDeviceAtom(environmentId)) : null;
-    return device ? [device] : [];
-  }),
-).pipe(Atom.withLabel("mobile:remote-update-devices"));
+export const remoteUpdateDevicesAtom = Atom.family((channel: ForkUpdateChannel) =>
+  Atom.make((get) =>
+    get(workspaceConnections.environmentsAtom).flatMap(({ environmentId, isEnabled }) => {
+      const forEnvironment =
+        channel === "beta" ? betaRemoteUpdateDeviceAtom : remoteUpdateDeviceAtom;
+      const device = isEnabled ? get(forEnvironment(environmentId)) : null;
+      return device ? [device] : [];
+    }),
+  ).pipe(Atom.withLabel(`mobile:remote-update-devices:${channel}`)),
+);
 
-export type RemoteUpdateDevice = Atom.Type<typeof remoteUpdateDevicesAtom>[number];
+export type RemoteUpdateDevice = Atom.Type<ReturnType<typeof remoteUpdateDevicesAtom>>[number];
 
 export function remoteUpdateChoices(device: RemoteUpdateDevice): RemoteUpdateChoice[] {
   return [

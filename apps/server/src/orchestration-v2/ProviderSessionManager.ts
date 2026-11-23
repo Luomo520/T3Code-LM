@@ -521,8 +521,7 @@ export const layerWithOptions = (
           Effect.orElseSucceed(() => null),
         );
         if (settings === null) return selection;
-        const appliedModels =
-          threadId == null ? undefined : appliedReasoningDefaults.get(threadId);
+        const appliedModels = threadId == null ? undefined : appliedReasoningDefaults.get(threadId);
         const hadOverride = appliedModels?.has(selection.model) === true;
         const couldUseProjectDefault =
           !settings.projectSettingsFolded ||
@@ -2481,6 +2480,46 @@ export const layerWithOptions = (
                 }),
           ),
         );
+        const withSubagentDefault = Effect.fn("ProviderSessionManager.withSubagentDefault")(
+          function* <
+            Input extends {
+              readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+            },
+          >(input: Input, threadId: ThreadId) {
+            if (
+              runtime.driver !== "codex" ||
+              !input.runtimePolicy ||
+              Option.isNone(serverSettings)
+            ) {
+              return input;
+            }
+            const settings = yield* serverSettings.value.getSettings.pipe(
+              Effect.orElseSucceed(() => null),
+            );
+            if (settings === null) return input;
+            if (
+              settings.defaultSubagentModelSelection === null &&
+              !Object.values(settings.projectSettingsOverrides).some(
+                (entry) => entry.defaultSubagentModelSelection != null,
+              )
+            ) {
+              return input;
+            }
+            const thread = yield* projectionStore.getThread(threadId).pipe(Effect.option);
+            if (Option.isNone(thread)) return input;
+            const selection = resolveProjectSettings(settings, thread.value.projectId).settings
+              .defaultSubagentModelSelection;
+            return selection?.instanceId === runtime.instanceId
+              ? {
+                  ...input,
+                  runtimePolicy: {
+                    ...input.runtimePolicy,
+                    defaultSubagentModelSelection: selection,
+                  },
+                }
+              : input;
+          },
+        );
         const subscribeEvents = makeEventSubscription(eventSubscribers);
         const turnMetrics = (operation: string, model?: string) =>
           withMetrics({
@@ -2503,127 +2542,145 @@ export const layerWithOptions = (
           events: Stream.unwrap(
             subscribeEvents.pipe(Effect.map((subscription) => subscription.events)),
           ),
-          ensureThread: (input) =>
-            assertNativeCodexChild(input.threadId).pipe(
-              Effect.andThen(() => observeActivity(
-              providerSessionId,
-              ensureThreadAttached({
-                providerSessionId,
-                threadId: input.threadId,
-                providerInstanceId: runtime.instanceId,
-              }),
-              )),
-              Effect.andThen(loadNatively(runtime.ensureThread(input))),
-              Effect.tap(({ loaded: providerThread, linkedEnvironments }) =>
-                markProviderThreadLoaded({
-                  providerSessionId,
-                  threadId: input.threadId,
-                  providerThreadKey: providerThreadLoadKey({
-                    runtime,
-                    providerThread,
-                    modelSelection: input.modelSelection,
-                    runtimePolicy: input.runtimePolicy,
-                  }),
-                  linkedEnvironments,
-                }),
+          ensureThread: (original) =>
+            withSubagentDefault(original, original.threadId).pipe(
+              Effect.flatMap((input) =>
+                assertNativeCodexChild(input.threadId).pipe(
+                  Effect.andThen(() =>
+                    observeActivity(
+                      providerSessionId,
+                      ensureThreadAttached({
+                        providerSessionId,
+                        threadId: input.threadId,
+                        providerInstanceId: runtime.instanceId,
+                      }),
+                    ),
+                  ),
+                  Effect.andThen(loadNatively(runtime.ensureThread(input))),
+                  Effect.tap(({ loaded: providerThread, linkedEnvironments }) =>
+                    markProviderThreadLoaded({
+                      providerSessionId,
+                      threadId: input.threadId,
+                      providerThreadKey: providerThreadLoadKey({
+                        runtime,
+                        providerThread,
+                        modelSelection: input.modelSelection,
+                        runtimePolicy: input.runtimePolicy,
+                      }),
+                      linkedEnvironments,
+                    }),
+                  ),
+                  Effect.map(({ loaded }) => loaded),
+                ),
               ),
-              Effect.map(({ loaded }) => loaded),
             ),
-          resumeThread: (input) => {
-            const threadId = input.threadId ?? input.providerThread.appThreadId;
+          resumeThread: (original) => {
+            const threadId = original.threadId ?? original.providerThread.appThreadId;
             if (threadId === null || threadId === undefined) {
-              return runtime.resumeThread(input);
+              return runtime.resumeThread(original);
             }
-            const providerThreadKey = providerThreadLoadKey({
-              runtime,
-              providerThread: input.providerThread,
-              ...(input.modelSelection === undefined
-                ? {}
-                : { modelSelection: input.modelSelection }),
-              ...(input.runtimePolicy === undefined ? {} : { runtimePolicy: input.runtimePolicy }),
-            });
-            return assertNativeCodexChild(threadId).pipe(
-              Effect.andThen(() => observeActivity(
-              providerSessionId,
-              ensureThreadAttached({
-                providerSessionId,
-                threadId,
-                providerInstanceId: runtime.instanceId,
+            return withSubagentDefault(original, threadId).pipe(
+              Effect.flatMap((input) => {
+                const providerThreadKey = providerThreadLoadKey({
+                  runtime,
+                  providerThread: input.providerThread,
+                  ...(input.modelSelection === undefined
+                    ? {}
+                    : { modelSelection: input.modelSelection }),
+                  ...(input.runtimePolicy === undefined
+                    ? {}
+                    : { runtimePolicy: input.runtimePolicy }),
+                });
+                return assertNativeCodexChild(threadId).pipe(
+                  Effect.andThen(() =>
+                    observeActivity(
+                      providerSessionId,
+                      ensureThreadAttached({
+                        providerSessionId,
+                        threadId,
+                        providerInstanceId: runtime.instanceId,
+                      }),
+                    ),
+                  ),
+                  Effect.andThen(
+                    holdThreadLoaded({
+                      providerSessionId,
+                      threadId,
+                      providerThread: input.providerThread,
+                    }),
+                  ),
+                  Effect.andThen(
+                    unloadForLinkedEnvironments({
+                      providerSessionId,
+                      threadId,
+                      providerThread: input.providerThread,
+                    }),
+                  ),
+                  Effect.andThen(
+                    isProviderThreadLoaded({ providerSessionId, threadId, providerThreadKey }),
+                  ),
+                  Effect.flatMap((loaded) =>
+                    loaded
+                      ? Effect.succeed({
+                          loaded: input.providerThread,
+                          linkedEnvironments: undefined,
+                        })
+                      : loadNatively(runtime.resumeThread(input)),
+                  ),
+                  Effect.tap(({ loaded: providerThread, linkedEnvironments }) =>
+                    markProviderThreadLoaded({
+                      providerSessionId,
+                      threadId,
+                      providerThreadKey: providerThreadLoadKey({
+                        runtime,
+                        providerThread,
+                        ...(input.modelSelection === undefined
+                          ? {}
+                          : { modelSelection: input.modelSelection }),
+                        ...(input.runtimePolicy === undefined
+                          ? {}
+                          : { runtimePolicy: input.runtimePolicy }),
+                      }),
+                      linkedEnvironments,
+                    }),
+                  ),
+                  Effect.map(({ loaded }) => loaded),
+                );
               }),
-              )),
-              Effect.andThen(
-                holdThreadLoaded({
-                  providerSessionId,
-                  threadId,
-                  providerThread: input.providerThread,
-                }),
-              ),
-              Effect.andThen(
-                unloadForLinkedEnvironments({
-                  providerSessionId,
-                  threadId,
-                  providerThread: input.providerThread,
-                }),
-              ),
-              Effect.andThen(
-                isProviderThreadLoaded({ providerSessionId, threadId, providerThreadKey }),
-              ),
-              Effect.flatMap((loaded) =>
-                loaded
-                  ? Effect.succeed({
-                      loaded: input.providerThread,
-                      linkedEnvironments: undefined,
-                    })
-                  : loadNatively(runtime.resumeThread(input)),
-              ),
-              Effect.tap(({ loaded: providerThread, linkedEnvironments }) =>
-                markProviderThreadLoaded({
-                  providerSessionId,
-                  threadId,
-                  providerThreadKey: providerThreadLoadKey({
-                    runtime,
-                    providerThread,
-                    ...(input.modelSelection === undefined
-                      ? {}
-                      : { modelSelection: input.modelSelection }),
-                    ...(input.runtimePolicy === undefined
-                      ? {}
-                      : { runtimePolicy: input.runtimePolicy }),
-                  }),
-                  linkedEnvironments,
-                }),
-              ),
-              Effect.map(({ loaded }) => loaded),
             );
           },
-          forkThread: (input) =>
-            observeActivity(
-              providerSessionId,
-              ensureThreadAttached({
-                providerSessionId,
-                threadId: input.targetThreadId,
-                providerInstanceId: runtime.instanceId,
-              }),
-            ).pipe(
-              Effect.andThen(loadNatively(runtime.forkThread(input))),
-              Effect.tap(({ loaded: providerThread, linkedEnvironments }) =>
-                markProviderThreadLoaded({
+          forkThread: (original) =>
+            withSubagentDefault(original, original.targetThreadId).pipe(
+              Effect.flatMap((input) =>
+                observeActivity(
                   providerSessionId,
-                  threadId: input.targetThreadId,
-                  providerThreadKey: providerThreadLoadKey({
-                    runtime,
-                    providerThread,
-                    ...(input.modelSelection === undefined
-                      ? {}
-                      : { modelSelection: input.modelSelection }),
-                    ...(input.runtimePolicy === undefined
-                      ? {}
-                      : { runtimePolicy: input.runtimePolicy }),
+                  ensureThreadAttached({
+                    providerSessionId,
+                    threadId: input.targetThreadId,
+                    providerInstanceId: runtime.instanceId,
                   }),
-                  linkedEnvironments,
-                }),
+                ).pipe(
+                  Effect.andThen(loadNatively(runtime.forkThread(input))),
+                  Effect.tap(({ loaded: providerThread, linkedEnvironments }) =>
+                    markProviderThreadLoaded({
+                      providerSessionId,
+                      threadId: input.targetThreadId,
+                      providerThreadKey: providerThreadLoadKey({
+                        runtime,
+                        providerThread,
+                        ...(input.modelSelection === undefined
+                          ? {}
+                          : { modelSelection: input.modelSelection }),
+                        ...(input.runtimePolicy === undefined
+                          ? {}
+                          : { runtimePolicy: input.runtimePolicy }),
+                      }),
+                      linkedEnvironments,
+                    }),
+                  ),
+                  Effect.map(({ loaded }) => loaded),
+                ),
               ),
-              Effect.map(({ loaded }) => loaded),
             ),
           startTurn: (input) =>
             observeActivity(

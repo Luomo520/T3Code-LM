@@ -1,7 +1,7 @@
 import type { DevicePlatform, EnvironmentId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
@@ -65,6 +65,7 @@ function screenRotation(platform: DevicePlatform, screen: DeviceScreenSize | nul
 export interface DeviceViewControls {
   readonly phone: boolean;
   readonly streaming: boolean;
+  readonly inputConnected: boolean;
   readonly phoneUnavailableReason: string | null;
   readonly showPhone: () => void;
   readonly showFlat: () => void;
@@ -89,6 +90,10 @@ export function DeviceStreamView(props: {
   readonly visible: boolean;
   readonly hostId: string;
   readonly allowPhoneView?: boolean;
+  readonly inputEnabled?: boolean;
+  readonly inputLease?: string | null;
+  readonly disableAndroidFold?: boolean;
+  readonly onInputLost?: (() => void) | undefined;
   readonly renderControls?: (view: DeviceViewControls) => ReactNode;
   readonly axOverlay?: boolean;
   /** Lets a parent read this view's own stream state, such as its screen size. */
@@ -126,10 +131,23 @@ export function DeviceStreamView(props: {
       : NO_SESSION_ATOM,
   );
   const client = session?.stream ?? null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 给设备串流同步当前输入租约，画面连接保持连续。
+  useEffect(() => {
+    client?.setInputLease(props.inputLease ?? null);
+    return () => client?.setInputLease(null);
+  }, [client, props.inputLease]);
   const canvas = session?.canvas ?? null;
   const { status, detail, hasFrame, screen, mjpegUrl, mjpegGeneration, duoControl } =
     session?.state ?? IDLE_DEVICE_STREAM_STATE;
   const inputState = session?.state.input ?? IDLE_DEVICE_STREAM_STATE.input;
+  const inputEnabled = props.inputEnabled !== false;
+  const inputAvailable = props.visible && status === "streaming" && inputState.connected;
+  const onInputLost = useEffectEvent(() => props.onInputLost?.());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 视频或输入链路中断时结束本次手工接管。
+  useEffect(() => {
+    if (!inputAvailable) onInputLost();
+  }, [inputAvailable]);
+  const interactive = inputEnabled && (props.onInputLost === undefined || inputAvailable);
   const phoneUnavailable = session?.state.phoneUnavailable ?? false;
   const foldAngle = useAtomValue(
     androidFoldViewAtom(deviceScreenKey(props.environmentId, props.hostId, props.deviceId)),
@@ -151,6 +169,7 @@ export function DeviceStreamView(props: {
     status === "connecting" && hasFrame && inputState.connected && screen !== null;
   const showPhone =
     props.allowPhoneView &&
+    inputEnabled &&
     (status === "streaming" || retainingFrame) &&
     props.visible &&
     presentation === "phone" &&
@@ -204,11 +223,13 @@ export function DeviceStreamView(props: {
   const activePointer = useRef<{ id: number; x: number; y: number } | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears pointer ownership when its device input connection disconnects or is replaced
   useEffect(() => {
-    if (!client || !inputState.connected) return;
+    if (!client || !inputState.connected || !interactive) return;
     return () => {
+      const pointer = activePointer.current;
+      if (pointer) client.sendTouch("end", pointer.x, pointer.y);
       activePointer.current = null;
     };
-  }, [client, inputState.connected]);
+  }, [client, inputState.connected, interactive]);
   const normalizedPoint = (event: React.PointerEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = (event.clientX - rect.left) / rect.width;
@@ -262,15 +283,16 @@ export function DeviceStreamView(props: {
           view={{
             phone: !!showPhone,
             streaming: status === "streaming",
+            inputConnected: inputState.connected,
             phoneUnavailableReason,
             foldingControls:
-              props.platform === "android" && access ? (
+              props.platform === "android" && access && !props.disableAndroidFold ? (
                 <DeviceAndroidFoldControls
                   key={`${props.hostId}:${props.deviceId}`}
                   access={access}
                   deviceId={props.deviceId}
                   visible={props.visible}
-                  enabled={status === "streaming"}
+                  enabled={status === "streaming" && interactive}
                   screenWidth={screen?.width}
                   screenHeight={screen?.height}
                   deviceKey={deviceScreenKey(props.environmentId, props.hostId, props.deviceId)}
@@ -301,13 +323,14 @@ export function DeviceStreamView(props: {
                 : null,
             showPhone: () => setPresentation("phone"),
             showFlat: () => setPresentation("flat"),
-            handle: client
-              ? {
-                  pressButton: client.pressButton,
-                  rotate: client.rotate,
-                  inputConnected: inputState.connected,
-                }
-              : null,
+            handle:
+              client && interactive
+                ? {
+                    pressButton: client.pressButton,
+                    rotate: client.rotate,
+                    inputConnected: inputState.connected,
+                  }
+                : null,
           }}
           onResetView={resetView}
         />
@@ -320,11 +343,11 @@ export function DeviceStreamView(props: {
           "after:pointer-events-none after:absolute after:inset-0 after:z-10 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring",
           controlsInset && "pr-14",
         )}
-        tabIndex={0}
+        tabIndex={interactive ? 0 : undefined}
         role="application"
         aria-label={`${props.platform === "ios" ? "iOS Simulator" : "Android device"} screen`}
         onKeyDown={(event) => {
-          if (event.target !== event.currentTarget) return;
+          if (!interactive || event.target !== event.currentTarget) return;
           if (event.metaKey && !["r", "R"].includes(event.key)) return;
           // Let browser paste chords fire the paste event.
           if (
@@ -337,12 +360,12 @@ export function DeviceStreamView(props: {
           client?.sendKey(event.nativeEvent, "down");
         }}
         onPaste={(event) => {
-          if (event.target !== event.currentTarget) return;
+          if (!interactive || event.target !== event.currentTarget) return;
           event.preventDefault();
           client?.sendText(event.clipboardData.getData("text/plain"));
         }}
         onKeyUp={(event) => {
-          if (event.target !== event.currentTarget) return;
+          if (!interactive || event.target !== event.currentTarget) return;
           client?.sendKey(event.nativeEvent, "up");
         }}
       >
@@ -350,7 +373,12 @@ export function DeviceStreamView(props: {
           className={cn("relative select-none", showPhone && "invisible pointer-events-none")}
           style={{ width: frame.width, height: frame.height }}
           onPointerDown={(event) => {
-            if (event.button !== 0 || !inputState.connected || activePointer.current !== null)
+            if (
+              !interactive ||
+              event.button !== 0 ||
+              !inputState.connected ||
+              activePointer.current !== null
+            )
               return;
             event.currentTarget.setPointerCapture(event.pointerId);
             (event.currentTarget.parentElement as HTMLElement | null)?.focus();
@@ -359,7 +387,7 @@ export function DeviceStreamView(props: {
             client?.sendTouch("begin", x, y);
           }}
           onPointerMove={(event) => {
-            if (activePointer.current?.id !== event.pointerId) return;
+            if (!interactive || activePointer.current?.id !== event.pointerId) return;
             const { x, y } = normalizedPoint(event);
             activePointer.current = { id: event.pointerId, x, y };
             client?.sendTouch("move", x, y);

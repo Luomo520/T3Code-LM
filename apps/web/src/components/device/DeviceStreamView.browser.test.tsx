@@ -50,9 +50,9 @@ function setup() {
     },
   );
   return {
-    view: () => (
+    view: (inputEnabled?: boolean) => (
       <RegistryContext.Provider value={registry}>
-        <div style={{ width: 400, height: 800 }}>{view()}</div>
+        <div style={{ width: 400, height: 800 }}>{view(inputEnabled)}</div>
       </RegistryContext.Provider>
     ),
     [Symbol.dispose]() {
@@ -77,7 +77,7 @@ function setup() {
   };
 }
 
-function view() {
+function view(inputEnabled = true) {
   return (
     <DeviceStreamView
       hostId="local"
@@ -86,6 +86,7 @@ function view() {
       platform="ios"
       visible
       allowPhoneView={false}
+      inputEnabled={inputEnabled}
       renderControls={(controls) => (
         <output>
           {controls.handle?.inputConnected ? "Input connected" : "Input disconnected"}
@@ -204,5 +205,24 @@ it("releases flat pointer ownership when input disconnects", async () => {
     { type: "begin", x: 0.25, y: 0.25 },
     { type: "begin", x: 0.5, y: 0.5 },
     { type: "end", x: 0.75, y: 0.75 },
+  ]);
+});
+
+it("blocks paused input and accepts only a new pointer after resuming", async () => {
+  using input = setup();
+  await using screen = await render(input.view(false), options);
+  await act(async () => input.configure());
+  const { send } = flatPointer(screen.container);
+  send("pointerdown", 1);
+  await screen.rerender(input.view(true));
+  send("pointermove", 1);
+  send("pointerup", 1);
+  send("pointerdown", 2);
+  await screen.rerender(input.view(false));
+  send("pointermove", 2);
+  send("pointerup", 2);
+  expect(input.touches).toEqual([
+    { type: "begin", x: 0.25, y: 0.25 },
+    { type: "end", x: 0.25, y: 0.25 },
   ]);
 });

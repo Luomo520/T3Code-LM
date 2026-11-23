@@ -627,6 +627,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
       screen: ThreadFilesTreeScreen,
       options: pageRoute({ header: "solid" }),
     }),
+    ProjectDeliveryFile: createNativeStackScreen({
+      linking: { path: "project-delivery/file/:path*" },
+      screen: ThreadFileScreen,
+      options: pageRoute({ header: "solid" }),
+    }),
     NewTaskFile: createNativeStackScreen({
       linking: "new/draft/files/:path*",
       screen: ThreadFileScreen,
@@ -792,7 +797,10 @@ function ScreenRenderFallback(props: RenderFailureProps & { readonly routeName: 
           label: gt("Open settings"),
           onPress: () => openSettings(navigation, DEFAULT_SETTINGS_PAGE),
         }
-      : { label: gt("Return home"), onPress: () => navigation.dispatch(StackActions.replace("Home")) };
+      : {
+          label: gt("Return home"),
+          onPress: () => navigation.dispatch(StackActions.replace("Home")),
+        };
 
   return <RenderFailureView {...props} exit={exit} />;
 }

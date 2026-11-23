@@ -177,7 +177,7 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
         httpClient: HttpClient.make((req) => {
           requests.push(req.url);
           const response = req.url.includes("api.github.com")
-            ? Response.json([{ tag_name: tag, assets: [{ name: groupFile }] }])
+            ? Response.json([{ tag_name: tag, assets: [{ name: groupFile }, { name: fileName }] }])
             : req.url.endsWith("/" + groupFile)
               ? Response.json(group)
               : req.url === url

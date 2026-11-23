@@ -9,6 +9,7 @@ import { updateMobilePreferencesAtom } from "../../state/preferences";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 
 export interface HomeListOptions {
+  readonly allEnvironments: boolean;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
@@ -20,6 +21,7 @@ export interface ResolvedHomeListOptions extends HomeListOptions {
 
 function defaultHomeListOptions(filters?: ThreadListFilters): HomeListOptions {
   return {
+    allEnvironments: filters?.allEnvironments === true,
     selectedEnvironmentId: filters?.environmentId ?? null,
     selectedProjectKey: filters?.projectKey ?? null,
     projectSortOrder:
@@ -56,6 +58,7 @@ export function HomeListOptionsProvider({
     const next = { ...current, ...patch };
     registry.set(optionsAtom, next);
     if (
+      next.allEnvironments !== current.allEnvironments ||
       next.selectedEnvironmentId !== current.selectedEnvironmentId ||
       next.selectedProjectKey !== current.selectedProjectKey
     ) {
@@ -63,6 +66,7 @@ export function HomeListOptionsProvider({
         threadListFilters: {
           environmentId: next.selectedEnvironmentId,
           projectKey: next.selectedProjectKey,
+          ...(next.allEnvironments ? { allEnvironments: true } : {}),
         },
       });
     }
@@ -71,7 +75,10 @@ export function HomeListOptionsProvider({
   return createElement(HomeListOptionsContext, { value }, children);
 }
 
-export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<EnvironmentId>) {
+export function useHomeListOptions(
+  availableEnvironmentIds: ReadonlySet<EnvironmentId>,
+  currentEnvironmentId: EnvironmentId | null = null,
+) {
   const shared = useContext(HomeListOptionsContext);
   const [localOptions, setLocalOptions] = useState<HomeListOptions>(defaultHomeListOptions);
   const options = shared?.options ?? localOptions;
@@ -82,7 +89,9 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     options.selectedEnvironmentId !== null &&
     availableEnvironmentIds.has(options.selectedEnvironmentId)
       ? options.selectedEnvironmentId
-      : null;
+      : options.allEnvironments
+        ? null
+        : currentEnvironmentId;
   const availableOptions =
     selectedEnvironmentId === options.selectedEnvironmentId
       ? options
@@ -93,7 +102,7 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
   };
 
   const setSelectedEnvironmentId = (value: EnvironmentId | null) => {
-    updateOptions({ selectedEnvironmentId: value });
+    updateOptions({ selectedEnvironmentId: value, allEnvironments: value === null });
   };
   const setSelectedProjectKey = (value: string | null) => {
     updateOptions({ selectedProjectKey: value });
@@ -103,6 +112,7 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
   };
   return {
     options: resolvedOptions,
+    environmentCustomized: options.allEnvironments || options.selectedEnvironmentId !== null,
     setSelectedEnvironmentId,
     setSelectedProjectKey,
     setProjectSortOrder,

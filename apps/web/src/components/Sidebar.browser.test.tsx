@@ -1,5 +1,9 @@
 import appCss from "../index.css?inline";
-import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
+import {
+  PrimaryConnectionTarget,
+  type EnvironmentServerConfig,
+} from "@t3tools/client-runtime/connection";
+import * as Option from "effect/Option";
 import * as shelfHooks from "../state/olderSettledShelf";
 import { createWorkspaceFocusController, workspaceAreaProps } from "../lib/workspaceFocus";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -20,6 +24,7 @@ import { makeThreadFixture } from "../test-fixtures";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { __setClientSettingsForTests, getClientSettings } from "../hooks/useSettings";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useServerConfigs, useQuietThreadShells } from "../state/entities";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
@@ -36,6 +41,7 @@ vi.mock(import("../state/olderSettledShelf"), async (original) => {
   return { ...actual, useOlderSettledShelf: vi.fn(actual.useOlderSettledShelf) };
 });
 vi.mock("../state/entities", { spy: true });
+vi.mock("../state/environments", { spy: true });
 vi.mock("../hooks/useHandleNewThread", { spy: true });
 vi.mock("../hooks/useThreadRouteTarget", { spy: true });
 vi.mock("./sidebar/SidebarThreadRow", { spy: true });
@@ -133,6 +139,96 @@ function threadShell(projectId: ProjectId, index: number): EnvironmentThreadShel
     title: `Thread ${index}`,
   });
 }
+
+it("shows only the current environment and clears a visible project filter in one click", async () => {
+  using stack = new DisposableStack();
+  const previousUi = useUiStateStore.getState();
+  stack.defer(() => useUiStateStore.setState(previousUi));
+  const key = "t3.sidebar.task-view.v1";
+  const previousView = localStorage.getItem(key);
+  stack.defer(() =>
+    previousView === null ? localStorage.removeItem(key) : localStorage.setItem(key, previousView),
+  );
+  localStorage.setItem(key, JSON.stringify("recent"));
+
+  const occupied = project("occupied");
+  const empty = project("empty");
+  const remote = { ...project("remote"), environmentId: EnvironmentId.make("remote") };
+  const localThread = threadShell(occupied.id, 6100);
+  const remoteThread = {
+    ...threadShell(remote.id, 6101),
+    environmentId: remote.environmentId,
+  };
+  const localTarget = new PrimaryConnectionTarget({
+    environmentId: occupied.environmentId,
+    label: "local",
+    httpBaseUrl: "http://localhost",
+    wsBaseUrl: "ws://localhost",
+  });
+  const localEnvironment = {
+    environmentId: occupied.environmentId,
+    label: "local",
+    displayUrl: null,
+    relayManaged: false,
+    entry: { target: localTarget, profile: Option.none(), enabled: true },
+    connection: { phase: "offline" as const, error: null, traceId: null },
+    serverConfig: null,
+  };
+
+  vi.mocked(useProjects).mockReturnValue([occupied, empty, remote]);
+  vi.mocked(useQuietThreadShells).mockReturnValue([localThread, remoteThread]);
+  vi.mocked(useThreadRouteTarget).mockReturnValue(null);
+  vi.mocked(usePrimaryEnvironmentId).mockReturnValue(occupied.environmentId);
+  vi.mocked(useEnvironments).mockReturnValue({
+    isReady: true,
+    networkStatus: "online",
+    environments: [],
+    presentationById: new Map(),
+  });
+  stack.defer(() => {
+    vi.mocked(usePrimaryEnvironmentId).mockReset();
+    vi.mocked(useEnvironments).mockReset();
+  });
+  useUiStateStore.setState({ sidebarProjectScopeKeys: ["local:/projects/empty"] });
+  const sidebar = () => (
+    <SidebarProvider style={{ maxWidth: 200 }}>
+      <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+    </SidebarProvider>
+  );
+  await using screen = await render(sidebar());
+  await expect.element(screen.getByRole("button", { name: "清除项目筛选：empty" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "查看全部项目" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "清除项目筛选：empty" }));
+  expect(useUiStateStore.getState().sidebarProjectScopeKeys).toEqual([]);
+  expect(screen.container.textContent).toContain(localThread.title);
+  expect(screen.container.textContent).not.toContain(remoteThread.title);
+
+  vi.mocked(useQuietThreadShells).mockReturnValue([]);
+  vi.mocked(useEnvironments).mockReturnValue({
+    isReady: true,
+    networkStatus: "online",
+    environments: [localEnvironment],
+    presentationById: new Map(),
+  });
+  await screen.rerender(sidebar());
+  await expect
+    .element(screen.getByRole("status").filter({ hasText: "环境连接已中断" }))
+    .toBeVisible();
+  expect(screen.container.textContent).not.toContain("No threads yet");
+
+  vi.mocked(useEnvironments).mockReturnValue({
+    isReady: true,
+    networkStatus: "online",
+    environments: [
+      { ...localEnvironment, connection: { ...localEnvironment.connection, phase: "connecting" } },
+    ],
+    presentationById: new Map(),
+  });
+  await screen.rerender(sidebar());
+  await expect
+    .element(screen.getByRole("status").filter({ hasText: "正在载入会话…" }))
+    .toBeVisible();
+});
 
 describe("sidebar render isolation", () => {
   // regression: #33100 Cmd+J re-rendered every sidebar row, which took hundreds of ms with many threads

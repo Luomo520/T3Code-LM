@@ -35,6 +35,25 @@ class T3NativeControlsModule : Module() {
         sizeBytes.takeIf { it.isFinite() && it in 0.0..9007199254740991.0 && it == it.toLong().toDouble() }?.toLong(),
         sha256)
     }
+    AsyncFunction("saveDirectHandoff") { uri: String, name: String, size: Double, sha256: String ->
+      require(size.isFinite() && size >= 0 && size <= 9007199254740991.0 && size == size.toLong().toDouble()) {
+        "直连文件大小无效。"
+      }
+      T3DirectFileHandoff.save(appContext.reactContext ?: error("应用尚未就绪。"), uri, name, size.toLong(), sha256)
+    }
+    AsyncFunction("enqueueHandoffDownload") { url: String, name: String, size: Double, sha256: String, key: String ->
+      T3FileDownloads.enqueue(appContext.reactContext ?: error("应用尚未就绪。"), url, name,
+        size.takeIf { it.isFinite() && it in 0.0..9007199254740991.0 && it == it.toLong().toDouble() }?.toLong(),
+        sha256, key)
+    }
+    AsyncFunction("getHandoffDownload") { key: String, size: Double, sha256: String ->
+      require(size.isFinite() && size in 0.0..9007199254740991.0 && size == size.toLong().toDouble())
+      T3FileDownloads.handoffStatus(appContext.reactContext ?: error("应用尚未就绪。"), key, size.toLong(), sha256)
+    }
+    AsyncFunction("saveVerifiedDirectHandoff") { uri: String, name: String, size: Double, sha256: String, key: String ->
+      require(size.isFinite() && size in 0.0..9007199254740991.0 && size == size.toLong().toDouble())
+      T3DirectFileHandoff.save(appContext.reactContext ?: error("应用尚未就绪。"), uri, name, size.toLong(), sha256, key)
+    }
     AsyncFunction("getFileDownload") { id: String -> T3FileDownloads.status(id) }
     AsyncFunction("cancelFileDownload") { id: String -> T3FileDownloads.cancel(id) }
     AsyncFunction("showFileDownloads") {

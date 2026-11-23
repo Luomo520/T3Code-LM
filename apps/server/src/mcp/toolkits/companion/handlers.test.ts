@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import { AssetSigner } from "../../../assets/AssetSigner.ts";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
 import { getCompanionStore } from "../../../companion/store.ts";
@@ -51,6 +52,12 @@ const testLayer = layerCompanionToolkit.pipe(
   ),
   Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(layerTest(process.cwd(), { prefix: "t3-companion-mcp-" })),
+  Layer.provide(
+    Layer.succeed(AssetSigner, {
+      sign: () => Effect.succeed("test-signature"),
+      verify: (_payload, signature) => Effect.succeed(signature === "test-signature"),
+    }),
+  ),
   Layer.provide(NodeServices.layer),
 );
 
@@ -141,5 +148,86 @@ it.effect("requires the beta switch and a regular thread in full-access mode to 
     expect([outside, lowerMode].map(({ isError }) => isError)).toEqual([true, true]);
     expect(unsupported).toMatchObject({ _tag: "InvalidParams" });
     expect(store.poll(token, deviceName, info).job).toBeNull();
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("keeps a completed recording scoped to the original thread", () =>
+  Effect.gen(function* () {
+    const { call, store, deviceId, token, settings } = yield* setup();
+    yield* settings.updateSettings({ windowsCompanionEnabled: true });
+    const queued = yield* call("t3_companion_enqueue", {
+      deviceId,
+      action: "record-screen",
+      clientRequestId: "recording-once",
+    });
+    expect(queued.isError).not.toBe(true);
+    const { job } = store.poll(token, deviceName, { ...info, recordingStop: "true" });
+    expect(job).toMatchObject({ action: "record-screen", threadId: owner });
+    const id = job!.id;
+    const stop = yield* call("t3_companion_cancel", { id });
+    expect(stop.structuredContent).toMatchObject({ id, status: "running", stopRequested: true });
+    expect((yield* call("t3_companion_result", { id })).structuredContent).toMatchObject({
+      id,
+      status: "running",
+      stopRequested: true,
+    });
+    const recording = Buffer.alloc(224);
+    recording.write("RIFF");
+    recording.writeUInt32LE(recording.length - 8, 4);
+    recording.write("AVI LIST", 8);
+    recording.write("hdrl", 16);
+    store.complete(token, {
+      id,
+      status: "done",
+      message: "Recorded.",
+      recordingBase64: recording.toString("base64"),
+    });
+
+    const denied = yield* call(
+      "t3_companion_result",
+      { id },
+      {
+        ...scope,
+        thread: { ...scope.thread!, threadId: other },
+      },
+    );
+    expect(denied.isError).toBe(true);
+    const result = yield* call(
+      "t3_companion_result",
+      { id },
+      {
+        ...scope,
+        origin: "https://companion.test",
+      },
+    );
+    expect(result.structuredContent).toMatchObject({
+      status: "done",
+      recording: {
+        url: expect.stringMatching(/^https:\/\/companion\.test\/api\/assets\/.+\.avi$/u),
+        expiresAt: expect.any(Number),
+      },
+    });
+    expect(result.content.map(({ type }) => type)).toEqual(["text"]);
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("queues the explicit Notepad text only for its paired device", () =>
+  Effect.gen(function* () {
+    const { call, store, deviceId, token, settings } = yield* setup();
+    yield* settings.updateSettings({ windowsCompanionEnabled: true });
+    const input = { deviceId, action: "write-notepad", clientRequestId: "fill-notepad" };
+    expect((yield* call("t3_companion_enqueue", input)).isError).toBe(true);
+    const queued = yield* call("t3_companion_enqueue", { ...input, text: "可见的测试文字" });
+    expect(queued.isError).not.toBe(true);
+    const { job } = store.poll(token, deviceName, info);
+    expect(job).toMatchObject({
+      action: "write-notepad",
+      threadId: owner,
+      params: { text: "可见的测试文字" },
+    });
+    const id = job!.id;
+    store.complete(token, { id, status: "done", message: "可见的测试文字" });
+    const result = yield* call("t3_companion_result", { id });
+    expect(result.structuredContent).toMatchObject({ status: "done", message: "可见的测试文字" });
   }).pipe(Effect.provide(testLayer)),
 );

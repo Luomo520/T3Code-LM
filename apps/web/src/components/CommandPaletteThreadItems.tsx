@@ -66,11 +66,15 @@ function useProviderEntryByEnvironmentAndInstanceId() {
   );
 }
 
-function useConnectedThreadSearch(query: string) {
+function useConnectedThreadSearch(query: string, searchEnvironmentId: EnvironmentId | null) {
   const { environments } = useEnvironments();
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const environmentIds: ReadonlyArray<EnvironmentId> = environments
-    .filter((environment) => environment.connection.phase === "connected")
+    .filter(
+      (environment) =>
+        environment.connection.phase === "connected" &&
+        (searchEnvironmentId === null || environment.environmentId === searchEnvironmentId),
+    )
     .map((environment) => environment.environmentId);
   // The palette matches environment names when there are several; older rows must match the same.
   const environmentLabels =
@@ -96,14 +100,15 @@ function useConnectedThreadSearch(query: string) {
 export function useCommandPaletteThreadItems(input: {
   readonly activeThread: { readonly environmentId: EnvironmentId; readonly id: ThreadId } | null;
   readonly threadSearchQuery: string;
+  readonly searchEnvironmentId: EnvironmentId | null;
   readonly rememberResults: (itemValue: string) => () => void;
 }) {
-  const { activeThread, threadSearchQuery, rememberResults } = input;
+  const { activeThread, threadSearchQuery, searchEnvironmentId, rememberResults } = input;
   const navigate = useNavigate();
   const threads = useVisibleThreadShells();
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
-  const messageSearch = useConnectedThreadSearch(threadSearchQuery);
+  const messageSearch = useConnectedThreadSearch(threadSearchQuery, searchEnvironmentId);
   const { projectByKey } = useProjectLookups();
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
@@ -111,7 +116,10 @@ export function useCommandPaletteThreadItems(input: {
 
   const { environments } = useEnvironments();
   const threadItems = buildThreadActionItems({
-    threads,
+    threads:
+      threadSearchQuery && searchEnvironmentId !== null
+        ? threads.filter((thread) => thread.environmentId === searchEnvironmentId)
+        : threads,
     ...(environments.length > 1
       ? {
           environmentLabelOf: (thread: (typeof threads)[number]) =>

@@ -13,6 +13,8 @@ import {
   FORK_RELEASE_PLATFORMS_FILE,
   isForkReleaseTag,
   isForkBuildVersion,
+  matchesForkReleaseChannel,
+  type ForkUpdateChannel,
   type ForkReleaseAsset,
 } from "@t3tools/shared/cliRelease";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -33,7 +35,11 @@ const decodeIndex = Schema.decodeUnknownEffect(
   Schema.Array(
     Schema.Struct({
       tag_name: Schema.String,
-      assets: Schema.optionalKey(Schema.Array(Schema.Struct({ name: Schema.String }))),
+      assets: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({ name: Schema.String, state: Schema.optionalKey(Schema.String) }),
+        ),
+      ),
       draft: Schema.optionalKey(Schema.Boolean),
       prerelease: Schema.optionalKey(Schema.Boolean),
     }),
@@ -77,7 +83,12 @@ export const findServerRelease = (
     }
     return yield* decodeJson(new TextDecoder().decode(bytes)).pipe(Effect.mapError(unavailable));
   });
-  const lookupTag = Effect.fn("ForkRelease.lookupTag")(function* (tag: string, grouped: boolean) {
+  const lookupTag = Effect.fn("ForkRelease.lookupTag")(function* (
+    tag: string,
+    grouped: boolean,
+    channel: ForkUpdateChannel | undefined,
+    names?: ReadonlySet<string>,
+  ) {
     const json = yield* read(grouped ? forkReleasePlatformsUrl(tag) : forkReleaseManifestUrl(tag));
     if (json === undefined) return null;
     const manifest = grouped
@@ -85,9 +96,11 @@ export const findServerRelease = (
       : decodeForkReleaseManifest(json, tag);
     if (manifest === undefined)
       return yield* new ServerNpmReleaseError({ reason: "GitHub 发布清单无效，未发起更新。" });
-    // A Windows-only release must not make an unchanged Linux server appear updatable.
+    if (channel === "stable" && manifest.channel === "beta") return null;
+    // 仅提供 GitHub 发布页已上传且匹配当前环境的安装包。
     const target = manifest.assets.find(
       (asset) =>
+        (names === undefined || names.has(asset.fileName)) &&
         asset.platform === (platform === "win32" ? "windows" : platform) &&
         asset.arch === arch &&
         asset.kind === (platform === "win32" ? "installer" : "server"),
@@ -96,43 +109,57 @@ export const findServerRelease = (
   });
   return Effect.fn("ForkRelease.lookup")(
     function* (spec: string, groupsOnly = false) {
-      if (spec !== "latest") {
+      const channel = spec === "beta" ? "beta" : spec === "latest" ? "stable" : undefined;
+      if (channel === undefined) {
         if (!isForkBuildVersion(spec)) return null;
         if (!groupsOnly) {
-          const direct = yield* lookupTag(`v${spec}`, false);
+          const direct = yield* lookupTag(`v${spec}`, false, undefined);
           if (direct !== null) return direct;
         }
       }
-      const tags = new Map<string, boolean>();
+      const tags = new Map<string, { grouped: boolean; names?: ReadonlySet<string> }>();
       const product = spec.split("-")[0];
       for (let page = 1; page <= 5; page += 1) {
         const json = yield* read(cliReleaseIndexPageUrl(page));
         if (json === undefined) break;
         const releases = yield* decodeIndex(json).pipe(Effect.mapError(unavailable));
         for (const release of releases) {
-          if (release.draft || release.prerelease || !isForkReleaseTag(release.tag_name)) continue;
-          const grouped =
-            release.assets?.some((asset) => asset.name === FORK_RELEASE_PLATFORMS_FILE) === true;
+          if (
+            release.draft ||
+            !isForkReleaseTag(release.tag_name) ||
+            (channel !== undefined && !matchesForkReleaseChannel(release, channel))
+          ) {
+            continue;
+          }
+          const names =
+            release.assets &&
+            new Set(
+              release.assets.flatMap(({ name, state }) =>
+                state === undefined || state === "uploaded" ? [name] : [],
+              ),
+            );
+          const grouped = names?.has(FORK_RELEASE_PLATFORMS_FILE) === true;
           if (
             !grouped &&
-            (groupsOnly || spec !== "latest" || !isForkBuildVersion(release.tag_name.slice(1)))
+            (groupsOnly || channel === undefined || !isForkBuildVersion(release.tag_name.slice(1)))
           )
             continue;
-          if (spec !== "latest" && release.tag_name.slice(1).split("-")[0] !== product) continue;
-          tags.set(release.tag_name, grouped);
+          if (channel === undefined && release.tag_name.slice(1).split("-")[0] !== product)
+            continue;
+          tags.set(release.tag_name, names === undefined ? { grouped } : { grouped, names });
         }
         if (releases.length < 100) break;
       }
       const ordered = [...tags].sort(([a], [b]) => compareSemverVersions(b.slice(1), a.slice(1)));
       let best: ForkReleaseAsset | null = null;
-      for (const [tag, grouped] of ordered) {
+      for (const [tag, { grouped, names }] of ordered) {
         const nextProduct = tag.slice(1).split("-")[0]!;
         if (best !== null && best.productVersion !== nextProduct) break;
         // 在历史构建页与合并页共存时，以安装包构建号确定推荐版本。
         if (!grouped && best !== null && Number(tag.split("-")[1]) <= best.build) continue;
-        const found = yield* lookupTag(tag, grouped);
+        const found = yield* lookupTag(tag, grouped, channel, names);
         if (found === null) continue;
-        if (spec !== "latest") {
+        if (channel === undefined) {
           if (`${found.productVersion}-${found.build}` === spec) return found;
           continue;
         }

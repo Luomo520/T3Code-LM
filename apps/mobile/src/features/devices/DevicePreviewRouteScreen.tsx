@@ -7,9 +7,9 @@ import {
   deviceToolUpdatePolicy,
 } from "@t3tools/client-runtime/state/device";
 import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
 import * as Haptics from "expo-haptics";
 import { Accelerometer } from "expo-sensors";
 import { Pressable, StatusBar, View } from "react-native";
@@ -34,6 +34,8 @@ import { deriveBottomControlInsets } from "../../lib/reserved-regions";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { uuidv4 } from "../../lib/uuid";
 import { deviceEnvironment, useDeviceHubAccess } from "../../state/device";
+import { useEnvironmentScope } from "../../state/session";
+import { useDeviceInputQueue } from "./useDeviceInputQueue";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -406,26 +408,82 @@ function OpenDevicePreview({
   const { session } = preview;
   const { themeVariables } = useAppearancePreferences();
   const [viewer] = useState(uuidv4);
+  const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const queue = useDeviceInputQueue({
+    environmentId,
+    threadId: session.threadId,
+    device: { hostId: session.hostId, id: session.deviceId },
+    enabled: canOperate && preview.physicalAndroid,
+  });
+  const [streamInput, setStreamInput] = useState(false);
+  const inputLease = queue.view.state === "active" ? (queue.view.lease ?? null) : null;
+  const setStreamConnection = async (connected: boolean) => {
+    setStreamInput(connected);
+    if (!connected && preview.physicalAndroid && queue.view.state !== "idle") queue.release();
+    if (!preview.physicalAndroid) await onInputConnected(connected);
+  };
+  const reportInput = useEffectEvent((allowed: boolean) => void onInputConnected(allowed));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 原生预览栏按实时租约状态启用硬件键。
+  useEffect(() => {
+    if (preview.physicalAndroid) reportInput(streamInput && inputLease !== null);
+  }, [preview.physicalAndroid, streamInput, inputLease]);
   const { access, error, refresh } = useDeviceHubAccess(environmentId, session.hostId, viewer);
   const onUnauthorized = async () => refresh();
   return access ? (
-    <DeviceStreamWebView
-      ref={streamRef}
-      access={access}
-      platform={session.platform}
-      deviceId={session.deviceId}
-      serveSimOnly={preview.serveSimOnly}
-      colors={{
-        background: themeVariables["--color-sheet-solid"],
-        foreground: themeVariables["--color-foreground"],
-        muted: themeVariables["--color-foreground-muted"],
-        buttonBackground: themeVariables["--color-secondary"],
-        buttonForeground: themeVariables["--color-secondary-foreground"],
-        buttonBorder: themeVariables["--color-secondary-border"],
-      }}
-      onUnauthorized={onUnauthorized}
-      onInputConnected={onInputConnected}
-    />
+    <View className="flex-1">
+      <DeviceStreamWebView
+        ref={streamRef}
+        access={access}
+        platform={session.platform}
+        deviceId={session.deviceId}
+        serveSimOnly={preview.serveSimOnly}
+        colors={{
+          background: themeVariables["--color-sheet-solid"],
+          foreground: themeVariables["--color-foreground"],
+          muted: themeVariables["--color-foreground-muted"],
+          buttonBackground: themeVariables["--color-secondary"],
+          buttonForeground: themeVariables["--color-secondary-foreground"],
+          buttonBorder: themeVariables["--color-secondary-border"],
+        }}
+        onUnauthorized={onUnauthorized}
+        onInputConnected={setStreamConnection}
+        {...(preview.physicalAndroid ? { inputLease } : {})}
+      />
+      {preview.physicalAndroid ? (
+        <View className="flex-row flex-wrap items-center justify-center gap-2 px-3 py-2">
+          <AppText accessibilityLiveRegion="polite" className="text-sm">
+            {queue.error ??
+              (queue.view.state === "waiting"
+                ? `前方 ${queue.view.ahead} 个会话，正在排队`
+                : queue.view.state === "ready"
+                  ? "已轮到本会话，可接手操作"
+                  : queue.view.state === "active"
+                    ? "正在手动操作"
+                    : streamInput
+                      ? "正在看屏"
+                      : "设备输入连接中断")}
+            {queue.view.ownerThreadId && queue.view.ownerThreadId !== session.threadId
+              ? ` · 占用会话 ${queue.view.ownerThreadId}`
+              : ""}
+          </AppText>
+          {queue.view.state !== "idle" ? (
+            <Button
+              size="compact"
+              label={inputLease ? "暂停并释放输入" : "取消排队"}
+              onPress={queue.release}
+            />
+          ) : null}
+          {canOperate && (queue.view.state === "idle" || queue.view.state === "ready") ? (
+            <Button
+              size="compact"
+              disabled={queue.pending || !streamInput}
+              label={queue.view.state === "ready" ? "接手操作" : "申请输入"}
+              onPress={queue.view.state === "ready" ? queue.activate : queue.join}
+            />
+          ) : null}
+        </View>
+      ) : null}
+    </View>
   ) : (
     <View className="flex-1 items-center justify-center gap-4 px-6">
       {error ? (

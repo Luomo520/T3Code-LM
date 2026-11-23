@@ -3,6 +3,7 @@ import { formatProviderMaintenanceMessage } from "@t3tools/client-runtime/provid
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { serverUpdateDownloadPercent } from "@t3tools/client-runtime/state/server";
 import { useRef, useState } from "react";
+import type { ForkUpdateChannel } from "@t3tools/shared/forkRelease";
 import { Linking, Pressable, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
@@ -36,8 +37,10 @@ import {
 import { SettingsSection } from "./SettingsSection";
 
 export function AndroidUpdateCenter() {
-  const devices = useAtomValue(remoteUpdateDevicesAtom);
-  const app = useAndroidAppUpdate(true);
+  const [channel, setChannel] = useState<ForkUpdateChannel>("stable");
+  const devicesAtom = remoteUpdateDevicesAtom(channel);
+  const devices = useAtomValue(devicesAtom);
+  const app = useAndroidAppUpdate(true, channel);
   const updateServer = useAtomCommand(serverEnvironment.updateServer, { reportFailure: false });
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider, { reportFailure: false });
   const [picked, setPicked] = useState<ReadonlyMap<string, string>>(new Map());
@@ -98,7 +101,7 @@ export function AndroidUpdateCenter() {
   function freshChoice(item: UpdateChoice) {
     if (item.kind === "app") return appChoice;
     const device = appAtomRegistry
-      .get(remoteUpdateDevicesAtom)
+      .get(devicesAtom)
       .find(({ environmentId }) => environmentId === item.environmentId);
     return device ? remoteUpdateChoices(device).find(({ key }) => key === item.key) : undefined;
   }
@@ -155,7 +158,7 @@ export function AndroidUpdateCenter() {
                 .slice(index + 1)
                 .some((next) => next.kind !== "app" && next.environmentId === item.environmentId)
             ) {
-              await waitForProviderStatus(item.environmentId);
+              await waitForProviderStatus(devicesAtom, item.environmentId);
             }
           }
         } catch (error) {
@@ -224,6 +227,33 @@ export function AndroidUpdateCenter() {
           {choices.length ? `${choices.length} 项可更新 · ${deviceCount} 台设备` : "暂无可选更新"}
         </Text>
       </View>
+      <SettingsSection title="更新通道">
+        {(["stable", "beta"] as const).map((value) => {
+          const selected = value === channel;
+          return (
+            <Pressable
+              key={value}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected, disabled: working || app.checking }}
+              disabled={working || app.checking}
+              onPress={() => {
+                setChannel(value);
+                setPicked(new Map());
+                setNotice(null);
+              }}
+            >
+              <ListRowLayout
+                label={value === "stable" ? "正式版" : "测试版（Beta）"}
+                leading={
+                  <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                    <SymbolView name={selected ? "checkmark.circle" : "circle"} size={22} />
+                  </View>
+                }
+              />
+            </Pressable>
+          );
+        })}
+      </SettingsSection>
       <AndroidAppUpdateDevice
         update={app}
         inUpdateCenter
@@ -280,10 +310,13 @@ export function AndroidUpdateCenter() {
   );
 }
 
-async function waitForProviderStatus(environmentId: RemoteUpdateDevice["environmentId"]) {
+async function waitForProviderStatus(
+  devicesAtom: ReturnType<typeof remoteUpdateDevicesAtom>,
+  environmentId: RemoteUpdateDevice["environmentId"],
+) {
   const pending = (devices: readonly RemoteUpdateDevice[]) =>
     devices.some((device) => device.environmentId === environmentId && device.providerBusy);
-  if (!pending(appAtomRegistry.get(remoteUpdateDevicesAtom))) return;
+  if (!pending(appAtomRegistry.get(devicesAtom))) return;
   // CLI RPC 已完成，订阅中的设备状态可能晚一步到达。等待短时间再复核下一项。
   await new Promise<void>((resolve) => {
     const finish = () => {
@@ -292,7 +325,7 @@ async function waitForProviderStatus(environmentId: RemoteUpdateDevice["environm
       resolve();
     };
     const timeout = setTimeout(finish, 3000);
-    const unsubscribe = appAtomRegistry.subscribe(remoteUpdateDevicesAtom, (devices) => {
+    const unsubscribe = appAtomRegistry.subscribe(devicesAtom, (devices) => {
       if (!pending(devices)) finish();
     });
   });

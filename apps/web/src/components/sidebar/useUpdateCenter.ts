@@ -11,7 +11,9 @@ import {
 } from "@t3tools/contracts";
 import { formatProviderMaintenanceMessage } from "@t3tools/client-runtime/providerUpdates";
 import { crossesReleaseTrack } from "@t3tools/shared/cliRelease";
-import { resolveForkUpdateTarget } from "@t3tools/shared/forkRelease";
+import { resolveForkUpdateTarget, type ForkUpdateChannel } from "@t3tools/shared/forkRelease";
+import * as Schema from "effect/Schema";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 
 import { APP_VERSION, DESKTOP_APP_VERSION, DESKTOP_DEVICE_NAME } from "~/branding";
 import { isElectron } from "~/env";
@@ -38,9 +40,16 @@ import {
 } from "./useUpdateEverything";
 import { downloadLocalUpdate, installLocalUpdate } from "./desktopUpdateActions";
 
-const releaseAtom = (environmentId: EnvironmentId) =>
-  serverEnvironment.npmRelease({ environmentId, input: { spec: "latest" } });
-const releasesAtom = environmentAtomList("update-center-releases", releaseAtom);
+const updateChannelSchema = Schema.Literals(["stable", "beta"]);
+const releaseAtom = (environmentId: EnvironmentId, channel: ForkUpdateChannel) =>
+  serverEnvironment.npmRelease({
+    environmentId,
+    input: { spec: channel === "beta" ? "beta" : "latest" },
+  });
+const releaseAtoms = {
+  stable: environmentAtomList("update-center-releases:stable", (id) => releaseAtom(id, "stable")),
+  beta: environmentAtomList("update-center-releases:beta", (id) => releaseAtom(id, "beta")),
+};
 const liveConfigsAtom = environmentAtomList(
   "update-center-versions",
   environmentSession.initialConfigValueAtom,
@@ -95,13 +104,28 @@ function desktopStatus(state: DesktopUpdateState | null): string {
 }
 
 export function useUpdateCenter() {
+  const [storedChannel, storeChannel] = useLocalStorage(
+    "t3code:fork-update-channel",
+    "stable",
+    updateChannelSchema,
+  );
   const isHostedByThisApp = useIsHostedByThisApp();
   const desktopState = useDesktopUpdateState();
   const desktopDenial = managedUpdatesDenial(usePrimaryManagedPolicy());
   const managedDesktop = isElectron && typeof window !== "undefined" && window.desktopBridge;
+  const channel =
+    managedDesktop && desktopState
+      ? desktopState.channel === "beta"
+        ? "beta"
+        : "stable"
+      : storedChannel;
   const desktopAction = desktopState ? resolveDesktopUpdateButtonAction(desktopState) : "none";
   const desktopTarget =
-    managedDesktop && desktopState && !desktopDenial && desktopAction !== "none"
+    managedDesktop &&
+    desktopState &&
+    desktopState.channel === (channel === "stable" ? "latest" : "beta") &&
+    !desktopDenial &&
+    desktopAction !== "none"
       ? getDesktopUpdateDownloadedVersion(desktopState)
       : null;
 
@@ -120,7 +144,7 @@ export function useUpdateCenter() {
         environment.serverConfig?.environment.capabilities.npmReleaseLookup === true,
     )
     .map(({ environmentId }) => environmentId);
-  const releases = useAtomValue(releasesAtom(environmentIdsKey(lookupIds)));
+  const releases = useAtomValue(releaseAtoms[channel](environmentIdsKey(lookupIds)));
   const connectedKey = environmentIdsKey(connected.map(({ environmentId }) => environmentId));
   const updateStates = useAtomValue(environmentUpdateStatesAtom(connectedKey));
   const liveConfigs = useAtomValue(liveConfigsAtom(connectedKey));
@@ -333,7 +357,7 @@ export function useUpdateCenter() {
   ];
   const checkProviders = useCheckProviderUpdates();
   const check = async () => {
-    for (const id of lookupIds) appAtomRegistry.refresh(releaseAtom(id));
+    for (const id of lookupIds) appAtomRegistry.refresh(releaseAtom(id, channel));
     const bridge = window.desktopBridge;
     const promises = await Promise.allSettled([
       checkProviders({ quiet: true }).then((failures) => {
@@ -351,7 +375,19 @@ export function useUpdateCenter() {
     if (failure) throw failure.reason;
   };
 
+  const setChannel = async (next: ForkUpdateChannel) => {
+    const bridge = window.desktopBridge;
+    if (managedDesktop && bridge && !desktopDenial) {
+      const requested = next === "beta" ? "beta" : "latest";
+      const state = await bridge.setUpdateChannel(requested);
+      if (state.channel !== requested) throw new Error("此桌面版本无法切换更新通道。");
+    }
+    storeChannel(next);
+  };
+
   return {
+    channel,
+    setChannel,
     desktopState: managedDesktop ? desktopState : null,
     groups,
     check,

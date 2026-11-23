@@ -4,6 +4,7 @@ import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as AssetSigner from "../assets/AssetSigner.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -94,6 +95,8 @@ import {
 } from "./toolkits/companion/tools.ts";
 import { FileExchangeToolkit } from "./toolkits/fileExchange/tools.ts";
 import * as FileExchangeHandlers from "./toolkits/fileExchange/handlers.ts";
+import { ThreadFileSaveToolkit } from "./toolkits/threadFileSave/tools.ts";
+import * as ThreadFileSaveHandlers from "./toolkits/threadFileSave/handlers.ts";
 import * as LinuxDeviceStatusHandlers from "./toolkits/linuxDeviceStatus/handlers.ts";
 import { LinuxDeviceStatusToolkit } from "./toolkits/linuxDeviceStatus/tools.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
@@ -909,6 +912,8 @@ const registerCompanionResult = Effect.fn("McpHttpServer.registerCompanionResult
     | ServerSettings.ServerSettingsService
     | ThreadManagementService.ThreadManagementService
     | FileSystem.FileSystem
+    | AssetSigner.AssetSigner
+    | Path.Path
   >();
   const built = yield* decodeAsAdvertised(CompanionResultToolkit);
   yield* registerImageTool(
@@ -1387,6 +1392,7 @@ export const layerTools = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerCompanionToolkit,
+  toolkitRegistration(ThreadFileSaveToolkit, ThreadFileSaveHandlers.layer),
   layerLinuxDeviceTools,
   layerHtmlToolkit,
   layerMessageToolkit,

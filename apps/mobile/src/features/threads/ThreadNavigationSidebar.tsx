@@ -44,6 +44,9 @@ import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { requestThreadMessageJump } from "./threadMessageJump";
 import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
 import { useHomeListOptions } from "../home/home-list-options";
+import { ActiveProjectFilter } from "../home/ThreadListFilters";
+import { deriveHomeListStatus } from "../home/home-empty-state";
+import { useEnvironmentShellReadiness } from "../../state/shell";
 import { buildHomeListFilterMenuItems } from "../home/home-list-filter-menu";
 import {
   buildHomeProjectScopes,
@@ -159,8 +162,24 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const availableEnvironmentIds = new Set(
     environments.map((environment) => environment.environmentId),
   );
-  const { options, setSelectedEnvironmentId, setSelectedProjectKey } =
-    useHomeListOptions(availableEnvironmentIds);
+  const activeThread = threads.find(
+    (thread) => scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey,
+  );
+  const { options, environmentCustomized, setSelectedEnvironmentId, setSelectedProjectKey } =
+    useHomeListOptions(
+      availableEnvironmentIds,
+      activeThread?.environmentId ??
+        workspaceEnvironments.find((environment) => environment.isEnabled)?.environmentId ??
+        null,
+    );
+  const { status: shellStatus } = useEnvironmentShellReadiness(options.selectedEnvironmentId);
+  const listStatus = deriveHomeListStatus(
+    catalogState,
+    workspaceEnvironments.find(
+      (environment) => environment.environmentId === options.selectedEnvironmentId,
+    ),
+    shellStatus,
+  );
   const searchEnvironmentIds =
     options.selectedEnvironmentId === null
       ? workspaceEnvironments
@@ -543,7 +562,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         accessibilityLabel: "搜索任务",
       }}
       filter={{
-        customized: options.selectedEnvironmentId !== null || selectedProjectKey !== null,
+        customized: environmentCustomized || selectedProjectKey !== null,
         items: buildHomeListFilterMenuItems({
           environments,
           projects: projectFilterOptions,
@@ -560,10 +579,28 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
-  const showAddEnvironment =
-    !catalogState.isLoadingConnections &&
-    !catalogState.hasReadyEnvironment &&
-    !catalogState.hasConnectingEnvironment;
+  const showAddEnvironment = listStatus === null && !catalogState.hasConnections;
+  const listStatusLabel = listStatus === "loading" ? "正在载入会话…" : "环境连接已中断";
+  const projectFilter =
+    selectedProjectScope === null ? null : (
+      <ActiveProjectFilter
+        title={selectedProjectScope.title}
+        onClear={() => setSelectedProjectKey(null)}
+      />
+    );
+  const listHeader = (
+    <>
+      {projectFilter}
+      {listStatus !== null && listItems.length > 0 ? (
+        <Text
+          accessibilityLiveRegion="polite"
+          className="mx-4 my-1 text-sm text-drawer-foreground-muted"
+        >
+          {listStatusLabel}
+        </Text>
+      ) : null}
+    </>
+  );
   const listEmpty = (
     <View>
       <Text
@@ -573,8 +610,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             : "px-2 py-4 text-sm text-drawer-foreground-muted"
         }
       >
-        {catalogState.isLoadingConnections
-          ? "Loading threads…"
+        {listStatus !== null
+          ? listStatusLabel
           : showAddEnvironment
             ? "No environments connected"
             : props.searchQuery.trim().length > 0
@@ -585,6 +622,11 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 ? `No threads in ${selectedProjectScope.title}`
                 : "No threads yet"}
       </Text>
+      {listStatus === null && selectedProjectScope !== null && !threadSearch.isPending ? (
+        <View className={Platform.OS === "android" ? "self-center" : "px-2"}>
+          <Button label="查看全部项目" onPress={() => setSelectedProjectKey(null)} />
+        </View>
+      ) : null}
       {showAddEnvironment ? (
         <View className={Platform.OS === "android" ? "self-center" : "px-2"}>
           <Button
@@ -634,6 +676,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={listHeader}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>
@@ -659,7 +702,10 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         }}
       >
         {listItems.length === 0 ? (
-          <View className="flex-1 items-center justify-center">{listEmpty}</View>
+          <>
+            {projectFilter}
+            <View className="flex-1 items-center justify-center">{listEmpty}</View>
+          </>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
@@ -687,6 +733,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={listHeader}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>

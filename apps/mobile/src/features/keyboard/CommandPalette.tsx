@@ -9,7 +9,11 @@ import {
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
-import { isListedThreadLineage, THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
+import {
+  AuthFilesystemReadScope,
+  isListedThreadLineage,
+  THREAD_JUMP_KEYBINDING_COMMANDS,
+} from "@t3tools/contracts";
 import {
   foldSearchQuery,
   PALETTE_MESSAGE_LIMIT,
@@ -48,7 +52,11 @@ import {
   useThreadShell,
   useVisibleThreadShells,
 } from "../../state/entities";
-import { useThreadSearch } from "../../state/queries";
+import { useDebouncedValue, useThreadSearch } from "../../state/queries";
+import { projectEnvironment } from "../../state/projects";
+import { useEnvironmentQuery } from "../../state/query";
+import { useEnvironmentScope } from "../../state/session";
+import { deliveryFileRoute } from "../projects/ProjectDeliveries";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -103,6 +111,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
 
 function itemIcon(item: CommandPaletteItem): AppSymbolName {
   if (item.kind === "thread") return "text.bubble";
+  if (item.kind === "delivery") return "doc.text";
   return ACTION_ICONS[item.key] ?? "ellipsis";
 }
 
@@ -274,16 +283,39 @@ export function CommandPalette(props: {
           }),
         )
       : undefined;
-  const search = useThreadSearch(
-    searchEnvironmentIds,
-    query.startsWith(">") ? "" : query,
-    environmentLabels === undefined ? {} : { environmentLabels },
-  );
   const serverConfigs = useServerConfigs();
-  const startTriage = useStartTriage();
   const newTaskFlow = useNewTaskFlow();
   const draftEnvironmentId =
     useActiveNewTask() === null ? null : (newTaskFlow.selectedProject?.environmentId ?? null);
+  const currentEnvironmentId =
+    activeThreadRef?.environmentId ?? draftEnvironmentId ?? searchEnvironmentIds[0] ?? null;
+  const currentSearchEnvironmentIds =
+    currentEnvironmentId === null
+      ? []
+      : searchEnvironmentIds.filter((id) => id === currentEnvironmentId);
+  const canReadDeliveries = useEnvironmentScope(currentEnvironmentId, AuthFilesystemReadScope);
+  const deliveryQuery = query.startsWith(">") ? "" : query.trim().slice(0, 256).trim();
+  const debouncedDeliveryQuery = useDebouncedValue(deliveryQuery, 200);
+  const deliverySearch = useEnvironmentQuery(
+    currentEnvironmentId !== null &&
+      currentSearchEnvironmentIds.length > 0 &&
+      serverConfigs.get(currentEnvironmentId)?.environment.capabilities.projectDeliveries ===
+        true &&
+      canReadDeliveries &&
+      deliveryQuery &&
+      deliveryQuery === debouncedDeliveryQuery
+      ? projectEnvironment.listDeliveries({
+          environmentId: currentEnvironmentId,
+          input: { query: debouncedDeliveryQuery },
+        })
+      : null,
+  );
+  const search = useThreadSearch(
+    currentSearchEnvironmentIds,
+    query.startsWith(">") ? "" : query,
+    environmentLabels === undefined ? {} : { environmentLabels },
+  );
+  const startTriage = useStartTriage();
   const triageEnvironmentId = pickTriageEnvironment({
     // The route names the machine even before the thread shell loads.
     onScreen: activeThreadRef?.environmentId ?? draftEnvironmentId,
@@ -419,6 +451,7 @@ export function CommandPalette(props: {
       ...openProjects.filter((project) => project.pinnedAt == null),
     ].map((project) => ({
       key: `project:${scopedProjectKey(project.environmentId, project.id)}`,
+      environmentId: project.environmentId,
       kind: "project",
       project,
       title: project.title,
@@ -445,6 +478,7 @@ export function CommandPalette(props: {
           savedConnectionsById[thread.environmentId]?.environmentLabel ?? thread.environmentId;
         return {
           key: scopedThreadKey(thread.environmentId, thread.id),
+          environmentId: thread.environmentId,
           kind: "thread",
           title: thread.title || "未命名任务",
           detail: [project?.title, environment].filter(Boolean).join(" · "),
@@ -515,13 +549,44 @@ export function CommandPalette(props: {
     [messageOrder.keys, messageOrder.shown],
   );
   const results = useMemo(() => {
-    const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);
+    const scopedItems =
+      query.trim() && currentEnvironmentId !== null
+        ? items.filter(
+            (item) => item.kind === "action" || item.environmentId === currentEnvironmentId,
+          )
+        : items;
+    const ranked = filterCommandPaletteItems(scopedItems, query, messageMatchKeys, now);
+    if (currentEnvironmentId !== null && deliverySearch.data) {
+      for (const file of deliverySearch.data.files) {
+        ranked.push({
+          key: `delivery:${file.projectId}:${file.relativePath}`,
+          kind: "delivery",
+          title: file.name,
+          detail: `交付文件 · ${file.projectTitle}`,
+          searchTerms: [],
+          run: () =>
+            navigation.navigate(
+              "ProjectDeliveryFile",
+              deliveryFileRoute(currentEnvironmentId, file),
+            ),
+        });
+      }
+    }
     // Recent threads leave out the open one, which would always lead them.
     const activeKey = activeThread
       ? scopedThreadKey(activeThread.environmentId, activeThread.id)
       : null;
     return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
-  }, [activeThread, items, messageMatchKeys, now, query]);
+  }, [
+    activeThread,
+    currentEnvironmentId,
+    deliverySearch.data,
+    items,
+    messageMatchKeys,
+    navigation,
+    now,
+    query,
+  ]);
   const runResult = (
     item: CommandPaletteResult,
     returnSearch: CommandPaletteSearchPosition | null,
@@ -675,8 +740,8 @@ export function CommandPalette(props: {
                   />
                   <TextInput
                     ref={inputRef}
-                    accessibilityLabel="搜索命令、项目和任务"
-                    placeholder="搜索命令、项目和任务…"
+                    accessibilityLabel="搜索项目、会话消息和交付文件"
+                    placeholder="搜索项目、消息和交付文件…"
                     placeholderTextColorClassName="accent-placeholder"
                     autoCorrect={false}
                     autoCapitalize="none"
@@ -720,15 +785,19 @@ export function CommandPalette(props: {
                 contentContainerStyle={{ paddingBottom: 8 }}
                 ListEmptyComponent={
                   <Text className="p-5 text-center text-foreground-muted">
-                    {search.isPending ? "Searching…" : "No results"}
+                    {search.isPending || deliverySearch.isPending
+                      ? "正在搜索…"
+                      : deliverySearch.error
+                        ? "无法搜索交付文件，请检查连接。"
+                        : "没有匹配结果"}
                   </Text>
                 }
                 // Message results from slower environments may still arrive below.
                 ListFooterComponent={
-                  results.length > 0 && search.isPending && !query.startsWith(">") ? (
-                    <Text className="px-5 pt-2 text-xs text-foreground-muted">
-                      Searching messages…
-                    </Text>
+                  results.length > 0 &&
+                  (search.isPending || deliverySearch.isPending) &&
+                  !query.startsWith(">") ? (
+                    <Text className="px-5 pt-2 text-xs text-foreground-muted">正在搜索…</Text>
                   ) : undefined
                 }
                 renderItem={({ item, index }) => (

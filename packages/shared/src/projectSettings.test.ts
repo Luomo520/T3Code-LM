@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -13,6 +14,7 @@ import {
   resolveProjectSettings,
   resolveSendEnvMode,
   resolveWorktreeCleanup,
+  selectPreferredProjectBackend,
 } from "./projectSettings.ts";
 import { applyServerSettingsPatch } from "./serverSettings.ts";
 
@@ -455,4 +457,48 @@ it("keeps project speech vocabulary on its originating project and clears it to 
     projectSettingsOverrides: { [projectId]: cleared },
   });
   expect(resolveProjectSettings(restored, projectId).settings.speechProjectCustomWords).toEqual([]);
+});
+
+it("stores subagent model and effort per project with an explicit automatic override", () => {
+  const provider = ProviderInstanceId.make("codex");
+  const environmentDefault = createModelSelection(provider, "env-model");
+  const projectDefault = createModelSelection(provider, "project-model", [
+    { id: "reasoningEffort", value: "high" },
+  ]);
+  const settings = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+    defaultSubagentModelSelection: environmentDefault,
+    projectSettingsOverrides: {
+      [projectId]: { defaultSubagentModelSelection: projectDefault },
+      [otherProjectId]: { defaultSubagentModelSelection: null },
+    },
+  });
+  expect(
+    resolveProjectSettings(settings, projectId).settings.defaultSubagentModelSelection,
+  ).toEqual(projectDefault);
+  expect(
+    resolveProjectSettings(settings, otherProjectId).settings.defaultSubagentModelSelection,
+  ).toBeNull();
+  expect(resolveProjectSettings(settings, null).settings.defaultSubagentModelSelection).toEqual(
+    environmentDefault,
+  );
+});
+
+it("uses the most recently preferred connected backend for a project's checkouts", () => {
+  const local = { environmentId: EnvironmentId.make("local"), id: projectId };
+  const remote = { environmentId: EnvironmentId.make("remote"), id: otherProjectId };
+  const config = (id: ProjectId, preferredProjectBackendAt: string) => ({
+    settings: applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      projectSettingsOverrides: { [id]: { preferredProjectBackendAt } },
+    }),
+  });
+  const configs = new Map([
+    [local.environmentId, config(local.id, "2026-11-22T10:13:00.000Z")],
+    [remote.environmentId, config(remote.id, "2026-11-22T10:15:00.000Z")],
+  ]);
+  const checkouts = [local, remote];
+  expect(selectPreferredProjectBackend(checkouts, configs, new Set(configs.keys()))).toBe(remote);
+  expect(selectPreferredProjectBackend(checkouts, configs, new Set([local.environmentId]))).toBe(
+    local,
+  );
+  expect(selectPreferredProjectBackend(checkouts, configs, new Set())).toBeUndefined();
 });

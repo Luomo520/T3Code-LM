@@ -252,6 +252,7 @@ export function DevicePanel(props: {
               key={`${environmentId}\u0000${deviceKey(activeDevice)}`}
               environmentId={environmentId}
               device={activeDevice}
+              threadId={threadId}
               hostLabel={activeHost?.label ?? "Device host"}
               hostKind={activeHost?.kind}
               hostDiagnostics={

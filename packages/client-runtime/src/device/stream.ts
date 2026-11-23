@@ -308,6 +308,7 @@ export class AvccDemuxer {
 }
 
 export interface DeviceStreamClient {
+  readonly setInputLease: (lease: string | null) => void;
   readonly start: () => void;
   readonly stop: () => void;
   /**
@@ -423,6 +424,7 @@ export function createDeviceStreamClient(
   const useWebCodecs =
     isWebCodecsSupported() && !(platform === "ios" && target.preferMjpeg && !serveSimOnly);
 
+  let inputLease: string | null = null;
   let stopped = true;
   let socket: WebSocket | null = null;
   let controller: AbortController | null = null;
@@ -1337,8 +1339,11 @@ export function createDeviceStreamClient(
       !stopped &&
       (!avcc || (iosInputAdmitted && !iosInputUnavailable)) &&
       socket?.readyState === WebSocket.OPEN
-    )
-      socket.send(payload);
+    ) {
+      if (inputLease !== null && !avcc && typeof payload === "string") {
+        socket.send(JSON.stringify({ ...JSON.parse(payload), t3InputLease: inputLease }));
+      } else socket.send(payload);
+    }
   };
 
   const rawPoint = (x: number, y: number) => {
@@ -1358,6 +1363,9 @@ export function createDeviceStreamClient(
   };
 
   return {
+    setInputLease: (lease) => {
+      inputLease = lease;
+    },
     start,
     stop,
     setMjpegImage,

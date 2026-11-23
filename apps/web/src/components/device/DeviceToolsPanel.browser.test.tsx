@@ -23,6 +23,7 @@ it("keeps a typed URL until opening it succeeds", async () => {
     .mockResolvedValueOnce(true);
   const controls: DeviceControls = {
     detail: null,
+    readNow: () => Promise.resolve(null),
     pending: false,
     error: null,
     act: run,

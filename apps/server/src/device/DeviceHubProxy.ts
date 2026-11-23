@@ -100,6 +100,7 @@ const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
   upstreamUrl: string,
   protocols: ReadonlyArray<string> = [],
   headers: Readonly<Record<string, string>> = {},
+  authorizeFrame?: (frame: Uint8Array | string) => Effect.Effect<Uint8Array | string | null>,
 ) {
   const client = yield* request.upgrade;
   const upstream = yield* Socket.makeWebSocket(upstreamUrl, {
@@ -113,7 +114,7 @@ const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
       const writeToUpstream = yield* upstream.writer;
       return yield* Effect.raceFirst(
         pumpFrames(upstream, writeToClient),
-        pumpFrames(client, writeToUpstream),
+        pumpFrames(client, writeToUpstream, authorizeFrame),
       );
     }),
   ).pipe(Effect.ignoreCause);
@@ -122,10 +123,22 @@ const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
 
 const pumpFrames =
   /* Frame pumping runs continuously; a span per frame stream adds no diagnostic value. */
-  Effect.fnUntraced(function* (source: Socket.Socket, sink: Socket.Writer) {
+  Effect.fnUntraced(function* (
+    source: Socket.Socket,
+    sink: Socket.Writer,
+    authorizeFrame?: (frame: Uint8Array | string) => Effect.Effect<Uint8Array | string | null>,
+  ) {
     const { pull } = yield* source.reader;
     while (true) {
-      yield* sink.writeAll(yield* pull);
+      const frames = yield* pull;
+      if (!authorizeFrame) {
+        yield* sink.writeAll(frames);
+        continue;
+      }
+      for (const frame of frames) {
+        const authorized = yield* authorizeFrame(frame);
+        if (authorized !== null) yield* sink.writeAll([authorized]);
+      }
     }
   });
 
@@ -178,6 +191,38 @@ const proxyHttp = Effect.fn("DeviceHubProxy.proxyHttp")(function* (
   });
 });
 
+const physicalAndroidInputKinds = new Set([
+  "touch",
+  "key",
+  "text",
+  "home",
+  "back",
+  "recents",
+  "power",
+]);
+
+function decodePhysicalAndroidFrame(frame: Uint8Array | string) {
+  if (typeof frame !== "string" || frame.length > 4096) return null;
+  try {
+    const parsed: unknown = JSON.parse(frame);
+    if (typeof parsed !== "object" || parsed === null || !("type" in parsed)) return null;
+    if (parsed.type === "reset-video") {
+      return { frame: '{"type":"reset-video","ack":false}', lease: null };
+    }
+    if (
+      typeof parsed.type !== "string" ||
+      !physicalAndroidInputKinds.has(parsed.type) ||
+      !("t3InputLease" in parsed) ||
+      typeof parsed.t3InputLease !== "string"
+    )
+      return null;
+    const { t3InputLease, ...payload } = parsed;
+    return { frame: JSON.stringify(payload), lease: t3InputLease };
+  } catch {
+    return null;
+  }
+}
+
 const handler = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const url = requestUrl(request);
@@ -200,10 +245,26 @@ const handler = Effect.gen(function* () {
   const controlsDevice =
     (upgrade && hubPath !== "/api/devices/ws") ||
     (!readOnly && /\/api\/(stream-(mode|settings)|fold)$/.test(hubPath));
-  yield* authenticateMediaRequest(
-    controlsDevice ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope,
-  );
   const devices = yield* DeviceService.DeviceService;
+  const hostId = url.value.searchParams.get("hostId") ?? "local";
+  const deviceIds = url.value.searchParams.getAll("device");
+  const targetDevice = deviceIds[0];
+  const inputMode =
+    controlsDevice && targetDevice !== undefined
+      ? yield* devices.physicalInputMode(hostId, targetDevice)
+      : "other";
+  const protectedStream = controlsDevice && inputMode !== "other";
+  const session = yield* authenticateMediaRequest(
+    controlsDevice && !protectedStream ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope,
+  );
+  if (controlsDevice && deviceIds.length !== 1) {
+    return HttpServerResponse.text("Select one device", { status: 400 });
+  }
+  if (protectedStream && (!upgrade || hubPath !== "/vendor/serve-emu/ws")) {
+    return HttpServerResponse.text("This control is unavailable for the selected device", {
+      status: 403,
+    });
+  }
   const ready = yield* devices.currentReadiness(url.value.searchParams.get("hostId") ?? undefined);
   if (!ready) {
     return HttpServerResponse.text("Device hub is not running", { status: 503 });
@@ -236,6 +297,22 @@ const handler = Effect.gen(function* () {
       upstreamUrl.replace(/^http/, "ws"),
       routed?.protocols,
       routed?.headers,
+      protectedStream && targetDevice !== undefined
+        ? (frame) =>
+            Effect.gen(function* () {
+              const parsed = decodePhysicalAndroidFrame(frame);
+              if (parsed === null) return null;
+              if (parsed.lease === null) return parsed.frame;
+              if (!session.scopes.includes(AuthOrchestrationOperateScope)) return null;
+              const allowed = yield* devices.allowsPhysicalInput(
+                ready.hostId,
+                targetDevice,
+                session.sessionId,
+                parsed.lease,
+              );
+              return allowed ? parsed.frame : null;
+            })
+        : undefined,
     );
   }
   return yield* proxyHttp(request, upstreamUrl, routed?.headers);

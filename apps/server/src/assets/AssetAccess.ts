@@ -137,6 +137,7 @@ const AssetClaimsSchema = Schema.Union([
     kind: Schema.Literal("media-file-exact"),
     filePath: Schema.String,
     download: Schema.optionalKey(Schema.Boolean),
+    fileName: Schema.optionalKey(Schema.String),
     device: Schema.String,
     inode: Schema.String,
     expiresAt: Schema.Number,
@@ -584,6 +585,55 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
       fileName: path.basename(resolved.relativePath),
       imageDimensions,
       fileRevision: undefined,
+    };
+  },
+);
+
+export const issueCompanionFileDownload = Effect.fn("AssetAccess.issueCompanionFileDownload")(
+  function* (threadId: ThreadId, source: string, downloadName?: string) {
+    const config = yield* ServerConfig.ServerConfig;
+    const path = yield* Path.Path;
+    const fileName = path.basename(source);
+    const folder = path.join(config.stateDir, "windows-companion", "screenshots");
+    const resource = {
+      _tag: "media-file",
+      threadId,
+      path: source,
+      disposition: "attachment",
+    } as const;
+    if (
+      path.resolve(source) !== path.resolve(folder, fileName) ||
+      !/^[0-9a-f-]{36}\.(avi|bin)$/u.test(fileName)
+    ) {
+      return yield* new AssetWorkspaceAssetNotFoundError({ resource, checkedPath: source });
+    }
+    const fileSystem = yield* FileSystem.FileSystem;
+    const canonicalFolder = yield* fileSystem
+      .realPath(folder)
+      .pipe(
+        Effect.mapError((cause) => new AssetWorkspaceAssetInspectionError({ resource, cause })),
+      );
+    const expiresAt = (yield* Clock.currentTimeMillis) + ASSET_TOKEN_TTL_MS;
+    const { claims } = yield* finalizeAbsoluteMediaFileAsset({
+      requestedPath: source,
+      expectedCanonicalPath: path.join(canonicalFolder, fileName),
+      workspaceRoot: undefined,
+      resource,
+      expiresAt,
+    });
+    const signer = yield* AssetSigner.AssetSigner;
+    const payload = base64UrlEncode(
+      encodeAssetClaims({
+        ...claims,
+        ...(downloadName ? { fileName: downloadName } : {}),
+      }),
+    );
+    const signature = yield* signer
+      .sign(payload)
+      .pipe(Effect.mapError((cause) => new AssetSigningKeyLoadError({ resource, cause })));
+    return {
+      relativeUrl: `${ASSET_ROUTE_PREFIX}/${payload}.${signature}/${encodeURIComponent(downloadName || fileName)}`,
+      expiresAt,
     };
   },
 );
@@ -1085,7 +1135,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     } satisfies ResolvedAsset;
   }
   if (claims.kind === "media-file-exact") {
-    if (decodedPath !== path.basename(claims.filePath)) return null;
+    if (decodedPath !== (claims.fileName ?? path.basename(claims.filePath))) return null;
     const canonicalFile = yield* resolveCanonicalFile(claims.filePath).pipe(
       Effect.tapError((cause) =>
         Effect.logError("Failed to resolve canonical media path.", {
@@ -1112,7 +1162,9 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
           path: canonicalFile,
           mimeType,
           file,
-          ...(claims.download ? { download: true, fileName: path.basename(canonicalFile) } : {}),
+          ...(claims.download
+            ? { download: true, fileName: claims.fileName ?? path.basename(canonicalFile) }
+            : {}),
         } satisfies ResolvedAsset)
       : null;
   }

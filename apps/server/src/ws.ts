@@ -13,6 +13,7 @@ import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
 import { FileHandoffError } from "@t3tools/contracts";
 import { readFileHandoff, startFileHandoff } from "./fileExchange/FileHandoff.ts";
+import { registerDirectHandoffClient } from "./fileExchange/FileHandoffDirect.ts";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -172,6 +173,7 @@ import {
 } from "./orchestration-v2/WireProjection.ts";
 import { dedupeSnapshotBodies } from "@t3tools/shared/orchestrationV2DedupedBodies";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import { makeProjectDeliveryListing } from "./project/ProjectDeliveries.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
@@ -1448,6 +1450,10 @@ export const layerWsRpc = (
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const { surface, clientOs, clientDeviceType } = clientAnalyticsProps;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => registerDirectHandoffClient(currentSessionId, surface, clientOs)),
+        (unregister) => Effect.sync(() => unregister?.()),
+      );
       const clientOrigin = {
         // DPoP 设备重连后保留别名。旧凭据只能标识会话，使用独立摘要避免发送认证标识。
         clientAlias: NodeCrypto.createHash("sha256")
@@ -1580,6 +1586,7 @@ export const layerWsRpc = (
       const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+      const listProjectDeliveries = yield* makeProjectDeliveryListing;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
@@ -2022,7 +2029,8 @@ export const layerWsRpc = (
                     Effect.provide(intakeContext),
                     Effect.provideService(
                       MessageClientOrigin,
-                      command.type === "message.dispatch" || command.type === "runtime-request.respond"
+                      command.type === "message.dispatch" ||
+                        command.type === "runtime-request.respond"
                         ? clientOrigin
                         : undefined,
                     ),
@@ -2991,6 +2999,28 @@ export const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.projectsListDeliveries]: (input) =>
+          projectStore
+            .listShells(input.projectId ? { projectIds: [input.projectId] } : undefined)
+            .pipe(
+              Effect.flatMap((projects) =>
+                listProjectDeliveries({
+                  ...input,
+                  projects: input.projectId
+                    ? projects
+                    : projects.filter((project) => project.archivedAt === null),
+                }),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new ProjectListEntriesError({
+                    cwd: ".",
+                    failure: "directory_list_failed",
+                    detail: "Failed to list project deliveries.",
+                    cause,
+                  }),
+              ),
+            ),
         [WS_METHODS.projectsListEntries]: (input) =>
           workspaceEntries.list(input).pipe(
             Effect.mapError(
@@ -3335,7 +3365,9 @@ export const layerWsRpc = (
         [WS_METHODS.deviceClose]: (input) => deviceService.close(input),
         [WS_METHODS.deviceShutdown]: (input) => deviceService.shutdown(input),
         [WS_METHODS.deviceDetail]: (input) => deviceService.detail(input),
-        [WS_METHODS.deviceAction]: (input) => deviceService.action(input),
+        [WS_METHODS.deviceAction]: (input) => deviceService.action(input, currentSessionId),
+        [WS_METHODS.deviceInputQueue]: (input) =>
+          deviceService.physicalInputQueue(input, currentSessionId),
         [WS_METHODS.subscribeDeviceState]: (_input) => DeviceService.stateStream(deviceService),
         [WS_METHODS.previewStopLocalServer]: (input) => portDiscovery.stopServer(input),
         [WS_METHODS.subscribeDiscoveredLocalServers]: (input) =>

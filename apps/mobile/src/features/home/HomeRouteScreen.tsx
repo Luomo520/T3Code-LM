@@ -138,9 +138,13 @@ export function HomeRouteScreen() {
   );
   const {
     options: listOptions,
+    environmentCustomized,
     setSelectedEnvironmentId,
     setSelectedProjectKey,
-  } = useHomeListOptions(availableEnvironmentIds);
+  } = useHomeListOptions(
+    availableEnvironmentIds,
+    workspaceEnvironments.find((environment) => environment.isEnabled)?.environmentId ?? null,
+  );
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
   const projectScopes = useMemo(
     () =>
@@ -210,7 +214,7 @@ export function HomeRouteScreen() {
             accessibilityLabel: "Search threads",
           }}
           filter={{
-            customized: selectedEnvironmentId !== null || selectedProjectKey !== null,
+            customized: environmentCustomized || selectedProjectKey !== null,
             items: buildHomeListFilterMenuItems({
               environments,
               projects: projectFilterOptions,

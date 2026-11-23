@@ -18,13 +18,24 @@ export function stop() {
   activeClient = null;
 }
 
+let canSendInput = true;
+let resetPointer: (() => void) | undefined;
+
+export function setInputLease(lease?: string | null) {
+  if (lease === null) resetPointer?.();
+  canSendInput = lease !== null;
+  activeClient?.setInputLease(lease ?? null);
+}
+
 export function command(button: "home" | "back" | "appSwitcher" | "rotate") {
+  if (!canSendInput) return;
   if (button === "rotate") activeClient?.rotate();
   else activeClient?.pressButton(button);
 }
 
 export function start(configuration: DeviceStreamConfiguration) {
   stop();
+  canSendInput = configuration.inputRequiresLease !== true;
   // oxlint-disable-next-line unicorn/require-post-message-target-origin -- The native WebView bridge takes one string.
   const post = (message: object) => window.ReactNativeWebView.postMessage(JSON.stringify(message));
   const { colors, platform } = configuration;
@@ -159,7 +170,7 @@ export function start(configuration: DeviceStreamConfiguration) {
     );
   };
   frame.addEventListener("pointerdown", (event) => {
-    if (!inputConnected || pointerId !== null) return;
+    if (!canSendInput || !inputConnected || pointerId !== null) return;
     event.preventDefault();
     pointerId = event.pointerId;
     frame.setPointerCapture(event.pointerId);
@@ -169,6 +180,9 @@ export function start(configuration: DeviceStreamConfiguration) {
   frame.addEventListener("pointermove", (event) => {
     if (pointerId === event.pointerId) touch(event, "move");
   });
+  resetPointer = () => {
+    pointerId = null;
+  };
   const endTouch = (event: PointerEvent) => {
     if (pointerId !== event.pointerId) return;
     pointerId = null;
@@ -178,10 +192,13 @@ export function start(configuration: DeviceStreamConfiguration) {
   frame.addEventListener("pointercancel", endTouch);
   frame.addEventListener("lostpointercapture", endTouch);
   frame.addEventListener("keydown", (event) => {
+    if (!canSendInput) return;
     event.preventDefault();
     client.sendKey(event, "down");
   });
-  frame.addEventListener("keyup", (event) => client.sendKey(event, "up"));
+  frame.addEventListener("keyup", (event) => {
+    if (canSendInput) client.sendKey(event, "up");
+  });
   window.addEventListener("pagehide", stop, { once: true });
   post({ type: "input", connected: false });
   client.start();

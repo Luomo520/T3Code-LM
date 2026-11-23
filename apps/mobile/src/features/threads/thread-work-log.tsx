@@ -74,13 +74,17 @@ import {
   workEntryRowLabel,
 } from "../../lib/threadActivity";
 import {
+  companionRecordingOutput,
   companionScreenshotOutput,
   isJsonToolText,
   toolCallLines,
+  threadFileSaveOutput,
   turnItemOutputImages,
   turnItemOutputText,
 } from "@t3tools/client-runtime/work-log/item-detail";
+import { FileHandoffPanel } from "../files/FileHandoffPanel";
 import { ScreenshotSaveButton } from "./ScreenshotSaveButton";
+import { CompanionRecordingPlayer } from "./CompanionRecordingPlayer";
 import { useTurnItemDetail } from "../../state/queries";
 import {
   resolveThreadWorkGroupInitialScroll,
@@ -998,9 +1002,11 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
       : null;
   const outputImages = expanded && fetchedItem ? turnItemOutputImages(fetchedItem) : [];
   const screenshot = expanded && fetchedItem ? companionScreenshotOutput(fetchedItem) : null;
+  const fileSave = expanded ? threadFileSaveOutput(shownItem) : null;
+  const recording = expanded ? companionRecordingOutput(shownItem) : null;
   const viewedImagePath = workEntryViewedImagePath(row.workEntry);
   const fetchedOutput =
-    !expanded || streamsOutput
+    !expanded || streamsOutput || fileSave || recording
       ? null
       : shownItem.type === "file_search" || shownItem.type === "web_search"
         ? turnItemOutputText(shownItem)
@@ -1166,6 +1172,8 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         fullDetail ||
         call ||
         fetchedOutput ||
+        fileSave ||
+        recording ||
         viewedImagePath ||
         outputImages.length > 0 ||
         row.workEntry.questionAnswer) ? (
@@ -1179,6 +1187,26 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
             <QuestionAnswerHistory
               environmentId={props.environmentId}
               answer={row.workEntry.questionAnswer}
+            />
+          ) : null}
+          {fileSave ? (
+            <View className="gap-1.5 pb-1.5">
+              <Text selectable className="text-sm text-foreground">
+                {fileSave.text}
+              </Text>
+              {fileSave.status === "awaiting_save" && (
+                <FileHandoffPanel
+                  environmentId={props.environmentId}
+                  threadId={shownItem.threadId}
+                />
+              )}
+            </View>
+          ) : null}
+          {recording ? (
+            <CompanionRecordingPlayer
+              key={recording.url}
+              environmentId={props.environmentId}
+              recording={recording}
             />
           ) : null}
           {viewedImagePath ? (

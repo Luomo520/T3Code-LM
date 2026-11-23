@@ -34,6 +34,19 @@ export interface ForkReleaseAsset {
   readonly androidVersionCode?: number;
   readonly sourceCommit?: string;
 }
+export type ForkUpdateChannel = "stable" | "beta";
+
+export function matchesForkReleaseChannel(
+  release: { readonly prerelease?: boolean | undefined; readonly draft?: boolean | undefined },
+  channel: ForkUpdateChannel,
+): boolean {
+  return release.draft !== true && (release.prerelease === true) === (channel === "beta");
+}
+
+export function forkReleaseDownloadUrl(tag: string): string {
+  return `https://github.com/${FORK_RELEASE_REPOSITORY}/releases/download/${encodeURIComponent(tag)}`;
+}
+
 export const FORK_RELEASE_PLATFORMS_FILE = "T3Code-LM-platforms.json";
 
 export function isForkReleaseTag(tag: string): boolean {
@@ -45,12 +58,14 @@ export const forkReleasePlatformsUrl = (tag: string) =>
 
 export interface ForkReleasePlatforms {
   readonly tag: string;
+  readonly channel: "release" | "beta";
   readonly productVersion: string;
   readonly assets: readonly (ForkReleaseAsset & { readonly sourceCommit: string })[];
 }
 
 export interface ForkReleaseManifest {
   readonly tag: string;
+  readonly channel: "release" | "beta";
   readonly assets: readonly ForkReleaseAsset[];
   readonly sourceCommit: string;
 }
@@ -67,7 +82,7 @@ export function decodeForkReleaseManifest(
     !record(value) ||
     value.schemaVersion !== 1 ||
     value.product !== "T3Code-LM" ||
-    value.channel !== "release" ||
+    (value.channel !== "release" && value.channel !== "beta") ||
     value.repository !== FORK_RELEASE_REPOSITORY ||
     value.tag !== tag ||
     !Array.isArray(value.assets) ||
@@ -77,7 +92,7 @@ export function decodeForkReleaseManifest(
   )
     return;
   const assets = decodeAssets(value.assets, tag);
-  if (assets) return { tag, sourceCommit: value.sourceCommit, assets };
+  if (assets) return { tag, channel: value.channel, sourceCommit: value.sourceCommit, assets };
 }
 
 export function decodeForkReleasePlatforms(
@@ -89,7 +104,7 @@ export function decodeForkReleasePlatforms(
     !isForkReleaseTag(tag) ||
     value.schemaVersion !== 2 ||
     value.product !== "T3Code-LM" ||
-    value.channel !== "release" ||
+    (value.channel !== "release" && value.channel !== "beta") ||
     value.repository !== FORK_RELEASE_REPOSITORY ||
     value.tag !== tag ||
     typeof value.productVersion !== "string" ||
@@ -99,7 +114,7 @@ export function decodeForkReleasePlatforms(
   )
     return;
   const assets = decodeAssets(value.assets, tag, value.productVersion);
-  if (assets) return { tag, productVersion: value.productVersion, assets };
+  if (assets) return { tag, channel: value.channel, productVersion: value.productVersion, assets };
 }
 
 function decodeAssets(rows: unknown[], tag: string): ForkReleaseAsset[] | undefined;

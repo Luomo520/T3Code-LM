@@ -75,6 +75,7 @@ describe("Windows companion store", () => {
           name: "PC",
           info: { os: "Windows" },
           lastSeen: new Date(clock()).toISOString(),
+          detailsUpdatedAt: new Date(clock()).toISOString(),
           online: true,
           recentTasks: [],
         },
@@ -101,6 +102,171 @@ describe("Windows companion store", () => {
     } finally {
       reopened.close();
     }
+  });
+
+  it("refreshes an offline device's details and syncs its own name without claiming queued work", () => {
+    const { clock, store, enroll, advance } = setup();
+    const device = enroll("PC");
+    const other = enroll("Other PC");
+    const lastSeen = new Date(clock()).toISOString();
+    const job = store.enqueue("thread", device.deviceId, "open-notepad", "work");
+    advance(16_000);
+    store.rename(device.deviceId, "管理员名称");
+    const info = { gpu: "Test Graphics", memory: "32 GiB", network1: "LAN · IP 192.0.2.1" };
+    const detailsUpdatedAt = new Date(clock()).toISOString();
+    expect(store.checkDevice(device.token, info)).toEqual({ name: "管理员名称", detailsUpdatedAt });
+    expect(store.checkDevice(device.token, info, "本机名称")).toEqual({
+      name: "本机名称",
+      detailsUpdatedAt,
+    });
+    expect(store.list().find((entry) => entry.deviceId === device.deviceId)).toMatchObject({
+      name: "本机名称",
+      info,
+      lastSeen,
+      detailsUpdatedAt,
+      online: false,
+    });
+    expect(store.authorize(other.token).name).toBe("Other PC");
+    expect(store.result("thread", job.id)).toMatchObject({ status: "queued" });
+    expect(store.poll(device.token, "旧名称", info)).toMatchObject({
+      name: "本机名称",
+      job: { id: job.id },
+    });
+    store.revoke(device.deviceId);
+    expect(() => store.checkDevice(device.token, info)).toThrow(
+      expect.objectContaining({ status: 401 }),
+    );
+  });
+
+  it("binds Windows file transfers to the claimed job, SHA-256 and original thread", () => {
+    const { store, enroll } = setup();
+    const device = enroll("PC");
+    const other = enroll("Other PC");
+    const data = Buffer.from("hello").toString("base64");
+    const sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    const outbound = store.enqueue("thread", device.deviceId, "receive-file", "outbound", {
+      attachmentId: "selected-thread-file",
+      fileName: "hello.txt",
+      sha256,
+    });
+    expect(() => store.receiveTransfer(device.token, outbound.id)).toThrow(
+      expect.objectContaining({ status: 404 }),
+    );
+    expect(store.poll(device.token, "PC", {}).job).toMatchObject({ id: outbound.id });
+    expect(() => store.receiveTransfer(other.token, outbound.id)).toThrow(
+      expect.objectContaining({ status: 404 }),
+    );
+    expect(store.receiveTransfer(device.token, outbound.id)).toMatchObject({ sha256 });
+    const savedFile = { path: "C:/Downloads/hello.txt", sha256 };
+    expect(() =>
+      store.complete(device.token, {
+        id: outbound.id,
+        status: "done",
+        message: "saved",
+        savedFile: { ...savedFile, sha256: "wrong" },
+      }),
+    ).toThrow(expect.objectContaining({ status: 400 }));
+    store.complete(device.token, { id: outbound.id, status: "done", message: "saved", savedFile });
+    expect(store.result("thread", outbound.id)).toMatchObject({ status: "done", savedFile });
+
+    const inbound = store.enqueue("thread", device.deviceId, "send-file", "inbound");
+    expect(store.poll(device.token, "PC", {}).job).toMatchObject({ id: inbound.id });
+    const file = { name: "hello.txt", data, sha256 };
+    expect(() =>
+      store.complete(device.token, {
+        id: inbound.id,
+        status: "done",
+        message: "received",
+        file: { ...file, data: "d3Jvbmc=" },
+      }),
+    ).toThrow(expect.objectContaining({ status: 422 }));
+    const complete = { id: inbound.id, status: "done", message: "received", file } as const;
+    store.complete(device.token, complete);
+    store.complete(device.token, complete);
+    expect(() => store.result("other-thread", inbound.id)).toThrow(
+      expect.objectContaining({ status: 404 }),
+    );
+    const received = store.result("thread", inbound.id);
+    expect(received.transferredFile).toMatchObject({ name: "hello.txt", sha256 });
+    expect(NodeFS.readFileSync(received.transferredFile!.path, "utf-8")).toBe("hello");
+  });
+
+  it("stops only the calling thread's running recording and preserves the result", () => {
+    const { enroll, store } = setup();
+    const device = enroll("PC");
+    const other = enroll("Other");
+    const task = store.enqueue("owner", device.deviceId, "record-screen", "capture");
+    const pending = store.enqueue("other", device.deviceId, "receive-file", "next");
+    expect(store.poll(device.token, "PC", { recordingStop: "true" }).job?.id).toBe(task.id);
+    expect(() => store.cancel("other", task.id)).toThrow(expect.objectContaining({ status: 404 }));
+    expect(store.poll(device.token, "PC", {}, task.id)).toMatchObject({
+      job: null,
+      stopRequested: false,
+    });
+    const stopping = store.cancel("owner", task.id);
+    expect(stopping).toMatchObject({ status: "running", stopRequested: true });
+    expect(store.cancel("owner", task.id)).toEqual(stopping);
+    expect(store.poll(other.token, "Other", {}, task.id)).toMatchObject({
+      job: null,
+      stopRequested: false,
+    });
+    expect(store.poll(device.token, "PC", {}, task.id)).toMatchObject({
+      job: null,
+      stopRequested: true,
+    });
+
+    const recording = Buffer.alloc(224);
+    recording.write("RIFF");
+    recording.writeUInt32LE(recording.length - 8, 4);
+    recording.write("AVI LIST", 8);
+    recording.write("hdrl", 16);
+    store.complete(device.token, {
+      id: task.id,
+      status: "done",
+      message: "Saved on stop.",
+      recordingBase64: recording.toString("base64"),
+    });
+    expect(store.cancel("owner", task.id)).toEqual(store.result("owner", task.id));
+    expect(store.result("owner", task.id)).toMatchObject({
+      status: "done",
+      recordingPath: expect.any(String),
+    });
+    expect(store.poll(device.token, "PC", {}, task.id)).toMatchObject({
+      job: null,
+      stopRequested: false,
+    });
+    expect(store.result("other", pending.id).status).toBe("queued");
+    expect(store.poll(device.token, "PC", { recordingStop: "true" }).job?.id).toBe(pending.id);
+    expect(() => store.cancel("other", pending.id)).toThrow(
+      expect.objectContaining({ status: 409 }),
+    );
+  });
+
+  it("keeps old Windows companions compatible with claimed recordings", () => {
+    const { store, enroll } = setup();
+    const device = enroll("Legacy PC");
+    const task = store.enqueue("thread", device.deviceId, "record-screen", "legacy-capture");
+    expect(store.poll(device.token, "Legacy PC", {}).job?.id).toBe(task.id);
+    expect(() => store.cancel("thread", task.id)).toThrow(
+      expect.objectContaining({
+        status: 409,
+        message: expect.stringContaining("Stop it on Windows"),
+      }),
+    );
+    expect(store.result("thread", task.id)).toMatchObject({ status: "running" });
+  });
+
+  it("expires queued screenshots before they can run on a late reconnect", () => {
+    const { store, enroll, advance } = setup();
+    const device = enroll("PC");
+    const shot = store.enqueue("thread", device.deviceId, "screenshot", "shot");
+    const normal = store.enqueue("thread", device.deviceId, "open-notepad", "notepad");
+    advance(30_000);
+
+    expect(store.poll(device.token, "PC", {}).job).toMatchObject({ id: normal.id });
+    expect(store.result("thread", shot.id)).toMatchObject({ status: "failed" });
+    const retried = store.enqueue("thread", device.deviceId, "screenshot", "shot");
+    expect(retried).toMatchObject({ id: shot.id, status: "failed" });
   });
 
   it("claims each device queue in FIFO order without accepting another thread or device", () => {

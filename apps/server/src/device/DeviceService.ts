@@ -1,5 +1,8 @@
 import {
+  type AuthSessionId,
   type DeviceActionInput,
+  type DeviceInputQueueInput,
+  type DeviceInputQueueReply,
   DeviceActionUnavailableError,
   type DeviceCloseInput,
   type DeviceConfigureInput,
@@ -55,6 +58,7 @@ import {
   agentDeviceSession,
   writeAgentDeviceConfig,
 } from "./AgentDeviceTarget.ts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
@@ -73,6 +77,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import { isLocalSshDeviceHost, remoteSshDeviceHosts } from "./localSshDeviceHost.ts";
 
 import { readDeviceDetail, runDeviceAction } from "./DeviceActions.ts";
+import { deviceInputKey, makeDeviceInputQueue } from "./DeviceInputQueue.ts";
+import { readAndroidPhysicalDeviceStatus } from "./AndroidPhysicalDevice.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
@@ -218,7 +224,24 @@ export class DeviceService extends Context.Service<
     ) => Effect.Effect<void, DeviceError>;
     readonly shutdown: (input: DeviceShutdownInput) => Effect.Effect<void, DeviceError>;
     readonly detail: (input: DeviceDetailInput) => Effect.Effect<DeviceDetail, DeviceError>;
-    readonly action: (input: DeviceActionInput) => Effect.Effect<DeviceDetail, DeviceError>;
+    readonly action: (
+      input: DeviceActionInput,
+      sessionId?: AuthSessionId,
+    ) => Effect.Effect<DeviceDetail, DeviceError>;
+    readonly physicalInputQueue: (
+      input: DeviceInputQueueInput,
+      sessionId: AuthSessionId,
+    ) => Effect.Effect<DeviceInputQueueReply, DeviceError>;
+    readonly physicalInputMode: (
+      hostId: string,
+      deviceId: string,
+    ) => Effect.Effect<"physical" | "other" | "unknown">;
+    readonly allowsPhysicalInput: (
+      hostId: string,
+      deviceId: string,
+      sessionId: AuthSessionId,
+      lease: string,
+    ) => Effect.Effect<boolean>;
     readonly screenshot: (input: {
       readonly hostId?: DeviceHostId | undefined;
       readonly deviceId: DeviceId;
@@ -299,6 +322,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const settings = yield* ServerSettings.ServerSettingsService;
   const digest = yield* Digest.Digest;
   const lifecycleLock = yield* Semaphore.make(1);
+  const deviceInputQueue = makeDeviceInputQueue();
   const readDeviceSettings = settings.getSettings.pipe(
     Effect.map((value) => ({
       enabled: value.enableDeviceSupport,
@@ -1003,6 +1027,12 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
           ...current,
           sessions: current.sessions.filter((session) => !ending.includes(session)),
         }));
+        for (const session of ending) {
+          deviceInputQueue.closeThread(
+            deviceInputKey(session.hostId, session.deviceId),
+            session.threadId,
+          );
+        }
         return closing;
       }),
     );
@@ -1080,20 +1110,94 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const detail: DeviceService["Service"]["detail"] = Effect.fn("DeviceService.detail")(
     function* (input) {
       const { ready, device } = yield* resolveDevice(input.hostId, input.deviceId);
-      const read = yield* readDeviceDetail(ready, device.platform, device.id);
+      const [read, androidPhysical] = yield* Effect.all(
+        [
+          readDeviceDetail(ready, device.platform, device.id),
+          device.platform === "android" && device.physical
+            ? readAndroidPhysicalDeviceStatus(ready.run, device.id)
+            : Effect.undefined,
+        ],
+        { concurrency: 2 },
+      );
       return {
         hostId: ready.hostId,
         deviceId: device.id,
         settings: read.settings,
+        ...(androidPhysical ? { androidPhysical } : {}),
         foregroundApp: read.foregroundApp,
         readAt: DateTime.formatIso(yield* DateTime.now),
       };
     },
   );
 
+  const physicalInputMode: DeviceService["Service"]["physicalInputMode"] = (hostId, deviceId) =>
+    SynchronizedRef.get(stateRef).pipe(
+      Effect.map(({ state }) => {
+        const device = findDevice(state, hostId, deviceId);
+        if (!device) return "unknown";
+        return device.platform === "android" && device.physical ? "physical" : "other";
+      }),
+    );
+  const unavailableInput = () =>
+    new DeviceActionUnavailableError({
+      operation: "取得手动输入",
+      platform: "android",
+      reason: "unsupported",
+    });
+  const allowsPhysicalInput: DeviceService["Service"]["allowsPhysicalInput"] = Effect.fnUntraced(
+    function* (hostId, deviceId, sessionId, lease) {
+      if ((yield* physicalInputMode(hostId, deviceId)) !== "physical") return false;
+      const now = yield* Clock.currentTimeMillis;
+      return deviceInputQueue.allows(deviceInputKey(hostId, deviceId), sessionId, lease, now);
+    },
+  );
+  const physicalInputQueue: DeviceService["Service"]["physicalInputQueue"] = Effect.fn(
+    "DeviceService.physicalInputQueue",
+  )(function* (input, sessionId) {
+    const { state } = yield* SynchronizedRef.get(stateRef);
+    const device = findDevice(state, input.hostId, input.deviceId);
+    if (
+      !device?.physical ||
+      device.platform !== "android" ||
+      !state.sessions.some(
+        (session) =>
+          session.hostId === input.hostId &&
+          session.deviceId === input.deviceId &&
+          session.threadId === input.threadId,
+      )
+    )
+      return yield* unavailableInput();
+
+    if (input.action === "activate") {
+      const ready = yield* currentReadiness(input.hostId);
+      if (!ready) return yield* unavailableInput();
+      const status = yield* readAndroidPhysicalDeviceStatus(ready.run, input.deviceId);
+      if (status.connection !== "connected" || status.screen !== "unlocked") {
+        return yield* new DeviceHostUnavailableError({
+          hostId: input.hostId,
+          reason: "无法确认设备处于连接且解锁状态，请在手机上检查后重试。",
+        });
+      }
+    }
+    return deviceInputQueue.update(
+      deviceInputKey(input.hostId, input.deviceId),
+      sessionId,
+      input,
+      yield* Clock.currentTimeMillis,
+    );
+  });
+
   const action: DeviceService["Service"]["action"] = Effect.fn("DeviceService.action")(
-    function* (input) {
+    function* (input, sessionId) {
       const { ready, device } = yield* resolveDevice(input.hostId, input.deviceId);
+      if (
+        device.physical &&
+        device.platform === "android" &&
+        (sessionId === undefined ||
+          !input.inputLease ||
+          !(yield* allowsPhysicalInput(ready.hostId, device.id, sessionId, input.inputLease)))
+      )
+        return yield* unavailableInput();
       yield* runDeviceAction(ready, device.platform, input, device.physical);
       return yield* detail({ hostId: ready.hostId, deviceId: device.id });
     },
@@ -1297,6 +1401,9 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       shutdown,
       detail,
       action,
+      physicalInputQueue,
+      physicalInputMode,
+      allowsPhysicalInput,
       screenshot,
       locateDevice,
       locateSession,

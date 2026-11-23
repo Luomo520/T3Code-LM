@@ -279,6 +279,24 @@ it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
   },
 );
 
+it("keeps the completion quiet when its thread is visible, even if replayed later", async () => {
+  await using app = setup();
+  focused = true;
+  state.mode = "notifications-and-sound";
+  state.inApp = true;
+  app.openThread("one", "thread");
+  app.start();
+  const completed = shell({
+    latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:00:01.000Z" },
+  });
+
+  state.shells.set("one", completed);
+  focused = false;
+  state.shells.set("one", completed);
+  expect(TestNotification.sent).toEqual([]);
+  expect(state.sound).not.toHaveBeenCalled();
+});
+
 it("presents an automatically dismissed PC completion with a link to its thread", async () => {
   await using app = setup();
   using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");

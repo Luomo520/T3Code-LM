@@ -267,6 +267,92 @@ export function companionScreenshotOutput(item: OrchestrationV2TurnItem) {
   return { summary, fileName: `截图-${suffix}.png` };
 }
 
+export function companionRecordingOutput(item: OrchestrationV2TurnItem) {
+  if (
+    item.type !== "dynamic_tool" ||
+    resolveT3McpToolId(item.toolName) !== "t3_companion_result" ||
+    item.outputOmitted === true
+  ) {
+    return null;
+  }
+
+  const output = item.output;
+  const text = dynamicToolOutputText(item);
+  const result =
+    isRecord(output) && isRecord(output.structuredContent)
+      ? output.structuredContent
+      : text
+        ? parseJson(text)
+        : null;
+  if (!isRecord(result) || result.action !== "record-screen" || result.status !== "done") {
+    return null;
+  }
+  const recording = result.recording;
+  return {
+    url: isRecord(recording) && typeof recording.url === "string" ? recording.url : null,
+    expiresAt:
+      isRecord(recording) &&
+      typeof recording.expiresAt === "number" &&
+      Number.isSafeInteger(recording.expiresAt) &&
+      recording.expiresAt > 0
+        ? recording.expiresAt
+        : null,
+  };
+}
+
+export function threadFileSaveOutput(item: OrchestrationV2TurnItem) {
+  if (item.type !== "dynamic_tool" || item.outputOmitted === true) return null;
+  const tool = resolveT3McpToolId(item.toolName);
+  if (tool !== "t3_thread_file_save" && tool !== "t3_thread_file_save_status") return null;
+  const text = dynamicToolOutputText(item);
+  const result = text ? parseJson(text) : null;
+  if (
+    !isRecord(result) ||
+    typeof result.name !== "string" ||
+    typeof result.recipientLabel !== "string"
+  )
+    return null;
+  switch (result.status) {
+    case "awaiting_save":
+      return {
+        status: result.status,
+        text: `${result.name} 已发送给 ${result.recipientLabel}，等待保存。`,
+      } as const;
+    case "saved": {
+      const installed = result.installation;
+      if (
+        isRecord(installed) &&
+        installed.status === "verified" &&
+        typeof installed.packageName === "string" &&
+        typeof installed.version === "string" &&
+        typeof installed.versionCode === "string"
+      ) {
+        return {
+          status: result.status,
+          text: `${result.recipientLabel} 已核验安装 ${installed.packageName} ${installed.version}（${installed.versionCode}）。`,
+        } as const;
+      }
+      if (isRecord(installed) && installed.status === "cancelled") {
+        return {
+          status: result.status,
+          text: `${result.recipientLabel} 已取消安装。文件已保存${typeof result.savedPath === "string" ? `到 ${result.savedPath}` : ""}。`,
+        } as const;
+      }
+      return {
+        status: result.status,
+        text:
+          typeof result.savedPath === "string"
+            ? `已保存到 ${result.savedPath}`
+            : `${result.name} 已由 ${result.recipientLabel} 确认保存。`,
+      } as const;
+    }
+    case "cancelled":
+      return { status: result.status, text: `${result.name} 的传输已取消。` } as const;
+    default:
+      return null;
+  }
+}
+
 export function turnItemHasDetail(item: OrchestrationV2TurnItem): boolean {
   switch (item.type) {
     case "reasoning":

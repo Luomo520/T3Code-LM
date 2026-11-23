@@ -39,20 +39,23 @@ export function resolveThreadRouteRenderState(input: {
   if (input.draftThreadExists || (input.serverThreadExists && !input.serverThreadDeleted)) {
     return "ready";
   }
-  if (!input.bootstrapComplete) {
-    return "loading";
-  }
-  if (input.serverThreadExists || input.unlistedThreadDetail.status === "deleted") {
-    return "missing";
-  }
-  // Shell membership can lag a new thread; its detail decides.
+  // 最近列表可能不含旧会话。优先使用其已缓存的详情，并等连接恢复后确认删除。
   const projection = Option.getOrNull(input.unlistedThreadDetail.data);
-  if (projection === null) {
-    return "loading";
+  if (
+    !input.serverThreadDeleted &&
+    input.unlistedThreadDetail.status !== "deleted" &&
+    projection !== null &&
+    projection.thread.deletedAt === null &&
+    projection.thread.archivedAt === null
+  ) {
+    return "ready";
   }
-  return projection.thread.deletedAt !== null || projection.thread.archivedAt !== null
+  if (!input.bootstrapComplete) return "loading";
+  return input.serverThreadExists ||
+    input.unlistedThreadDetail.status === "deleted" ||
+    projection !== null
     ? "missing"
-    : "ready";
+    : "loading";
 }
 
 export function buildThreadRouteParams(ref: ScopedThreadRef): {

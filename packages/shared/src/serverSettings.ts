@@ -615,6 +615,9 @@ export function applyServerSettingsPatch(
     ...(patch.defaultModelSelection !== undefined
       ? { defaultModelSelection: patch.defaultModelSelection }
       : {}),
+    ...(patch.defaultSubagentModelSelection !== undefined
+      ? { defaultSubagentModelSelection: patch.defaultSubagentModelSelection }
+      : {}),
     ...(patch.fallbackModelSelection !== undefined
       ? { fallbackModelSelection: patch.fallbackModelSelection }
       : {}),

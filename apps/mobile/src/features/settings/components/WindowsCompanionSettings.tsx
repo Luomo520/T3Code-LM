@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
   AuthAccessWriteScope,
   AuthSettingsWriteScope,
@@ -7,7 +7,8 @@ import {
   isManagedSettingPath,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { AppState } from "react-native";
 
 import * as Dialog from "../../../components/ui/Dialog";
 import { ListActionRow } from "../../../components/ui/ListActionRow";
@@ -55,6 +56,22 @@ export function WindowsCompanionSettings({
     connected && supported && canManageAccess
       ? windowsCompanions({ environmentId, input: null })
       : null,
+  );
+  const refreshDevices = devices.refresh;
+  useFocusEffect(
+    useCallback(() => {
+      if (!connected || !supported || !canManageAccess) return;
+      const subscription = AppState.addEventListener("change", (status) => {
+        if (status === "active") refreshDevices();
+      });
+      const timer = setInterval(() => {
+        if (AppState.currentState === "active") refreshDevices();
+      }, 15_000);
+      return () => {
+        subscription.remove();
+        clearInterval(timer);
+      };
+    }, [canManageAccess, connected, refreshDevices, supported]),
   );
   if (!connected || config === null) return null;
 
@@ -124,7 +141,7 @@ export function WindowsCompanionSettings({
   }
 
   function openDeviceActions(device: CompanionDevice) {
-    Dialog.alert(device.name, device.online ? "在线" : "离线", [
+    Dialog.alert(device.name, describeDevice(device), [
       { text: "取消", style: "cancel" },
       {
         text: "重命名",
@@ -231,7 +248,7 @@ export function WindowsCompanionSettings({
                 key={device.deviceId}
                 icon="desktopcomputer"
                 label={device.name}
-                description={device.online ? "在线 · 管理设备" : "离线 · 管理设备"}
+                description={device.online ? "在线 · 设备详情" : "离线 · 设备详情"}
                 disabled={busy !== null}
                 onPress={() => openDeviceActions(device)}
               />
@@ -247,4 +264,26 @@ export function WindowsCompanionSettings({
       ) : null}
     </>
   );
+}
+
+function describeDevice(device: CompanionDevice): string {
+  const fields = [
+    ["计算机名", device.info.hostname],
+    ["Windows 版本", device.info.os],
+    ["受控端版本", device.info.version],
+    ["处理器", device.info.cpu],
+    ["显卡", device.info.gpu],
+    ["内存", device.info.memory],
+    ...Object.entries(device.info)
+      .filter(([key]) => /^network(?:[1-6])?$/.test(key))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, value]) => ["网卡", value]),
+  ].flatMap(([label, value]) => (value ? [`${label} · ${value}`] : []));
+  const updated = new Date(device.detailsUpdatedAt ?? device.lastSeen).toLocaleString();
+  return [
+    device.online ? "在线" : "离线",
+    `资料更新时间 · ${updated}`,
+    "",
+    ...(fields.length > 0 ? fields : ["在 Windows 受控端运行「设备自检」可发送设备资料。"]),
+  ].join("\n");
 }

@@ -2,9 +2,14 @@ import {
   FILE_HANDOFF_CHUNK_BYTES,
   WS_METHODS,
   type EnvironmentId,
+  type FileHandoffRequest,
+  type FileHandoffReply,
   type FileHandoffStart,
 } from "@t3tools/contracts";
 import { createSha256 } from "@t3tools/shared/sha256";
+import { trySendDirectFile, type OpenHandoffPeer } from "./fileHandoffDirect.ts";
+export { receiveDirectFile, waitForRelayedHandoff } from "./fileHandoffDirect.ts";
+export type { HandoffFrame, HandoffPeer, OpenHandoffPeer } from "./fileHandoffDirect.ts";
 import type { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -52,7 +57,10 @@ export async function sendHandoffFile(options: {
     environmentId: EnvironmentId;
     input: FileHandoffStart;
   }) => Promise<
-    AtomCommandResult<{ relativeUrl: string; offset: number; ready: boolean }, unknown>
+    AtomCommandResult<
+      { relativeUrl: string; offset: number; ready: boolean; direct?: boolean },
+      unknown
+    >
   >;
   readonly slice: (offset: number, length: number) => Promise<Chunk>;
   readonly post: (
@@ -62,6 +70,11 @@ export async function sendHandoffFile(options: {
   ) => Promise<{ ok: boolean; status: number }>;
   readonly signal: AbortSignal;
   readonly onProgress: (offset: number) => void;
+  readonly direct?: {
+    readonly makePeer: OpenHandoffPeer;
+    readonly request: (input: FileHandoffRequest) => Promise<FileHandoffReply>;
+    readonly onFallback?: () => void;
+  };
 }) {
   const { environmentId, input, signal, onProgress } = options;
   const hash = createSha256();
@@ -80,6 +93,21 @@ export async function sendHandoffFile(options: {
   if (!uploadUrl || result.offset > input.sizeBytes) throw new Error("文件传输进度无效。");
   onProgress(result.offset);
   if (result.ready) return;
+  if (options.direct) {
+    const direct = options.direct;
+    if (result.direct) {
+      if (
+        await trySendDirectFile({ ...input, ...direct, signal, slice: options.slice, onProgress })
+      )
+        return;
+      const abandoned = await direct
+        .request({ _tag: "directAbandon", threadId: input.threadId, id: input.id })
+        .catch(() => null);
+      if (abandoned?._tag === "direct" && abandoned.state === "saved") return;
+      onProgress(result.offset);
+    }
+    direct.onFallback?.();
+  }
 
   // 最后一个分块的响应丢失时，使用同一传输编号补交完成请求。
   let offset = result.offset;
@@ -90,7 +118,13 @@ export async function sendHandoffFile(options: {
     const url = new URL(uploadUrl);
     url.searchParams.set("offset", String(offset));
     const response = await options.post(url.href, chunk, signal);
-    if (!response.ok) throw new Error(`上传中断（HTTP ${response.status}），请点击继续上传。`);
+    if (!response.ok) {
+      const state = await options.direct
+        ?.request({ _tag: "directStatus", threadId: input.threadId, id: input.id })
+        .catch(() => null);
+      if (state?._tag === "direct" && state.state === "saved") return;
+      throw new Error(`上传中断（HTTP ${response.status}），请点击继续上传。`);
+    }
     offset += length;
     onProgress(offset);
   } while (offset < input.sizeBytes);

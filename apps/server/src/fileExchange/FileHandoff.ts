@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- 保留同步到磁盘的分块位置，重启后可从已持久化的字节继续。
-import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import * as fs from "node:fs/promises";
-import { join } from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -10,6 +10,8 @@ import {
   FILE_HANDOFF_ROUTE_PREFIX,
   FileHandoffError,
   type AuthClientSession,
+  type AuthSessionId,
+  type FileHandoffInstallation,
   type FileHandoffReply,
   type FileHandoffRequest,
   type FileHandoffStart,
@@ -25,6 +27,14 @@ import * as AssetSigner from "../assets/AssetSigner.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import {
+  activeDirectHandoff,
+  allowsDirectHandoff,
+  beginDirectHandoff,
+  closeDirectHandoff,
+  isDirectHandoffRequest,
+  signalDirectHandoff,
+} from "./FileHandoffDirect.ts";
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const UPLOAD_LINK_TTL_MS = 60 * 60 * 1000;
@@ -44,6 +54,11 @@ interface HandoffRecord {
   readonly expiresAt: number;
   readonly expectedSha256: string;
   readonly sha256: string | null;
+  readonly disposition?: "saved" | "cancelled";
+  readonly serverStaged?: true;
+  readonly directNegotiated?: true;
+  readonly savedPath?: string;
+  readonly installation?: FileHandoffInstallation;
 }
 
 function isMissing(error: unknown) {
@@ -51,20 +66,20 @@ function isMissing(error: unknown) {
 }
 
 function transferDirectory(root: string, threadId: ThreadId) {
-  return join(root, createHash("sha256").update(threadId).digest("hex"));
+  return NodePath.join(root, NodeCrypto.createHash("sha256").update(threadId).digest("hex"));
 }
 
 function recordPath(directory: string, id: string) {
-  return join(directory, `${id}.json`);
+  return NodePath.join(directory, `${id}.json`);
 }
 
 function contentsPath(directory: string, id: string) {
-  return join(directory, `${id}.bytes`);
+  return NodePath.join(directory, `${id}.bytes`);
 }
 
 async function readRecord(directory: string, id: string): Promise<HandoffRecord | null> {
   try {
-    return JSON.parse(await fs.readFile(recordPath(directory, id), "utf8")) as HandoffRecord;
+    return JSON.parse(await NodeFSP.readFile(recordPath(directory, id), "utf8")) as HandoffRecord;
   } catch (cause) {
     if (isMissing(cause)) return null;
     throw cause;
@@ -72,7 +87,7 @@ async function readRecord(directory: string, id: string): Promise<HandoffRecord 
 }
 
 async function readRecords(directory: string) {
-  const files = await fs.readdir(directory).catch((cause) => {
+  const files = await NodeFSP.readdir(directory).catch((cause) => {
     if (isMissing(cause)) return [];
     throw cause;
   });
@@ -86,18 +101,18 @@ async function readRecords(directory: string) {
 }
 
 async function writeRecord(directory: string, record: HandoffRecord) {
-  const temp = join(directory, `${randomUUID()}.tmp`);
+  const temp = NodePath.join(directory, `${NodeCrypto.randomUUID()}.tmp`);
   try {
-    await fs.writeFile(temp, JSON.stringify(record), { flag: "wx", flush: true, mode: 0o600 });
-    await fs.rename(temp, recordPath(directory, record.id));
+    await NodeFSP.writeFile(temp, JSON.stringify(record), { flag: "wx", flush: true, mode: 0o600 });
+    await NodeFSP.rename(temp, recordPath(directory, record.id));
   } finally {
-    await fs.rm(temp, { force: true });
+    await NodeFSP.rm(temp, { force: true });
   }
 }
 
 async function receivedBytes(directory: string, id: string) {
   try {
-    return (await fs.stat(contentsPath(directory, id))).size;
+    return (await NodeFSP.stat(contentsPath(directory, id))).size;
   } catch (cause) {
     if (isMissing(cause)) return 0;
     throw cause;
@@ -107,14 +122,14 @@ async function receivedBytes(directory: string, id: string) {
 async function complete(directory: string, record: HandoffRecord) {
   const path = contentsPath(directory, record.id);
   if (record.sizeBytes === 0) {
-    const file = await fs.open(path, "a", 0o600);
+    const file = await NodeFSP.open(path, "a", 0o600);
     await file.close();
   }
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  const hash = NodeCrypto.createHash("sha256");
+  for await (const chunk of NodeFS.createReadStream(path)) hash.update(chunk);
   const sha256 = hash.digest("hex");
   if (sha256 !== record.expectedSha256) {
-    await fs.rm(path, { force: true });
+    await NodeFSP.rm(path, { force: true });
     return false;
   }
   await writeRecord(directory, { ...record, sha256 });
@@ -141,11 +156,12 @@ function failure(message: string) {
   return new FileHandoffError({ message });
 }
 
+const isHandoffError = Schema.is(FileHandoffError);
+
 function storage<T>(operation: () => Promise<T>) {
   return Effect.tryPromise({
     try: operation,
-    catch: (cause) =>
-      Schema.is(FileHandoffError)(cause) ? cause : failure("无法读写文件传输记录。"),
+    catch: (cause) => (isHandoffError(cause) ? cause : failure("无法读写文件传输记录。")),
   });
 }
 
@@ -170,7 +186,7 @@ const issueUrl = Effect.fn("FileHandoff.issueUrl")(function* (
 
 const configuration = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
-  return join(config.stateDir, "file-handoff");
+  return NodePath.join(config.stateDir, "file-handoff");
 });
 
 const authorizedClients = Effect.gen(function* () {
@@ -183,14 +199,23 @@ let nextSweepAt = 0;
 async function sweepExpired(root: string, now: number) {
   if (now < nextSweepAt) return;
   nextSweepAt = now + 15 * 60 * 1000;
-  for (const key of await fs.readdir(root)) {
+  const keys = await NodeFSP.readdir(root).catch((cause) => {
+    if (isMissing(cause)) return [];
+    throw cause;
+  });
+  for (const key of keys) {
     if (!THREAD_KEY_PATTERN.test(key)) continue;
-    const directory = join(root, key);
+    const directory = NodePath.join(root, key);
     for (const record of await readRecords(directory)) {
       const marker = recordPath(directory, record.id);
-      if (record.expiresAt > now || activeWrites.has(marker)) continue;
-      await fs.rm(contentsPath(directory, record.id), { force: true });
-      await fs.rm(marker, { force: true });
+      if (activeWrites.has(marker) || (!record.disposition && record.expiresAt > now)) continue;
+      activeWrites.add(marker);
+      try {
+        await NodeFSP.rm(contentsPath(directory, record.id), { force: true });
+        if (record.expiresAt <= now) await NodeFSP.rm(marker, { force: true });
+      } finally {
+        activeWrites.delete(marker);
+      }
     }
   }
 }
@@ -228,7 +253,7 @@ export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
     if (activeWrites.has(marker)) throw failure("文件正在写入，请稍后续传。");
     activeWrites.add(marker);
     try {
-      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
       await sweepExpired(root, now);
       const existing = await readRecord(directory, input.id);
       if (existing) {
@@ -238,6 +263,7 @@ export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
           existing.name !== input.name ||
           existing.sizeBytes !== input.sizeBytes ||
           existing.expectedSha256 !== input.sha256 ||
+          existing.disposition !== undefined ||
           existing.expiresAt <= now
         ) {
           throw failure("文件传输已经过期或资料发生变化，请重新选择文件。");
@@ -245,7 +271,10 @@ export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
         return existing;
       }
       const records = await readRecords(directory);
-      if (records.filter((entry) => entry.expiresAt > now).length >= MAX_TRANSFERS_PER_THREAD) {
+      if (
+        records.filter((entry) => entry.expiresAt > now && !entry.disposition).length >=
+        MAX_TRANSFERS_PER_THREAD
+      ) {
         throw failure("此会话的文件传输记录已满。");
       }
       const created: HandoffRecord = {
@@ -261,6 +290,7 @@ export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
         sha256: null,
       };
       await writeRecord(directory, created);
+      if (input.direct && allowsDirectHandoff(sender, recipient)) beginDirectHandoff(marker, now);
       return created;
     } finally {
       activeWrites.delete(marker);
@@ -271,7 +301,154 @@ export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
     relativeUrl: yield* issueUrl("upload", directory, record),
     offset,
     ready: record.sha256 !== null,
+    ...(activeDirectHandoff(recordPath(directory, input.id), now) ? { direct: true } : {}),
   };
+});
+
+// 会话资源由服务端保存，允许发起设备同时是接收设备。
+export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(function* (input: {
+  readonly threadId: ThreadId;
+  readonly id: string;
+  readonly requester: AuthSessionId;
+  readonly recipient: AuthSessionId;
+  readonly name: string;
+  readonly sourcePath: string;
+  readonly expectedSourceSha256?: string;
+}) {
+  const name = Array.from(input.name.replace(/[\\/\x00-\x1f\x7f]/gu, "_").trim())
+    .slice(0, 240)
+    .join("");
+  if (!UUID_PATTERN.test(input.id) || !name || /^[. ]+$/u.test(name)) {
+    return yield* failure("文件名或传输编号无效。");
+  }
+  const sessions = yield* authorizedClients;
+  const sender = sessions.find((session) => session.sessionId === input.requester);
+  const recipient = sessions.find((session) => session.sessionId === input.recipient);
+  if (
+    !sender ||
+    !recipient ||
+    !eligible(sender, AuthOrchestrationOperateScope) ||
+    !eligible(recipient)
+  ) {
+    return yield* failure("接收设备的授权已失效，请重新选择。");
+  }
+  const settings = yield* (yield* ServerSettingsService).getSettings.pipe(
+    Effect.mapError(() => failure("无法读取附件大小限制。")),
+  );
+  const maxBytes = settings.attachmentMaxFileSizeMiB * 1024 * 1024;
+  const now = yield* Clock.currentTimeMillis;
+  const root = yield* configuration;
+  const directory = transferDirectory(root, input.threadId);
+  return yield* storage(async () => {
+    const marker = recordPath(directory, input.id);
+    if (activeWrites.has(marker)) throw failure("该文件正在准备，请稍后查询。");
+    activeWrites.add(marker);
+    const staging = NodePath.join(directory, `${input.id}.stage`);
+    try {
+      await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
+      await sweepExpired(root, now);
+      const existing = await readRecord(directory, input.id);
+      if (existing) {
+        if (
+          !existing.serverStaged ||
+          existing.sender !== input.requester ||
+          existing.recipient !== input.recipient
+        ) {
+          throw failure("文件传输资料发生变化，请重新选择设备。");
+        }
+        return threadFileHandoffStatus(existing);
+      }
+      const records = await readRecords(directory);
+      if (
+        records.filter((entry) => entry.expiresAt > now && !entry.disposition).length >=
+        MAX_TRANSFERS_PER_THREAD
+      ) {
+        throw failure("此会话的文件传输记录已满。");
+      }
+      const source = await NodeFSP.open(
+        input.sourcePath,
+        NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NOFOLLOW ?? 0),
+      );
+      let sizeBytes = 0;
+      const hash = NodeCrypto.createHash("sha256");
+      try {
+        const initial = await source.stat();
+        if (!initial.isFile() || initial.size > maxBytes)
+          throw failure("文件不可读取或超过附件大小上限。");
+        await NodeFSP.rm(staging, { force: true });
+        const output = await NodeFSP.open(staging, "wx", 0o600);
+        try {
+          const buffer = Buffer.alloc(FILE_HANDOFF_CHUNK_BYTES);
+          let bytesRead: number;
+          do {
+            ({ bytesRead } = await source.read(buffer));
+            if (bytesRead === 0) break;
+            sizeBytes += bytesRead;
+            if (sizeBytes > maxBytes) throw failure("文件超过附件大小上限。");
+            const bytes = buffer.subarray(0, bytesRead);
+            hash.update(bytes);
+            await output.writeFile(bytes);
+          } while (bytesRead > 0);
+          const current = await source.stat();
+          if (current.size !== sizeBytes || current.mtimeMs !== initial.mtimeMs) {
+            throw failure("文件正在变化，请稍后重试。");
+          }
+          await output.sync();
+        } finally {
+          await output.close();
+        }
+      } finally {
+        await source.close();
+      }
+      const sha256 = hash.digest("hex");
+      if (input.expectedSourceSha256 !== undefined && sha256 !== input.expectedSourceSha256) {
+        throw failure("文件与设备回传时的 SHA-256 不符。");
+      }
+      await NodeFSP.rename(staging, contentsPath(directory, input.id));
+      const record: HandoffRecord = {
+        id: input.id,
+        sender: sender.sessionId,
+        recipient: recipient.sessionId,
+        senderLabel: "会话文件",
+        recipientLabel: label(recipient),
+        name,
+        sizeBytes,
+        expectedSha256: sha256,
+        expiresAt: now + RETENTION_MS,
+        sha256,
+        serverStaged: true,
+      };
+      await writeRecord(directory, record);
+      return threadFileHandoffStatus(record);
+    } finally {
+      await NodeFSP.rm(staging, { force: true });
+      activeWrites.delete(marker);
+    }
+  });
+});
+
+function threadFileHandoffStatus(record: HandoffRecord) {
+  return {
+    id: record.id,
+    name: record.name,
+    recipientLabel: record.recipientLabel,
+    status: record.disposition ?? ("awaiting_save" as const),
+    ...(record.savedPath === undefined ? {} : { savedPath: record.savedPath }),
+    ...(record.installation === undefined ? {} : { installation: record.installation }),
+  };
+}
+
+export const readThreadFileHandoffStatus = Effect.fn("FileHandoff.threadFileStatus")(function* (
+  threadId: ThreadId,
+  id: string,
+) {
+  if (!UUID_PATTERN.test(id)) return yield* failure("文件传输编号无效。");
+  const now = yield* Clock.currentTimeMillis;
+  const directory = transferDirectory(yield* configuration, threadId);
+  const record = yield* storage(() => readRecord(directory, id));
+  if (!record?.serverStaged || record.expiresAt <= now)
+    return yield* failure("该会话文件传输记录不存在或已过期。");
+  return threadFileHandoffStatus(record);
 });
 
 export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
@@ -283,7 +460,10 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
   const directory = transferDirectory(root, input.threadId);
   const now = yield* Clock.currentTimeMillis;
   if (input._tag === "list") {
-    const records = yield* storage(() => readRecords(directory));
+    const records = yield* storage(async () => {
+      await sweepExpired(root, now);
+      return readRecords(directory);
+    });
     return {
       _tag: "list",
       transfers: records
@@ -291,18 +471,46 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
           (entry) =>
             entry.expiresAt > now &&
             (entry.sender === session.sessionId ||
-              (entry.recipient === session.sessionId && entry.sha256 !== null)),
+              (entry.recipient === session.sessionId &&
+                entry.disposition !== "cancelled" &&
+                (entry.sha256 !== null ||
+                  activeDirectHandoff(recordPath(directory, entry.id), now) !== undefined))),
         )
         .sort((left, right) => right.expiresAt - left.expiresAt)
-        .map(({ id, name, senderLabel, recipientLabel, sizeBytes, sha256, sender }) => ({
-          id,
-          name,
-          senderLabel,
-          recipientLabel,
-          sizeBytes,
-          sha256,
-          outgoing: sender === session.sessionId,
-        })),
+        .map(
+          ({
+            id,
+            name,
+            senderLabel,
+            recipientLabel,
+            sizeBytes,
+            sha256,
+            sender,
+            expiresAt,
+            disposition,
+            expectedSha256,
+            serverStaged,
+            recipient,
+            savedPath,
+            installation,
+          }) => ({
+            id,
+            name,
+            senderLabel,
+            recipientLabel,
+            sizeBytes,
+            sha256,
+            expiresAt,
+            outgoing:
+              sender === session.sessionId && (!serverStaged || recipient !== session.sessionId),
+            ...(savedPath === undefined ? {} : { savedPath }),
+            ...(installation === undefined ? {} : { installation }),
+            ...(disposition === undefined ? {} : { disposition }),
+            ...(!sha256 && activeDirectHandoff(recordPath(directory, id), now)
+              ? { directSha256: expectedSha256 }
+              : {}),
+          }),
+        ),
       recipients: session.scopes.includes(AuthOrchestrationOperateScope)
         ? sessions
             .filter((entry) => entry.sessionId !== session.sessionId && eligible(entry))
@@ -311,11 +519,141 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
     } satisfies FileHandoffReply;
   }
 
+  if (!UUID_PATTERN.test(input.id)) return yield* failure("文件传输编号无效。");
+  if (isDirectHandoffRequest(input)) {
+    const record = yield* storage(() => readRecord(directory, input.id));
+    const person = sessions.find((device) => device.sessionId === session.sessionId);
+    const outgoing = record?.sender === session.sessionId;
+    if (
+      !record ||
+      record.expiresAt <= now ||
+      !person ||
+      !(outgoing || record.recipient === session.sessionId) ||
+      !eligible(person, outgoing ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope)
+    ) {
+      return yield* failure("该文件传输已过期或不属于当前设备。");
+    }
+    if (record.disposition === "saved") return { _tag: "direct", state: "saved" } as const;
+    if (record.disposition || record.sha256) return { _tag: "direct", state: "closed" } as const;
+    const marker = recordPath(directory, input.id);
+    if (input._tag !== "directAnswer") return signalDirectHandoff(marker, input, outgoing, now);
+    return yield* storage(async () => {
+      if (activeWrites.has(marker)) throw failure("文件正在写入，请稍后重试。");
+      activeWrites.add(marker);
+      try {
+        const current = await readRecord(directory, input.id);
+        if (current?.disposition || current?.sha256)
+          return { _tag: "direct", state: "closed" } as const;
+        if (!current || current.expiresAt <= now) throw failure("该文件传输已过期。");
+        const reply = signalDirectHandoff(marker, input, outgoing, now);
+        if (
+          reply.state === "active" &&
+          activeDirectHandoff(marker, now)?.answer &&
+          !current.directNegotiated
+        ) {
+          await writeRecord(directory, { ...current, directNegotiated: true });
+        }
+        return reply;
+      } finally {
+        activeWrites.delete(marker);
+      }
+    });
+  }
+  if (input._tag === "reportInstall") {
+    yield* storage(async () => {
+      const marker = recordPath(directory, input.id);
+      if (activeWrites.has(marker)) throw failure("回执正在写入，请稍后重试。");
+      activeWrites.add(marker);
+      try {
+        const record = await readRecord(directory, input.id);
+        const receiver = sessions.find((device) => device.sessionId === session.sessionId);
+        if (
+          !record ||
+          record.expiresAt <= now ||
+          !receiver ||
+          !eligible(receiver) ||
+          record.recipient !== session.sessionId ||
+          record.disposition !== "saved" ||
+          record.sha256 !== input.sha256 ||
+          !record.name.toLowerCase().endsWith(".apk")
+        ) {
+          throw failure("只有保存并校验此 APK 的接收设备可以上报安装结果。");
+        }
+        if (record.installation?.status === "verified") {
+          const previous = record.installation;
+          const incoming = input.installation;
+          if (
+            incoming.status === "verified" &&
+            (previous.packageName !== incoming.packageName ||
+              previous.version !== incoming.version ||
+              previous.versionCode !== incoming.versionCode)
+          )
+            throw failure("该 APK 已有核验过的安装结果。");
+          return;
+        }
+        if (record.installation?.status !== input.installation.status) {
+          await writeRecord(directory, { ...record, installation: input.installation });
+        }
+      } finally {
+        activeWrites.delete(marker);
+      }
+    });
+    return { _tag: "finished", disposition: "saved" } satisfies FileHandoffReply;
+  }
+  if (input._tag === "cancel" || input._tag === "confirmSaved") {
+    const disposition = input._tag === "cancel" ? "cancelled" : "saved";
+    yield* storage(async () => {
+      const marker = recordPath(directory, input.id);
+      if (activeWrites.has(marker)) throw failure("文件正在写入，请稍后重试。");
+      activeWrites.add(marker);
+      try {
+        const record = await readRecord(directory, input.id);
+        if (!record || record.expiresAt <= now) throw failure("该文件传输已过期。");
+        if (input._tag === "cancel") {
+          if (
+            !session.scopes.includes(AuthOrchestrationOperateScope) ||
+            record.sender !== session.sessionId
+          ) {
+            throw failure("只有发送设备可以取消传输。");
+          }
+        } else if (
+          record.recipient !== session.sessionId ||
+          record.sizeBytes !== input.sizeBytes ||
+          (record.sha256 !== input.sha256 &&
+            !(record.directNegotiated && record.expectedSha256 === input.sha256))
+        ) {
+          throw failure("接收设备、文件大小或 SHA-256 与传输记录不符。");
+        }
+        if (record.disposition !== disposition) {
+          if (record.disposition) throw failure("该文件传输已结束。");
+          // 先保存终态再删除字节。重复回执可以继续清理中断前留下的副本。
+          await writeRecord(directory, {
+            ...record,
+            sha256:
+              disposition === "saved" && input._tag === "confirmSaved"
+                ? input.sha256
+                : record.sha256,
+            disposition,
+            ...(input._tag === "confirmSaved" && input.savedPath !== undefined
+              ? { savedPath: input.savedPath }
+              : {}),
+          });
+          closeDirectHandoff(marker);
+        }
+        await NodeFSP.rm(contentsPath(directory, input.id), { force: true });
+      } finally {
+        activeWrites.delete(marker);
+      }
+    });
+    return { _tag: "finished", disposition } satisfies FileHandoffReply;
+  }
+
   const record = yield* storage(() => readRecord(directory, input.id));
   if (
     !record ||
     record.recipient !== session.sessionId ||
     !record.sha256 ||
+    record.disposition !== undefined ||
     record.expiresAt <= now
   ) {
     return yield* failure("该文件已过期、尚未上传完毕或不属于当前设备。");
@@ -355,9 +693,10 @@ export const resolveFileHandoff = Effect.fn("FileHandoff.resolve")(function* (
     .verify(`handoff.${mode}.${threadKey}.${id}.${expiry}`, signature)
     .pipe(Effect.mapError(() => failure("无法验证文件传输链接。")));
   if (!verified) return null;
-  const directory = join(yield* configuration, threadKey);
+  const directory = NodePath.join(yield* configuration, threadKey);
   const record = yield* storage(() => readRecord(directory, id));
-  if (!record || record.expiresAt <= now) return null;
+  if (mode === "upload") closeDirectHandoff(recordPath(directory, id));
+  if (!record || record.disposition || record.expiresAt <= now) return null;
   const sessionId = mode === "upload" ? record.sender : record.recipient;
   const client = (yield* authorizedClients).find((item) => item.sessionId === sessionId);
   if (
@@ -390,7 +729,7 @@ export const receiveFileHandoffChunk = Effect.fn("FileHandoff.receiveChunk")(fun
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const current = yield* storage(() => readRecord(directory, record.id));
-        if (!current || current.expiresAt <= now) {
+        if (!current || current.disposition || current.expiresAt <= now) {
           return HttpServerResponse.empty({ status: 404 });
         }
         if (current.sha256 !== null) return HttpServerResponse.empty({ status: 204 });
@@ -415,7 +754,7 @@ export const receiveFileHandoffChunk = Effect.fn("FileHandoff.receiveChunk")(fun
         const completed = yield* Effect.uninterruptible(
           storage(async () => {
             if (length > 0) {
-              const file = await fs.open(path, "a", 0o600);
+              const file = await NodeFSP.open(path, "a", 0o600);
               try {
                 await file.writeFile(buffer);
                 await file.sync();

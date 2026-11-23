@@ -419,6 +419,7 @@ function DeviceMiniPlayer({
             deviceName={device?.name ?? source.name}
             deviceDescription={`${hostLabel} · ${device?.version ?? source.platform}`}
             visible
+            inputEnabled={source.platform !== "android" || device?.physical === false}
             viewId={viewId}
             serveSimOnly={host?.kind === "simlock"}
           />

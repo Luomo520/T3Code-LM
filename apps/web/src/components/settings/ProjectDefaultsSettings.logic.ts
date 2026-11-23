@@ -1,5 +1,6 @@
 import type { ModelSelection, ProjectId, ServerProvider } from "@t3tools/contracts";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
+import { resolveSelectableModel } from "@t3tools/shared/model";
 
 import { resolveEffectiveDefaultModelSelection } from "../../modelSelection";
 import {
@@ -44,6 +45,12 @@ export function resolveDefaultModelSettingsPresentation(input: {
     resolved?.instanceId !== saved.instanceId
   ) {
     return { selection: saved, providerNote: providerNote(savedEntry) };
+  }
+  if (resolveSelectableModel(savedEntry.driverKind, saved.model, savedEntry.models) === null) {
+    return {
+      selection: saved,
+      providerNote: `${savedEntry.displayName} no longer lists ${saved.model}.`,
+    };
   }
   return {
     selection: resolveEffectiveDefaultModelSelection(input.settings, input.providers, resolved),

@@ -7,6 +7,8 @@ import {
   forkReleaseManifestUrl,
   forkReleasePlatformsUrl,
   isForkReleaseTag,
+  matchesForkReleaseChannel,
+  type ForkUpdateChannel,
   type ForkReleaseAsset,
 } from "@t3tools/shared/forkRelease";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -48,12 +50,17 @@ export function requiresMobileDownloadConfirmation(type: string | undefined): bo
 
 /** Called only by Check for updates; never starts an APK download. */
 export async function findAndroidAppUpdate(
-  input: { readonly installedBuild: number; readonly architectures: readonly string[] },
+  input: {
+    readonly installedBuild: number;
+    readonly architectures: readonly string[];
+    readonly channel?: ForkUpdateChannel;
+  },
   signal: AbortSignal,
 ): Promise<AndroidUpdateAsset | null> {
   if (!Number.isSafeInteger(input.installedBuild) || input.installedBuild < 1) {
     throw new Error("无法识别已安装 App 的构建号，请重新打开 App 后重试。");
   }
+  const channel = input.channel ?? "stable";
   const candidates = new Map<string, Set<string>>();
   for (let page = 1; page <= 3; page++) {
     const response = await fetch(
@@ -72,8 +79,10 @@ export async function findAndroidAppUpdate(
     for (const release of releases) {
       if (
         !isRecord(release) ||
-        release.draft === true ||
-        release.prerelease === true ||
+        !matchesForkReleaseChannel(
+          { draft: release.draft === true, prerelease: release.prerelease === true },
+          channel,
+        ) ||
         typeof release.tag_name !== "string" ||
         !isForkReleaseTag(release.tag_name) ||
         !Array.isArray(release.assets)
@@ -115,7 +124,10 @@ export async function findAndroidAppUpdate(
   const ordered = [...candidates].sort(([left], [right]) =>
     compareSemverVersions(right.slice(1), left.slice(1)),
   );
+  let best: AndroidUpdateAsset | null = null;
   for (const [tag, names] of ordered) {
+    const productVersion = tag.slice(1).split("-")[0];
+    if (best !== null && best.productVersion !== productVersion) break;
     const grouped = names.has(FORK_RELEASE_PLATFORMS_FILE);
     const manifestUrl = grouped ? forkReleasePlatformsUrl(tag) : forkReleaseManifestUrl(tag);
     const manifestResponse = await fetch(manifestUrl, { signal });
@@ -125,12 +137,15 @@ export async function findAndroidAppUpdate(
       ? decodeForkReleasePlatforms(raw, tag)
       : decodeForkReleaseManifest(raw, tag);
     if (!manifest) throw new Error("更新清单校验失败，未提供下载。");
-    const asset = selectAndroidUpdate(
-      manifest.assets.filter((row) => names.has(row.fileName)),
+    if (channel === "stable" && manifest.channel === "beta") continue;
+    best = selectAndroidUpdate(
+      [
+        ...manifest.assets.filter((row) => names.has(row.fileName)),
+        ...(best === null ? [] : [best]),
+      ],
       input.installedBuild,
       input.architectures,
     );
-    if (asset) return asset;
   }
-  return null;
+  return best;
 }

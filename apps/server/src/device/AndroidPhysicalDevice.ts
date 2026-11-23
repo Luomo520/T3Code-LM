@@ -1,3 +1,4 @@
+import type { AndroidPhysicalDeviceStatus } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import type { DeviceHostReady, HostDevice } from "./DeviceHost.ts";
@@ -74,3 +75,43 @@ export const listPhysicalAndroidDevices = Effect.fn("AndroidPhysicalDevice.list"
     detail: diagnostics.join("\n"),
   };
 });
+
+export const readAndroidPhysicalDeviceStatus = Effect.fn("AndroidPhysicalDevice.readStatus")(
+  function* (
+    run: DeviceHostReady["run"],
+    serial: string,
+  ): Effect.fn.Return<AndroidPhysicalDeviceStatus> {
+    const result = yield* run("adb", ["-s", serial, "shell", "dumpsys", "window", "policy"], {
+      timeoutMs: 5_000,
+    });
+    if (result.code !== 0) {
+      const error = result.stderr + result.stdout;
+      const connection = /no permissions|insufficient permissions/i.test(error)
+        ? "permissionDenied"
+        : /unauthorized/i.test(error)
+          ? "unauthorized"
+          : /device.+not found|no devices|device offline|device disconnected/i.test(error)
+            ? "disconnected"
+            : "unknown";
+      return { connection, screen: "unknown" };
+    }
+
+    // KeyguardServiceDelegate 提供实际锁屏状态。其他窗口可能也包含 showing 字段。
+    const keyguard =
+      /^\s*KeyguardServiceDelegate:?[^\S\r\n]*\r?\n((?:[\t ]+[^\r\n]*\r?\n?)*)/m.exec(
+        result.stdout,
+      )?.[1] ?? "";
+    const showing = /^\s*showing=(true|false)\s*$/m.exec(keyguard)?.[1];
+    const restricted = /^\s*inputRestricted=(true|false)\s*$/m.exec(keyguard)?.[1];
+    const screenState = /^\s*screenState=([A-Z_]+)\s*$/m.exec(keyguard)?.[1];
+    const screen =
+      screenState === "SCREEN_STATE_OFF"
+        ? "off"
+        : showing === "true" || restricted === "true"
+          ? "locked"
+          : showing === "false" && restricted === "false" && screenState === "SCREEN_STATE_ON"
+            ? "unlocked"
+            : "unknown";
+    return { connection: "connected", screen };
+  },
+);

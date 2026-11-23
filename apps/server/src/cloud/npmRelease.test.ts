@@ -261,33 +261,52 @@ it.effect.each(["--registry=https://example.com", "../other", "other-package@lat
     }),
 );
 
-it.effect("uses the platform build from a product page for latest and exact lookups", () =>
-  Effect.gen(function* () {
-    const anchor = "v0.1.0-1";
-    const v1 = manifest(3);
-    const grouped = {
-      ...v1,
-      schemaVersion: 2,
-      tag: anchor,
-      productVersion: "0.1.0",
-      assets: v1.assets.map((asset) => ({
-        ...asset,
-        sourceCommit: "c".repeat(40),
-        url: asset.url.replace("/v0.1.0-3/", "/v0.1.0-1/"),
-      })),
-    };
-    const service = yield* makeService(
-      HttpClient.make((request) => {
-        const response = request.url.includes("api.github.com")
-          ? Response.json([{ tag_name: anchor, assets: [{ name: "T3Code-LM-platforms.json" }] }])
-          : request.url.endsWith("T3Code-LM-platforms.json")
-            ? Response.json(grouped)
-            : new Response("", { status: 404 });
-        return Effect.succeed(HttpClientResponse.fromWeb(request, response));
-      }),
-    );
-    expect(yield* service.get({ spec: "latest" })).toEqual({ version: "0.1.0-3" });
-    expect(yield* service.get({ spec: "0.1.0-3" })).toEqual({ version: "0.1.0-3" });
-    expect(yield* service.get({ spec: "0.1.0-2" })).toBeNull();
-  }),
+it.effect.each([false, true])(
+  "uses the platform build for a grouped release (prerelease %s)",
+  (prerelease) =>
+    Effect.gen(function* () {
+      const anchor = "v0.1.0-1";
+      const v1 = manifest(3);
+      const grouped = {
+        ...v1,
+        schemaVersion: 2,
+        tag: anchor,
+        productVersion: "0.1.0",
+        assets: v1.assets.map((asset) => ({
+          ...asset,
+          sourceCommit: "c".repeat(40),
+          url: asset.url.replace("/v0.1.0-3/", "/v0.1.0-1/"),
+        })),
+      };
+      const service = yield* makeService(
+        HttpClient.make((request) => {
+          const response = request.url.includes("api.github.com")
+            ? Response.json([
+                {
+                  tag_name: anchor,
+                  prerelease,
+                  assets: [
+                    { name: "T3Code-LM-platforms.json" },
+                    ...grouped.assets.map(({ fileName }) => ({
+                      name: fileName,
+                      state: "uploaded",
+                    })),
+                  ],
+                },
+              ])
+            : request.url.endsWith("T3Code-LM-platforms.json")
+              ? Response.json(grouped)
+              : new Response("", { status: 404 });
+          return Effect.succeed(HttpClientResponse.fromWeb(request, response));
+        }),
+      );
+      expect(yield* service.get({ spec: "latest" })).toEqual(
+        prerelease ? null : { version: "0.1.0-3" },
+      );
+      expect(yield* service.get({ spec: "beta" })).toEqual(
+        prerelease ? { version: "0.1.0-3" } : null,
+      );
+      expect(yield* service.get({ spec: "0.1.0-3" })).toEqual({ version: "0.1.0-3" });
+      expect(yield* service.get({ spec: "0.1.0-2" })).toBeNull();
+    }),
 );

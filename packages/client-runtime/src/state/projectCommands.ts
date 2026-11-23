@@ -157,6 +157,12 @@ export function createProjectEnvironmentAtoms<R, E>(
           (result, isCurrent) => fileMetadata.rememberEntries(input.cwd, result.entries, isCurrent),
         ),
     }),
+    listDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:projects:list-deliveries",
+      tag: WS_METHODS.projectsListDeliveries,
+      staleTimeMs: 30_000,
+      idleTtlMs: 60_000,
+    }),
     listIgnoredFiles: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:list-ignored-files",
       tag: WS_METHODS.projectsListIgnoredFiles,
@@ -245,4 +251,20 @@ export function createProjectEnvironmentAtoms<R, E>(
         }),
     }),
   };
+}
+
+export const projectDeliveryPlatformLabel = {
+  android: "Android",
+  windows: "Windows",
+  linux: "Linux / NAS",
+  macos: "macOS",
+  other: "通用",
+} as const;
+
+export function projectDeliveryLabel(
+  file: Pick<import("@t3tools/contracts").ProjectDelivery, "version" | "platform" | "date">,
+): string {
+  return [file.version, projectDeliveryPlatformLabel[file.platform], file.date]
+    .filter(Boolean)
+    .join(" · ");
 }

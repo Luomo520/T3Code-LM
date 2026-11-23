@@ -128,10 +128,11 @@ export function updateFeedFileName(
  * on the switch's track at least as new, since later releases only add migrations. */
 export function acceptsTrackSwitchRelease(
   found: string,
-  channel: "latest" | "nightly",
+  channel: "latest" | "nightly" | "beta",
   checked: string,
 ): boolean {
   return (
+    channel !== "beta" &&
     cliReleaseChannelOf(found) === (channel === "nightly" ? "nightly" : "stable") &&
     compareSemverVersions(found, checked) >= 0
   );

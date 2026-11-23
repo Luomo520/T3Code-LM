@@ -42,6 +42,11 @@ const EMPTY_COPY_FEEDBACK: GitActionProgress = {
 const COPY_FEEDBACK_DISMISS_MS = 3_000;
 
 const CommandPaletteContext = createContext<ReactNode>(null);
+const OpenCommandPaletteContext = createContext(() => {});
+
+export function useOpenCommandPalette() {
+  return use(OpenCommandPaletteContext);
+}
 
 /** Render inside the workspace so palette actions share its navigation and pane state. */
 export function HardwareKeyboardCommandOverlay() {
@@ -56,6 +61,10 @@ export function HardwareKeyboardCommandProvider({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteSearch, setPaletteSearch] = useState<CommandPaletteSearchPosition | null>(null);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const openPalette = useCallback(() => {
+    setPaletteSearch(null);
+    setPaletteOpen(true);
+  }, []);
   const returnToPaletteSearch = useCallback((search: CommandPaletteSearchPosition) => {
     setPaletteSearch(search);
     setPaletteOpen(true);
@@ -132,8 +141,7 @@ export function HardwareKeyboardCommandProvider({
   const onCommand = useCallback(
     (command: HardwareKeyboardCommand) => {
       if (command === "commandPalette") {
-        setPaletteSearch(null);
-        setPaletteOpen(true);
+        openPalette();
         return;
       }
       if (dispatchHardwareKeyboardCommand(command)) return;
@@ -188,7 +196,7 @@ export function HardwareKeyboardCommandProvider({
         navigation.navigate("ThreadReview", thread);
       }
     },
-    [copyTarget, navigation, pathname, showCopyFeedback],
+    [copyTarget, navigation, openPalette, pathname, showCopyFeedback],
   );
 
   const palette = useMemo(
@@ -206,11 +214,13 @@ export function HardwareKeyboardCommandProvider({
   );
 
   return (
-    <CommandPaletteContext value={palette}>
-      <T3KeyboardCommands enabledCommands={enabledCommands} onCommand={onCommand}>
-        {children}
-      </T3KeyboardCommands>
-      <GitActionProgressOverlay progress={copyFeedback} onDismiss={dismissCopyFeedback} />
-    </CommandPaletteContext>
+    <OpenCommandPaletteContext value={openPalette}>
+      <CommandPaletteContext value={palette}>
+        <T3KeyboardCommands enabledCommands={enabledCommands} onCommand={onCommand}>
+          {children}
+        </T3KeyboardCommands>
+        <GitActionProgressOverlay progress={copyFeedback} onDismiss={dismissCopyFeedback} />
+      </CommandPaletteContext>
+    </OpenCommandPaletteContext>
   );
 }

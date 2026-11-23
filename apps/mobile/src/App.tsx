@@ -7,7 +7,7 @@ import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { requireNativeModule } from "expo";
 import { useEffect, useRef, useState } from "react";
-import { Platform, StatusBar } from "react-native";
+import { AppState, Platform, StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -51,7 +51,11 @@ import {
 } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { RootStack, rootPathnameFromState, workspaceLocationFromState } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
-import { subscribeComposerDraftModelReconciliation } from "./state/use-composer-drafts";
+import {
+  ensureComposerDraftsLoaded,
+  flushComposerDrafts,
+  subscribeComposerDraftModelReconciliation,
+} from "./state/use-composer-drafts";
 import { environmentThreadShells, threadEnvironment } from "./state/threads";
 import { environmentShell, shellCachesReadAtom } from "./state/shell";
 import { OverlayPortalHost } from "./components/ui/OverlayPortal";
@@ -195,10 +199,23 @@ function handleNavigationReady(): void {
   flushRootNavigationQueue();
 }
 
+function installComposerDraftLifecycle(): () => void {
+  ensureComposerDraftsLoaded();
+  const subscription = AppState.addEventListener("change", (state) => {
+    if (state === "background") {
+      void flushComposerDrafts().catch((error) =>
+        console.warn("[composer-drafts] failed to persist drafts before backgrounding", error),
+      );
+    }
+  });
+  return () => subscription.remove();
+}
+
 declare const module: { readonly hot?: FoundationHotModule } | undefined;
 
 const appServiceDisposers = [
   installUiRuntimeMemoryWarningGc(),
+  installComposerDraftLifecycle(),
   subscribeComposerDraftModelReconciliation({
     registry: appAtomRegistry,
     threadShellAtom: environmentThreadShells.threadShellAtom,

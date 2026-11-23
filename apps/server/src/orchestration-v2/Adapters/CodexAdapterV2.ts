@@ -89,11 +89,13 @@ import type {
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
+import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -1455,11 +1457,20 @@ const CODEX_T3_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 const CODEX_T3_DIRECT_MCP_SERVER = "t3-code-direct";
 const CODEX_DIRECT_ONLY_T3_TOOLS = ["t3_thread_wait", "t3_companion_result"] as const;
 
+// 角色文件只覆盖子代理的模型选项，父会话仍使用自己的选项。
+function codexDefaultAgentRoleToml(selection: ModelSelection): string {
+  const effort = getModelSelectionStringOptionValue(selection, "reasoningEffort");
+  const fields = [`model = ${JSON.stringify(selection.model)}`];
+  if (effort !== undefined) fields.push(`model_reasoning_effort = ${JSON.stringify(effort)}`);
+  return fields.join("\n") + "\n";
+}
+
 function codexThreadRuntimeParams(input: {
   readonly threadId: ThreadId | null;
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  readonly defaultAgentRolePath?: string | undefined;
 }): {
   readonly cwd?: string;
   readonly model?: string;
@@ -1479,6 +1490,9 @@ function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...(input.defaultAgentRolePath === undefined
+        ? {}
+        : { "agents.default.config_file": input.defaultAgentRolePath }),
       // One app-server serves many threads, so the id goes in per-thread shell config, not its env.
       ...(input.threadId === null
         ? {}
@@ -1910,6 +1924,28 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
           environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+        });
+        const defaultAgentRoleFiles = yield* Cache.makeWith(
+          (content: string) =>
+            Effect.gen(function* () {
+              const path = yield* fileSystem.makeTempFileScoped({
+                prefix: "t3-codex-agent-",
+                suffix: ".toml",
+              });
+              yield* fileSystem.writeFileString(path, content);
+              return path;
+            }),
+          {
+            capacity: 32,
+            timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+          },
+        );
+        const readDefaultAgentRole = Effect.fn("CodexAdapterV2.readDefaultAgentRole")(function* (
+          policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy | undefined,
+        ) {
+          const selection = policy?.defaultSubagentModelSelection;
+          if (!selection || selection.instanceId !== adapterOptions.instanceId) return undefined;
+          return yield* Cache.get(defaultAgentRoleFiles, codexDefaultAgentRoleToml(selection));
         });
         const additionalContextByThread = yield* Ref.make(
           new Map<string, NonNullable<CodexTurnStartParams["additionalContext"]>>(),
@@ -7792,18 +7828,23 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ensureInitialized.pipe(
               Effect.andThen(mcpSessions.read(threadInput.threadId)),
               Effect.flatMap((mcpSession) =>
-                client.request("thread/start", {
-                  ...codexThreadRuntimeParams({
-                    threadId: threadInput.threadId,
-                    mcpSession,
-                    modelSelection: threadInput.modelSelection,
-                    runtimePolicy: threadInput.runtimePolicy,
-                  }),
-                  // Codex tags the child's MCP calls with thread_source "subagent".
-                  ...(IdAllocator.isDelegatedTaskThread(threadInput.threadId)
-                    ? { threadSource: "subagent" }
-                    : {}),
-                }),
+                readDefaultAgentRole(threadInput.runtimePolicy).pipe(
+                  Effect.flatMap((defaultAgentRolePath) =>
+                    client.request("thread/start", {
+                      ...codexThreadRuntimeParams({
+                        threadId: threadInput.threadId,
+                        mcpSession,
+                        modelSelection: threadInput.modelSelection,
+                        runtimePolicy: threadInput.runtimePolicy,
+                        defaultAgentRolePath,
+                      }),
+                      // Codex tags the child's MCP calls with thread_source "subagent".
+                      ...(IdAllocator.isDelegatedTaskThread(threadInput.threadId)
+                        ? { threadSource: "subagent" }
+                        : {}),
+                    }),
+                  ),
+                ),
               ),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
@@ -7833,6 +7874,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ...codexThreadRuntimeParams({
                   threadId: appThreadId,
                   mcpSession: yield* readMcpSession(appThreadId),
+                  defaultAgentRolePath: yield* readDefaultAgentRole(threadInput.runtimePolicy),
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),
@@ -8738,6 +8780,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ...codexThreadRuntimeParams({
                   threadId: threadInput.targetThreadId,
                   mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
+                  defaultAgentRolePath: yield* readDefaultAgentRole(threadInput.runtimePolicy).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderAdapter.ProviderAdapterForkThreadError({
+                          driver: CODEX_PROVIDER,
+                          providerThreadId: threadInput.sourceProviderThread.id,
+                          cause,
+                        }),
+                    ),
+                  ),
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),

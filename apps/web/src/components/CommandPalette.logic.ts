@@ -571,6 +571,7 @@ export function filterCommandPaletteGroups(input: {
   };
   projectSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   settingsSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
+  deliveryItems?: ReadonlyArray<CommandPaletteActionItem>;
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** Threads whose messages match, best first; threads already listed are skipped. */
   threadMessageItems?: ReadonlyArray<CommandPaletteActionItem>;
@@ -674,9 +675,11 @@ export function filterCommandPaletteGroups(input: {
   const listed = new Set(groups.flatMap((group) => group.items.map((item) => item.value)));
   // The items arrive cut to what the palette shows; see `nextShownOrder`.
   const messageItems = (input.threadMessageItems ?? []).filter((item) => !listed.has(item.value));
-  return messageItems.length === 0
-    ? groups
-    : [...groups, { value: "threads-messages", label: "In messages", items: messageItems }];
+  if (messageItems.length > 0)
+    groups.push({ value: "threads-messages", label: "In messages", items: messageItems });
+  if (input.deliveryItems?.length)
+    groups.push({ value: "deliveries", label: "交付文件", items: input.deliveryItems });
+  return groups;
 }
 
 /** Every option inside a submenu as one row, e.g. "New thread in t3code" or "Change theme: Dracula". */
@@ -800,7 +803,7 @@ export function buildRootGroups(input: {
 export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): string {
   switch (mode) {
     case "root":
-      return "Search commands, projects, and threads...";
+      return "Search projects, messages, and delivery files...";
     case "root-browse":
       return "Enter project path (e.g. ~/projects/my-app)";
     case "submenu":

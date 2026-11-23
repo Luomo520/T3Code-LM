@@ -74,6 +74,8 @@ function startBuiltinDownload(
   let receivedBytes = 0;
   let totalBytes = 0;
   let previousProgress = -1;
+  const source = new URL(url);
+  const fileHandoff = source.pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/");
   const send = (state: DesktopFileDownloadEvent["state"]) => {
     if (!sender.isDestroyed())
       sender.send("desktop:file-download-event", {
@@ -82,15 +84,15 @@ function startBuiltinDownload(
         state,
         receivedBytes,
         totalBytes,
+        ...(fileHandoff && state === "completed" ? { savedPath: path } : {}),
       } satisfies DesktopFileDownloadEvent);
   };
-  const source = new URL(url);
   // Asset URLs rotate per request. The strong ETag identifies the file version within its origin.
   send("progressing");
   const fetch = (input: string, options: RequestInit) => sender.session.fetch(input, options);
   const transfer = async () => {
     let checksums: readonly { algorithm: "sha256"; expectedHex: string }[] | undefined;
-    if (source.pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/")) {
+    if (fileHandoff) {
       const head = await fetch(url, { method: "HEAD", signal: controller.signal });
       const expectedHex = /^"sha256-([0-9a-f]{64})"$/.exec(head.headers.get("etag") ?? "")?.[1];
       if (!head.ok || !expectedHex) throw new Error("下载文件缺少有效的 SHA-256。");
@@ -171,7 +173,8 @@ async function performDownload(
   } catch {
     /* The selection remains available for this app session. */
   }
-  if (platform === "win32") return startBuiltinDownload(sender, id, url, fileName, path);
+  if (platform === "win32" || new URL(url).pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/"))
+    return startBuiltinDownload(sender, id, url, fileName, path);
   await new Promise<void>((resolve, reject) => {
     const session = sender.session;
     const timer = setTimeout(() => {

@@ -294,6 +294,12 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "device",
     "device",
   ),
+  t3_thread_file_save: tool(["发送", "正在准备", "已准备", "会话文件"], "device", "device"),
+  t3_thread_file_save_status: tool(
+    ["查看", "正在读取", "已读取", "文件保存回执"],
+    "device",
+    "device",
+  ),
   run_scheduled_task_now: tool(
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",

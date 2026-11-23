@@ -21,6 +21,8 @@ import {
   useVisibleThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
+import { takeDesktopThreadResume } from "../lib/desktopThreadResume";
+import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
@@ -36,6 +38,7 @@ function ChatIndexRouteView() {
 
 function IndexDraftLanding() {
   const projects = useProjects();
+  const { isReady: environmentsReady, presentationById } = useEnvironments();
   const threads = useVisibleThreadShells();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
@@ -43,6 +46,7 @@ function IndexDraftLanding() {
   // Read at effect time; this page can stay mounted while the router is already navigating away.
   const isStillOnIndex = useEffectEvent(() => router.state.location.pathname === "/");
   const startedAttemptRef = useRef<number | null>(null);
+  const launchThread = useRef<ReturnType<typeof takeDesktopThreadResume> | undefined>(undefined);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
   const mostRecentProject =
@@ -56,9 +60,32 @@ function IndexDraftLanding() {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts a draft thread in the most recent project and navigates to it while still on the index
   useEffect(() => {
     // Starting a draft after the user has left would replace the page they picked.
-    if (mostRecentProject === null || startedAttemptRef.current === attempt || !isStillOnIndex()) {
-      return;
+    if (startedAttemptRef.current === attempt || !isStillOnIndex()) return;
+    if (launchThread.current === undefined) launchThread.current = takeDesktopThreadResume();
+    const resume = launchThread.current;
+    if (resume?.kind === "server" && !environmentsReady) return;
+    if (resume !== null) {
+      launchThread.current = null;
+      if (resume.kind === "draft") {
+        startedAttemptRef.current = attempt;
+        void router.navigate({
+          to: "/draft/$draftId",
+          params: buildDraftThreadRouteParams(resume.draftId),
+          replace: true,
+        });
+        return;
+      }
+      if (presentationById.get(resume.threadRef.environmentId)?.entry.enabled) {
+        startedAttemptRef.current = attempt;
+        void router.navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(resume.threadRef),
+          replace: true,
+        });
+        return;
+      }
     }
+    if (mostRecentProject === null) return;
     const projectRef = scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id);
     if (readProject(projectRef) === null) {
       return;
@@ -73,7 +100,7 @@ function IndexDraftLanding() {
       .catch(() => {
         setStartState((state) => ({ ...state, failed: true }));
       });
-  }, [attempt, handleNewThread, mostRecentProject]);
+  }, [attempt, environmentsReady, handleNewThread, mostRecentProject, presentationById, router]);
 
   if (mostRecentProject !== null) {
     return startState.failed ? (

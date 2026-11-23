@@ -5,6 +5,7 @@ import { BackHandler, Keyboard, View } from "react-native";
 import { AppBar } from "../../../components/ui/AppBar";
 import { useWorkspaceConnectionState } from "../../../state/workspace";
 import { useHardwareKeyboardCommand } from "../../keyboard/hardwareKeyboardCommands";
+import { useOpenCommandPalette } from "../../keyboard/HardwareKeyboardCommandProvider";
 import { WorkspaceBrandTitle } from "./WorkspaceBrandTitle";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import {
@@ -20,6 +21,7 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
   const listFocused =
     homeFocused && (workspace === null || workspace.state.selectedTab === "threads");
   const connectionState = useWorkspaceConnectionState();
+  const openCommandPalette = useOpenCommandPalette();
   const { search, sidebar } = props;
   const onSearchQueryChange = search.onChangeText;
   const [searchOpen, setSearchOpen] = useState(false);
@@ -72,9 +74,9 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
         value: search.value,
         onChangeText: onSearchQueryChange,
         placeholder: search.placeholder,
-        accessibilityLabel: search.accessibilityLabel,
+        accessibilityLabel: searching ? search.accessibilityLabel : "跨项目搜索",
         active: searching,
-        onOpen: openSearch,
+        onOpen: openCommandPalette,
         onClose: closeSearch,
       }}
       menus={
@@ -83,7 +85,10 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
               {
                 title: "Filter threads",
                 icon: workspaceListFilterIcon(props.filter.customized),
-                items: props.filter.items,
+                items: [
+                  ...props.filter.items,
+                  { id: "search-recent-threads", title: "在最近列表中查找", onPress: openSearch },
+                ],
               },
             ]
           : undefined
