@@ -1,4 +1,7 @@
-import { FORK_RELEASE_VERSION, FORK_ANDROID_VERSION_CODE } from "../../packages/shared/src/forkRelease.generated.ts";
+import {
+  FORK_RELEASE_VERSION,
+  FORK_ANDROID_VERSION_CODE,
+} from "../../packages/shared/src/forkRelease.generated.ts";
 import type { ExpoConfig } from "expo/config";
 
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
@@ -462,6 +465,7 @@ const config: ExpoConfig = {
     // MainActivity mods run in reverse order; extend the tablet-orientation override.
     "./plugins/withAndroidWindowDisplayMetrics.cjs",
     "./plugins/withAndroidTabletOrientation.cjs",
+    "./plugins/withAndroidWorkspacePhysicalTouch.cjs",
     ...(isIosPersonalTeamBuild ? ["./plugins/withoutIosPersonalTeamCapabilities.cjs"] : []),
   ],
   extra: {

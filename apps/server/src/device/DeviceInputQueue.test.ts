@@ -89,3 +89,29 @@ it("does not disclose the owner token and gives manual input precedence over a D
   expect(queue.update(key, left, request("one", "join", "wrong"), 5).lease).toBeUndefined();
   expect(queue.update(key, left, request("one", "status", first.lease), 6).state).toBe("active");
 });
+
+it("revokes active remote input for the local App and resumes the remaining queue", () => {
+  const queue = makeDeviceInputQueue();
+  const active = queue.update(key, left, request("one", "join"), 0);
+  queue.update(key, left, request("one", "activate", active.lease), 1);
+  const waiting = queue.update(key, left, request("two", "join"), 2);
+  const local = queue.update(key, right, request("three", "join"), 3, true);
+  expect(local).toMatchObject({ state: "active", ownerThreadId: null, ownerLocalApp: true });
+  expect(queue.allows(key, left, active.lease!, 3)).toBe(false);
+  expect(queue.allows(key, right, local.lease!, 3)).toBe(false);
+  expect(queue.update(key, left, request("two", "activate", waiting.lease), 4)).toMatchObject({
+    state: "waiting",
+    ahead: 1,
+  });
+  queue.update(key, right, request("three", "release", local.lease), 5, true);
+  expect(queue.update(key, left, request("two", "status", waiting.lease), 6).state).toBe("ready");
+  const nextLocal = queue.update(key, right, request("three", "join"), 7, true);
+  queue.closeApp(key);
+  expect(queue.update(key, right, request("three", "status", nextLocal.lease), 8, true).state).toBe(
+    "idle",
+  );
+  expect(queue.update(key, left, request("two", "activate", waiting.lease), 9).state).toBe(
+    "active",
+  );
+  expect(queue.allows(key, left, waiting.lease!, 9)).toBe(true);
+});

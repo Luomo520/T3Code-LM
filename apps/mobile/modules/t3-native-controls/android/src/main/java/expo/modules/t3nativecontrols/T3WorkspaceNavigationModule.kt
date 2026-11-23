@@ -67,6 +67,9 @@ import expo.modules.kotlin.views.ExpoView
 class T3WorkspaceNavigationModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("T3WorkspaceNavigation")
+    Function("matchesPhysicalTouch") { timestamp: Double ->
+      T3WorkspacePhysicalTouch.matchesPhysicalTouch(timestamp)
+    }
     View(T3WorkspaceNavigationView::class) {
       Prop("tabs") { view: T3WorkspaceNavigationView, value: List<String> -> view.tabs = value }
       Prop("selectedTab") { view: T3WorkspaceNavigationView, value: String ->
@@ -124,6 +127,9 @@ class T3WorkspaceNavigationView(
   override val shouldUseAndroidLayout = true
 
   private val onTabSelected by EventDispatcher()
+  private fun selectTab(tab: String) {
+    onTabSelected(mapOf("tab" to tab, "physicalTouch" to T3WorkspacePhysicalTouch.duringPhysicalTouch()))
+  }
   private val onNewThread by EventDispatcher()
   private val onOverlayChange by EventDispatcher()
   var tabs by mutableStateOf(listOf("threads", "pullRequests", "usage", "settings"))
@@ -188,7 +194,7 @@ class T3WorkspaceNavigationView(
                 tabs.forEach { tab ->
                   NavigationBarItem(
                     selected = selectedTab == tab,
-                    onClick = { onTabSelected(mapOf("tab" to tab)) },
+                    onClick = { selectTab(tab) },
                     icon = { Icon(tabIconPainter(tab), contentDescription = null) },
                     label = { Text(tabTitle(tab), fontSize = (12 * textScale).sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -233,7 +239,7 @@ class T3WorkspaceNavigationView(
               .selectable(
                 selected = selected,
                 role = Role.Tab,
-                onClick = { onTabSelected(mapOf("tab" to tab)) },
+                onClick = { selectTab(tab) },
               )
               .semantics { contentDescription = expandedTabTitle(tab) }
               .padding(4.dp)
@@ -334,7 +340,7 @@ class T3WorkspaceNavigationView(
         tabs.forEach { tab ->
           railItem(tab, fraction) {
             expanded = false
-            onTabSelected(mapOf("tab" to tab))
+            selectTab(tab)
           }
         }
         Spacer(Modifier.weight(1f))

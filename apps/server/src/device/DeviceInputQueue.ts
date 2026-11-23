@@ -17,6 +17,7 @@ type Entry = Owner & {
   readonly lease: string;
   deadline: number;
   active: boolean;
+  readonly localApp?: true;
 };
 
 export const deviceInputKey = (hostId: string, deviceId: string) =>
@@ -36,6 +37,7 @@ export function makeDeviceInputQueue() {
     sessionId: AuthSessionId,
     input: DeviceInputQueueInput,
     now: number,
+    localApp?: true,
   ): DeviceInputQueueReply {
     for (const deviceKey of devices.keys()) expire(deviceKey, now);
     const entries = devices.get(key) ?? [];
@@ -43,20 +45,32 @@ export function makeDeviceInputQueue() {
       (entry) =>
         entry.sessionId === sessionId &&
         entry.threadId === input.threadId &&
-        entry.panelId === input.panelId,
+        entry.panelId === input.panelId &&
+        entry.localApp === localApp,
     );
     const fresh = input.action === "join" && index < 0;
     if (fresh) {
-      entries.push({
+      const entry: Entry = {
         sessionId,
         threadId: input.threadId,
         panelId: input.panelId,
         lease: NodeCrypto.randomUUID(),
         deadline: now + LEASE_MS,
         active: false,
-      });
+        ...(localApp ? { localApp } : {}),
+      };
+      if (localApp) {
+        // 本机手势优先，并作废旧的远程写入租约。
+        for (let index = entries.length - 1; index >= 0; index--) {
+          if (entries[index]?.active) entries.splice(index, 1);
+        }
+        entries.unshift(entry);
+        index = 0;
+      } else {
+        entries.push(entry);
+        index = entries.length - 1;
+      }
       devices.set(key, entries);
-      index = entries.length - 1;
     }
     let current = entries[index];
     if (current && input.action === "release" && current.lease === input.lease) {
@@ -71,13 +85,14 @@ export function makeDeviceInputQueue() {
       if (input.action === "join" || current.lease === input.lease) {
         current.deadline = now + LEASE_MS;
       }
-      if (index === 0 && input.action === "activate" && !dockActions.has(key)) {
+      if (index === 0 && (localApp || (input.action === "activate" && !dockActions.has(key)))) {
         current.active = true;
       }
     }
     return {
       state: current ? (index > 0 ? "waiting" : current.active ? "active" : "ready") : "idle",
-      ownerThreadId: entries[0]?.threadId ?? null,
+      ownerThreadId: entries[0]?.localApp ? null : (entries[0]?.threadId ?? null),
+      ...(entries[0]?.localApp ? { ownerLocalApp: true as const } : {}),
       ahead: Math.max(0, index),
       ...(current ? { lease: current.lease } : {}),
     };
@@ -100,10 +115,16 @@ export function makeDeviceInputQueue() {
       const first = devices.get(key)?.[0];
       return (
         first?.active === true &&
+        !first.localApp &&
         first.deadline > now &&
         first.sessionId === sessionId &&
         first.lease === lease
       );
+    },
+    closeApp(key: string) {
+      const entries = devices.get(key)?.filter((entry) => !entry.localApp);
+      if (entries?.length) devices.set(key, entries);
+      else devices.delete(key);
     },
     closeThread(key: string, threadId: ThreadId) {
       const entries = devices.get(key)?.filter((entry) => entry.threadId !== threadId);

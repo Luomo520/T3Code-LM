@@ -17,9 +17,12 @@ const state = vi.hoisted(() => ({
   nativeRenders: vi.fn(),
   dismiss: vi.fn(),
   refreshKeyboard: vi.fn(),
+  claimInput: vi.fn(),
+  matchesPhysicalTouch: vi.fn(),
   focusEffects: new Set<() => void>(),
 }));
 vi.mock("expo", () => ({
+  requireOptionalNativeModule: () => ({ matchesPhysicalTouch: state.matchesPhysicalTouch }),
   requireNativeView: () => () => {
     state.nativeRenders();
     return <div data-native="true" />;
@@ -38,7 +41,7 @@ vi.mock("react-native", () => ({
   ),
   Pressable: (props: {
     children?: ReactNode;
-    onPress?: () => void;
+    onPress?: (event: { nativeEvent: { timestamp: number } }) => void;
     onPressIn?: () => void;
     onPressOut?: () => void;
     accessibilityLabel?: string;
@@ -49,7 +52,7 @@ vi.mock("react-native", () => ({
     <button
       aria-label={props.accessibilityLabel}
       aria-selected={props.accessibilityState?.selected}
-      onClick={props.onPress}
+      onClick={() => props.onPress?.({ nativeEvent: { timestamp: 123 } })}
       onMouseDown={props.onPressIn}
       onMouseUp={props.onPressOut}
       data-style={JSON.stringify(
@@ -123,6 +126,9 @@ vi.mock("../../../lib/rootNavigation", () => ({
 vi.mock("../../../state/workspace", () => ({
   useWorkspaceConnectionState: () => ({ hasConnections: state.connected }),
 }));
+vi.mock("../../devices/useAndroidDockInputPriority", () => ({
+  useAndroidDockInputPriority: () => state.claimInput,
+}));
 vi.mock("./android-workspace-navigation-colors", () => ({
   androidWorkspaceNavigationColors: () => ({
     containerColor: "#fff",
@@ -185,6 +191,7 @@ beforeEach(() => {
   state.reduceMotion = false;
   state.settingsOpen = false;
   state.focusEffects.clear();
+  state.matchesPhysicalTouch.mockReset();
   vi.clearAllMocks();
 });
 afterEach(async () => {
@@ -226,7 +233,7 @@ it("keeps the dock centered on a narrow screen with an asymmetric inset and the 
     expect(circle.overflow).toBe("hidden");
   }
 });
-it("preserves tab selection and root navigation reset", async () => {
+it("preserves navigation and claims input only for a recognized physical touch", async () => {
   const onSelect = vi.fn();
   const { container } = await mount(
     <AndroidWorkspaceNavigation floating onNewThread={() => {}} onSelect={onSelect} />,
@@ -242,6 +249,13 @@ it("preserves tab selection and root navigation reset", async () => {
   });
   expect(onSelect).toHaveBeenCalledOnce();
   expect(state.dismiss).toHaveBeenCalledOnce();
+  expect(state.matchesPhysicalTouch).toHaveBeenCalledWith(123);
+  expect(state.claimInput).not.toHaveBeenCalled();
+  state.matchesPhysicalTouch.mockReturnValue(true);
+  await act(async () =>
+    (container.querySelector('[aria-label="会话"]') as HTMLButtonElement).click(),
+  );
+  expect(state.claimInput).toHaveBeenCalledOnce();
 });
 it("retargets the same indicator when the workspace changes from threads to usage to settings", async () => {
   const element = () => <FloatingWorkspaceTabs onNewThread={() => {}} />;

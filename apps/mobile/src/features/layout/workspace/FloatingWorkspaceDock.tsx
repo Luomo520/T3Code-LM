@@ -38,7 +38,7 @@ const pressTiming = { duration: 90, reduceMotion: ReduceMotion.Never };
 export function FloatingWorkspaceDock(props: {
   readonly tabs: readonly AndroidWorkspaceNavigationTab[];
   readonly selectedTab: AndroidWorkspaceNavigationTab;
-  readonly onSelect: (tab: AndroidWorkspaceNavigationTab) => void;
+  readonly onSelect: (tab: AndroidWorkspaceNavigationTab, touchTimestamp: number) => void;
   readonly width: number;
   readonly height: number;
   readonly diameter: number;
@@ -174,7 +174,7 @@ export function FloatingWorkspaceDock(props: {
               accessibilityRole="tab"
               accessibilityLabel={label}
               accessibilityState={{ selected }}
-              onPress={() => props.onSelect(tab)}
+              onPress={(event) => props.onSelect(tab, event.nativeEvent.timestamp)}
               onPressIn={() => pressIn(tab)}
               onPressOut={() => pressOut(tab)}
               style={({ pressed }) => ({

@@ -46,8 +46,10 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock("@react-navigation/native", () => ({
+  useFocusEffect: () => undefined,
   useNavigation: () => ({ navigate: harness.navigate, isFocused: () => true }),
 }));
+vi.mock("react-native", () => ({ AppState: { currentState: "active" } }));
 function serverConfig() {
   return {
     environment: { capabilities: { windowsCompanion: harness.supportsWindowsCompanion } },
@@ -83,7 +85,18 @@ vi.mock("../../state/query", () => ({
       atom === "access"
         ? { type: "snapshot", payload: { clientSessions: harness.clients } }
         : atom === "devices"
-          ? { devices: [{ deviceId: "pc", name: "已配对的电脑", online: true }] }
+          ? {
+              devices: [
+                {
+                  deviceId: "pc",
+                  name: "已配对的电脑",
+                  online: true,
+                  info: {},
+                  lastSeen: "2026-11-23T00:00:00Z",
+                  recentTasks: [],
+                },
+              ],
+            }
           : null,
     error: atom ? harness.error : null,
     refresh: harness.refresh,

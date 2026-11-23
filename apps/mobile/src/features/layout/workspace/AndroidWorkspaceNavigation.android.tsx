@@ -3,7 +3,7 @@ import { androidHomeTheme } from "../../home/androidHomeTheme";
 import { FloatingWorkspaceDock } from "./FloatingWorkspaceDock";
 import { type DockGlassScope } from "../../../components/ui/DockGlass";
 import { selectedNavigationTab, visibleNavigationTabs } from "./navigation-tab-order";
-import { requireNativeView } from "expo";
+import { requireNativeView, requireOptionalNativeModule } from "expo";
 import {
   CommonActions,
   useFocusEffect,
@@ -39,6 +39,7 @@ import { useAndroidWorkspaceRoot } from "./AndroidWorkspaceTabsProvider";
 import { useNavigationTabOrder, useHiddenNavigationTabs } from "./navigation-tabs";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { FLOATING_TABS, floatingDockMetrics } from "./floating-workspace-tabs";
+import { useAndroidDockInputPriority } from "../../devices/useAndroidDockInputPriority";
 
 // Matches RAIL_WIDTH in the native rail.
 export const ANDROID_WORKSPACE_RAIL_WIDTH = 72;
@@ -61,13 +62,19 @@ interface NativeNavigationProps extends ViewProps {
   readonly actionColor: number;
   readonly actionContentColor: number;
   readonly onTabSelected: (
-    event: NativeSyntheticEvent<{ readonly tab: AndroidWorkspaceNavigationTab }>,
+    event: NativeSyntheticEvent<{
+      readonly tab: AndroidWorkspaceNavigationTab;
+      readonly physicalTouch?: boolean;
+    }>,
   ) => void;
   readonly onNewThread: () => void;
   readonly onOverlayChange: (event: NativeSyntheticEvent<{ readonly overlay: boolean }>) => void;
 }
 
 const NativeNavigation = requireNativeView<NativeNavigationProps>("T3WorkspaceNavigation");
+const physicalTouch = requireOptionalNativeModule<{
+  matchesPhysicalTouch?: (timestamp: number) => boolean;
+}>("T3WorkspaceNavigation");
 
 function nativeColor(value: string) {
   const color = processColor(value);
@@ -93,6 +100,7 @@ export function AndroidWorkspaceNavigation(props: {
   const insets = useSafeAreaInsets();
   const toolbar = useToolbarLayout();
   const connectionState = useWorkspaceConnectionState();
+  const claimInput = useAndroidDockInputPriority();
   const keyboardVisible = useSoftKeyboardShowing();
   useFocusEffect(refreshSoftKeyboardShowing);
   const { layout } = useAdaptiveWorkspaceLayout();
@@ -130,7 +138,8 @@ export function AndroidWorkspaceNavigation(props: {
   const barWidth = (props.paneWidth ?? window.width) - 2 * horizontalInset;
   const metrics = floatingDockMetrics(tabs.length, fabSize, barWidth);
   if (!rail && keyboardVisible) return null;
-  const selectTab = (tab: AndroidWorkspaceNavigationTab) => {
+  const selectTab = (tab: AndroidWorkspaceNavigationTab, touched: boolean) => {
+    if (touched) claimInput();
     Keyboard.dismiss();
     if (tab !== "settings") workspace.dispatch({ type: "select", tab });
     const rootState = rootNavigationRef.getRootState();
@@ -149,7 +158,12 @@ export function AndroidWorkspaceNavigation(props: {
       <FloatingWorkspaceDock
         tabs={tabs}
         selectedTab={selectedTab}
-        onSelect={selectTab}
+        onSelect={(tab, timestamp) =>
+          selectTab(
+            tab,
+            Number.isFinite(timestamp) && physicalTouch?.matchesPhysicalTouch?.(timestamp) === true,
+          )
+        }
         width={metrics.width}
         height={metrics.height}
         diameter={metrics.diameter}
@@ -196,7 +210,9 @@ export function AndroidWorkspaceNavigation(props: {
         unselectedColor={nativeColor(unselectedColor)}
         actionColor={nativeColor(colors["--color-primary"])}
         actionContentColor={nativeColor(colors["--color-primary-foreground"])}
-        onTabSelected={(event) => selectTab(event.nativeEvent.tab)}
+        onTabSelected={(event) =>
+          selectTab(event.nativeEvent.tab, event.nativeEvent.physicalTouch === true)
+        }
         onNewThread={() => {
           Keyboard.dismiss();
           props.onNewThread();

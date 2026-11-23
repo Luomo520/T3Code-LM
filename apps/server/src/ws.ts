@@ -1450,10 +1450,6 @@ export const layerWsRpc = (
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const { surface, clientOs, clientDeviceType } = clientAnalyticsProps;
-      yield* Effect.acquireRelease(
-        Effect.sync(() => registerDirectHandoffClient(currentSessionId, surface, clientOs)),
-        (unregister) => Effect.sync(() => unregister?.()),
-      );
       const clientOrigin = {
         // DPoP 设备重连后保留别名。旧凭据只能标识会话，使用独立摘要避免发送认证标识。
         clientAlias: NodeCrypto.createHash("sha256")
@@ -3368,6 +3364,8 @@ export const layerWsRpc = (
         [WS_METHODS.deviceShutdown]: (input) => deviceService.shutdown(input),
         [WS_METHODS.deviceDetail]: (input) => deviceService.detail(input),
         [WS_METHODS.deviceAction]: (input) => deviceService.action(input, currentSessionId),
+        [WS_METHODS.deviceUsbBinding]: (input) =>
+          deviceService.usbBinding(input, currentSession, surface === "mobile"),
         [WS_METHODS.deviceInputQueue]: (input) =>
           deviceService.physicalInputQueue(input, currentSessionId),
         [WS_METHODS.subscribeDeviceState]: (_input) => DeviceService.stateStream(deviceService),
@@ -3789,7 +3787,16 @@ export const layer = Layer.unwrap(
             )
           : rpcWebSocketHttpEffect;
         return yield* Effect.acquireUseRelease(
-          sessions.markConnected(session.sessionId),
+          sessions.markConnected(session.sessionId).pipe(
+            // 直传能力和认证连接同生命周期。RPC 处理层先完成构建，实际 WebSocket 在下方运行。
+            Effect.map(() =>
+              registerDirectHandoffClient(
+                session.sessionId,
+                clientAnalyticsProps.surface,
+                clientAnalyticsProps.clientOs,
+              ),
+            ),
+          ),
           () =>
             Effect.raceFirst(
               framedRpcWebSocketHttpEffect,
@@ -3801,7 +3808,10 @@ export const layer = Layer.unwrap(
                 }),
               ),
             ),
-          () => sessions.markDisconnected(session.sessionId),
+          (unregister) =>
+            Effect.sync(() => unregister?.()).pipe(
+              Effect.andThen(sessions.markDisconnected(session.sessionId)),
+            ),
         );
       }).pipe(
         Effect.catchTags({

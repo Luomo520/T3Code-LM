@@ -3,6 +3,8 @@ import {
   type AndroidT3DockState,
   type AndroidT3DockTab,
   type DeviceActionInput,
+  type DeviceUsbBindingInput,
+  type DeviceUsbBindingReply,
   type DeviceInputQueueInput,
   type DeviceInputQueueReply,
   DeviceActionUnavailableError,
@@ -55,6 +57,7 @@ import {
   pruneAgentDeviceLaunchers,
 } from "./AgentDeviceShim.ts";
 import * as ServerConfig from "../config.ts";
+import type { AuthenticatedSession } from "../auth/EnvironmentAuth.ts";
 import {
   agentDeviceConfigPath,
   agentDeviceSession,
@@ -81,6 +84,7 @@ import { isLocalSshDeviceHost, remoteSshDeviceHosts } from "./localSshDeviceHost
 import { readDeviceDetail, runDeviceAction } from "./DeviceActions.ts";
 import { deviceInputKey, makeDeviceInputQueue } from "./DeviceInputQueue.ts";
 import { androidT3Dock } from "./AndroidT3Dock.ts";
+import { makeAndroidUsbBindings, verifyAndroidUsbBinding } from "./AndroidUsbBinding.ts";
 import { readAndroidPhysicalDeviceStatus } from "./AndroidPhysicalDevice.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
@@ -231,6 +235,11 @@ export class DeviceService extends Context.Service<
       input: DeviceActionInput,
       sessionId?: AuthSessionId,
     ) => Effect.Effect<DeviceDetail, DeviceError>;
+    readonly usbBinding: (
+      input: DeviceUsbBindingInput,
+      session: AuthenticatedSession,
+      isMobile: boolean,
+    ) => Effect.Effect<DeviceUsbBindingReply, DeviceError>;
     readonly t3Dock: (input: {
       readonly threadId: ThreadId;
       readonly hostId: DeviceHostId;
@@ -327,11 +336,14 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     ),
   installTool?: (tool: "hub" | "agent") => Effect.Effect<unknown, DeviceError>,
   launchers?: AgentDeviceLaunchers,
+  usbBindingPath?: string,
 ) {
   const settings = yield* ServerSettings.ServerSettingsService;
   const digest = yield* Digest.Digest;
   const lifecycleLock = yield* Semaphore.make(1);
   const deviceInputQueue = makeDeviceInputQueue();
+  const usbBindings = makeAndroidUsbBindings(usbBindingPath);
+  const bindingLock = yield* Semaphore.make(1);
   const readDeviceSettings = settings.getSettings.pipe(
     Effect.map((value) => ({
       enabled: value.enableDeviceSupport,
@@ -1196,6 +1208,124 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     );
   });
 
+  const usbBinding: DeviceService["Service"]["usbBinding"] = Effect.fn("DeviceService.usbBinding")(
+    function (input, session, isMobile) {
+      const hostId = "hostId" in input ? input.hostId : LOCAL_DEVICE_HOST_ID;
+      const unavailable = (reason: string) => new DeviceHostUnavailableError({ hostId, reason });
+      const store = <T>(run: () => Promise<T>) =>
+        Effect.tryPromise({
+          try: run,
+          catch: () => unavailable("无法读写 USB 和 App 绑定记录。"),
+        }).pipe(Effect.uninterruptible);
+      const remove = (binding: NonNullable<Awaited<ReturnType<typeof usbBindings.byUsb>>>) =>
+        store(() => usbBindings.remove(binding)).pipe(
+          Effect.tap(() => Effect.sync(() => deviceInputQueue.closeApp(binding.usb))),
+          Effect.as({ _tag: "status", bound: false } as const),
+          Effect.uninterruptible,
+        );
+      return bindingLock.withPermit(
+        Effect.gen(function* () {
+          const actor = session.proofKeyThumbprint
+            ? `dpop:${session.proofKeyThumbprint}`
+            : `session:${session.sessionId}`;
+          const now = yield* Clock.currentTimeMillis;
+          if (!("hostId" in input)) {
+            if (!isMobile) return yield* unavailable("请在已认证的手机 App 完成操作。");
+            if (input._tag === "offer") {
+              const proof = usbBindings.offer(input.code, actor, now);
+              if (!proof) return yield* unavailable("绑定码已失效或已由另一台手机使用。");
+              return { _tag: "proof", proof } as const;
+            }
+            const binding = yield* store(() => usbBindings.byApp(actor));
+            if (input._tag === "appInput") {
+              if (!binding) return { _tag: "input", state: "unbound" } as const;
+              const view = deviceInputQueue.update(
+                binding.usb,
+                session.sessionId,
+                {
+                  hostId: LOCAL_DEVICE_HOST_ID,
+                  deviceId: "app",
+                  threadId: "local-app-input" as ThreadId,
+                  action: input.action,
+                  panelId: input.panelId,
+                  ...(input.lease ? { lease: input.lease } : {}),
+                },
+                now,
+                true,
+              );
+              return {
+                _tag: "input",
+                state:
+                  input.action === "release"
+                    ? "released"
+                    : view.state === "active"
+                      ? "active"
+                      : "waiting",
+                ...(view.lease ? { lease: view.lease } : {}),
+              } as const;
+            }
+            if (binding && input._tag === "unbindApp") return yield* remove(binding);
+            return binding
+              ? ({ _tag: "status", bound: true, deviceName: binding.name } as const)
+              : ({ _tag: "status", bound: false } as const);
+          }
+          if (isMobile) return yield* unavailable("请在打开真机的电脑设备面板发起或确认绑定。");
+          const { state } = yield* SynchronizedRef.get(stateRef);
+          const device = findDevice(state, input.hostId, input.deviceId);
+          const opened = state.sessions.find(
+            (active) =>
+              active.threadId === input.threadId &&
+              active.hostId === input.hostId &&
+              active.deviceId === input.deviceId,
+          );
+          if (!device?.physical || device.platform !== "android" || !opened)
+            return yield* unavailable("请先在本会话的设备面板打开 Android 真机。");
+          const key = deviceInputKey(input.hostId, input.deviceId);
+          const panel = `${opened.threadId}\n${opened.openedAt}`;
+          const binding = yield* store(() => usbBindings.byUsb(key));
+          if (input._tag === "start") {
+            if (binding) return yield* unavailable("此设备已有绑定，请先解除。");
+            const code = usbBindings.start(key, actor, panel, now);
+            if (!code) return yield* unavailable("绑定请求过多，请等现有绑定码过期后重试。");
+            return { _tag: "challenge", code } as const;
+          }
+          if (input._tag === "confirm") {
+            const pending = usbBindings.proof(input.code, key, actor, panel, now);
+            const ready = yield* currentReadiness(input.hostId);
+            if (
+              !pending ||
+              !ready ||
+              !(yield* verifyAndroidUsbBinding(ready.run, input.deviceId, pending.proof))
+            ) {
+              return yield* unavailable("请用 USB 连接所选手机，在手机上保持绑定校验页面打开。");
+            }
+            const { state: current } = yield* SynchronizedRef.get(stateRef);
+            if (!current.sessions.includes(opened))
+              return yield* unavailable("真机会话已关闭，请重新打开设备后发起绑定。");
+            const checkedAt = yield* Clock.currentTimeMillis;
+            const saved = yield* store(() =>
+              usbBindings.finish(
+                input.code,
+                key,
+                actor,
+                panel,
+                pending.proof,
+                device.name,
+                checkedAt,
+              ),
+            );
+            if (!saved) return yield* unavailable("绑定请求已过期，或手机已有绑定。请重新核验。");
+            return { _tag: "status", bound: true, deviceName: saved.name } as const;
+          }
+          if (binding && input._tag === "unbindUsb") return yield* remove(binding);
+          return binding
+            ? ({ _tag: "status", bound: true, deviceName: binding.name } as const)
+            : ({ _tag: "status", bound: false } as const);
+        }),
+      );
+    },
+  );
+
   const t3Dock: DeviceService["Service"]["t3Dock"] = Effect.fn("DeviceService.t3Dock")(
     function* (input) {
       const { state } = yield* SynchronizedRef.get(stateRef);
@@ -1475,6 +1605,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       shutdown,
       detail,
       action,
+      usbBinding,
       t3Dock,
       physicalInputQueue,
       physicalInputMode,
@@ -1683,6 +1814,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
     launchers,
+    path.join(config.stateDir, "android-usb-bindings.json"),
   );
   const hostContext =
     yield* Effect.context<Effect.Services<ReturnType<typeof SshDeviceHost.make>>>();

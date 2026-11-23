@@ -306,6 +306,8 @@ import {
   DeviceActionInput,
   DeviceInputQueueInput,
   DeviceInputQueueReply,
+  DeviceUsbBindingInput,
+  DeviceUsbBindingReply,
   DeviceCloseInput,
   DeviceConfigureInput,
   DeviceDetail,
@@ -528,6 +530,7 @@ export const WS_METHODS = {
   deviceDetail: "device.detail",
   deviceAction: "device.action",
   deviceInputQueue: "device.inputQueue",
+  deviceUsbBinding: "device.usbBinding",
 
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
@@ -1853,6 +1856,12 @@ const WsDeviceActionRpc = Rpc.make(WS_METHODS.deviceAction, {
   error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
 });
 
+const WsDeviceUsbBindingRpc = Rpc.make(WS_METHODS.deviceUsbBinding, {
+  payload: DeviceUsbBindingInput,
+  success: DeviceUsbBindingReply,
+  error: Schema.Union([DeviceError, EnvironmentAuthorizationError]),
+});
+
 const WsDeviceInputQueueRpc = Rpc.make(WS_METHODS.deviceInputQueue, {
   payload: DeviceInputQueueInput,
   success: DeviceInputQueueReply,
@@ -2376,6 +2385,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeviceDetailRpc,
   WsDeviceActionRpc,
   WsDeviceInputQueueRpc,
+  WsDeviceUsbBindingRpc,
   WsSubscribeDeviceStateRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,

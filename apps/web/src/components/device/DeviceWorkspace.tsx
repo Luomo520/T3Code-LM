@@ -21,6 +21,7 @@ import { DeviceStreamView } from "./DeviceStreamView";
 import { DeviceToolsPanel } from "./DeviceToolsPanel";
 import { useDeviceInputQueue } from "./useDeviceInputQueue";
 import { useDeviceControls } from "./useDeviceControls";
+import { AndroidUsbBinding } from "./AndroidUsbBinding";
 
 const isDeviceScreenshotError = Schema.is(DeviceScreenshotError);
 
@@ -153,6 +154,20 @@ export function DeviceWorkspace(props: {
   return (
     <>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {isPhysicalAndroid && runsHostCommands && canOperate ? (
+          <AndroidUsbBinding
+            key={JSON.stringify([
+              props.environmentId,
+              props.threadId,
+              props.device.hostId,
+              props.device.id,
+            ])}
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            device={props.device}
+            foreground={foreground}
+          />
+        ) : null}
         {screenshotError || (controls.error && !toolsOpen) ? (
           <p role="alert" className="px-3 py-2 text-xs text-destructive">
             {screenshotError ?? controls.error}
@@ -194,6 +209,7 @@ export function DeviceWorkspace(props: {
                       {queue.view.ownerThreadId && queue.view.ownerThreadId !== props.threadId
                         ? ` · 占用会话 ${queue.view.ownerThreadId}`
                         : ""}
+                      {queue.view.ownerLocalApp ? " · 手机正在直接操作" : ""}
                       {queue.error ? ` · ${queue.error}` : ""}
                     </span>
                     <Button

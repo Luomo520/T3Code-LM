@@ -465,6 +465,7 @@ function OpenDevicePreview({
             {queue.view.ownerThreadId && queue.view.ownerThreadId !== session.threadId
               ? ` · 占用会话 ${queue.view.ownerThreadId}`
               : ""}
+            {queue.view.ownerLocalApp ? " · 手机正在直接操作" : ""}
           </AppText>
           {queue.view.state !== "idle" ? (
             <Button

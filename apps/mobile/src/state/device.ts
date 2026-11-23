@@ -11,6 +11,18 @@ import { environmentSession, usePreparedConnection } from "./session";
 
 export const deviceEnvironment = createDeviceEnvironmentAtoms(connectionAtomRuntime);
 
+// 仅用于跳过短时间内已确认未绑定的环境，服务端仍在每次请求时检查身份。
+const androidUsbUnboundUntil = new Map<EnvironmentId, number>();
+
+export function setAndroidUsbBindingHint(environmentId: EnvironmentId, bound: boolean) {
+  if (bound) androidUsbUnboundUntil.delete(environmentId);
+  else androidUsbUnboundUntil.set(environmentId, Date.now() + 60_000);
+}
+
+export function mayHaveAndroidUsbBinding(environmentId: EnvironmentId) {
+  return (androidUsbUnboundUntil.get(environmentId) ?? 0) <= Date.now();
+}
+
 // Hub tickets are single use, so each viewer resolves its own access: a new
 // viewer (a reload, a device switch, a return to the screen) never reuses a
 // ticket an earlier connection already spent.

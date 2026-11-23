@@ -26,6 +26,7 @@ import { environmentSession, readEnvironmentScope, sessionHasScope } from "../..
 import { useAtomCommand } from "../../state/use-atom-command";
 import { environmentStatusText } from "../connection/environmentStatusText";
 import { LocalApkInstallSection } from "./components/LocalApkInstallSection";
+import { AndroidUsbBindingSettings } from "./components/AndroidUsbBindingSettings";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
@@ -174,6 +175,7 @@ function CrossDeviceAccess({ environmentId }: { readonly environmentId: Environm
     <SettingsScreen title="设备授权">
       <ScreenScrollView
         className="flex-1"
+        keyboardShouldPersistTaps="handled"
         contentInsetAdjustmentBehavior="automatic"
         contentContainerClassName="gap-4 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
@@ -190,6 +192,9 @@ function CrossDeviceAccess({ environmentId }: { readonly environmentId: Environm
         ) : null}
         {environment ? (
           <WindowsCompanionSettings environmentId={environmentId} connected={connected} />
+        ) : null}
+        {environment ? (
+          <AndroidUsbBindingSettings environmentId={environmentId} connected={connected} />
         ) : null}
         <SettingsSection
           title="授权会话"

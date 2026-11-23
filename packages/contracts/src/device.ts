@@ -459,6 +459,38 @@ const DeviceTarget = {
 };
 
 const DeviceInputTicket = Schema.String.check(Schema.isPattern(/^[0-9a-f-]{36}$/));
+const UsbDeviceTarget = { hostId: DeviceHostId, deviceId: DeviceId, threadId: ThreadId };
+const usbCode = Schema.String.check(Schema.isPattern(/^[0-9a-f]{12}$/u));
+export const DeviceUsbBindingInput = Schema.Union([
+  Schema.TaggedStruct("start", UsbDeviceTarget),
+  Schema.TaggedStruct("confirm", { ...UsbDeviceTarget, code: usbCode }),
+  Schema.TaggedStruct("offer", { code: usbCode }),
+  Schema.TaggedStruct("usbStatus", UsbDeviceTarget),
+  Schema.TaggedStruct("appStatus", {}),
+  Schema.TaggedStruct("unbindUsb", UsbDeviceTarget),
+  Schema.TaggedStruct("unbindApp", {}),
+  Schema.TaggedStruct("appInput", {
+    action: Schema.Literals(["join", "release"]),
+    panelId: DeviceInputTicket,
+    lease: Schema.optionalKey(DeviceInputTicket),
+  }),
+]);
+export type DeviceUsbBindingInput = typeof DeviceUsbBindingInput.Type;
+
+export const DeviceUsbBindingReply = Schema.Union([
+  Schema.TaggedStruct("challenge", { code: usbCode }),
+  Schema.TaggedStruct("proof", { proof: Schema.String }),
+  Schema.TaggedStruct("status", {
+    bound: Schema.Boolean,
+    deviceName: Schema.optionalKey(Schema.String),
+  }),
+  Schema.TaggedStruct("input", {
+    state: Schema.Literals(["unbound", "waiting", "active", "released"]),
+    lease: Schema.optionalKey(DeviceInputTicket),
+  }),
+]);
+export type DeviceUsbBindingReply = typeof DeviceUsbBindingReply.Type;
+
 export const DeviceInputQueueInput = Schema.Struct({
   hostId: DeviceHostId,
   deviceId: DeviceId,
@@ -472,6 +504,7 @@ export type DeviceInputQueueInput = typeof DeviceInputQueueInput.Type;
 export const DeviceInputQueueReply = Schema.Struct({
   state: Schema.Literals(["idle", "waiting", "ready", "active"]),
   ownerThreadId: Schema.NullOr(ThreadId),
+  ownerLocalApp: Schema.optionalKey(Schema.Literal(true)),
   ahead: Schema.Int,
   lease: Schema.optionalKey(DeviceInputTicket),
 });

@@ -84,6 +84,10 @@ export function createDeviceEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    usbBinding: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:device:usb-binding",
+      tag: WS_METHODS.deviceUsbBinding,
+    }),
     inputQueue: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:device:input-queue",
       tag: WS_METHODS.deviceInputQueue,
