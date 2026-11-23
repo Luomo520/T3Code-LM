@@ -20,7 +20,7 @@ const snapShotSource: SnapShotSource = {
 const D2_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1174 920"><rect width="1174" height="920"/></svg>';
 
-function ImagePreviewOpener() {
+function ImagePreviewOpener({ src = PIXEL }: { src?: string } = {}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -29,7 +29,7 @@ function ImagePreviewOpener() {
       </button>
       {open && (
         <ExpandedImageDialog
-          preview={{ images: [{ src: PIXEL, name: "shot.png", source: snapShotSource }], index: 0 }}
+          preview={{ images: [{ src, name: "shot.png", source: snapShotSource }], index: 0 }}
           onClose={() => setOpen(false)}
         />
       )}
@@ -117,6 +117,34 @@ describe("ExpandedImageDialog", () => {
     (screen.getByRole("button", { name: "Close image preview" }).element() as HTMLElement).focus();
     await userEvent.keyboard("{Escape}");
     await vi.waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
+  it("拖动放大的图片后保留缩放，点击空白返回原入口", async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 2400;
+    canvas.height = 1600;
+    await using screen = await render(<ImagePreviewOpener src={canvas.toDataURL()} />, {
+      router: false,
+    });
+    const opener = screen.getByRole("button", { name: "Open preview" });
+    await userEvent.click(opener);
+    const viewport = page.getByRole("region", { name: "shot.png, zoomable image" });
+    const image = page.getByRole("img", { name: "shot.png" }).element();
+    await vi.waitFor(() => expect((image as HTMLImageElement).naturalWidth).toBe(2400));
+    await userEvent.click(viewport);
+    const el = viewport.element();
+    const width = image.getBoundingClientRect().width;
+    const left = el.scrollLeft;
+    await userEvent.dragAndDrop(viewport, viewport, {
+      sourcePosition: { x: 90, y: 70 },
+      targetPosition: { x: 40, y: 70 },
+    });
+    expect(el.scrollLeft).toBeGreaterThan(left);
+    expect(image.getBoundingClientRect().width).toBe(width);
+    const dialog = page.getByRole("dialog");
+    await userEvent.click(dialog, { position: { x: 4, y: 4 } });
+    await expect.element(dialog).not.toBeInTheDocument();
+    await expect.element(opener).toHaveFocus();
   });
 
   it("scrolling pans the image while Ctrl+wheel zooms around the pointer", async () => {
