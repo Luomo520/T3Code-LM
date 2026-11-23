@@ -107,3 +107,50 @@ export function threadFileDestination(message: string): ThreadFileDestination {
   }
   return label ? { kind: "named", label } : { kind: "unclear" };
 }
+
+export function threadFileManagementIntent(message: string): "cancel" | "redirect" | undefined {
+  const text = message.normalize("NFKC").trim();
+  if (
+    /[?？]|(?:不要|不用|别|不必|无需|不想)(?:再|先|帮我)?(?:取消|改发)|\b(?:do not|don't|never)\s+(?:cancel|redirect)\b/iu.test(
+      text,
+    )
+  ) {
+    return undefined;
+  }
+  const start = /^(?:(?:请|麻烦|帮我|替我|先|现在)\s*)*/u;
+  const instruction = text
+    .replace(/\x60[^\x60\n]*\x60|「[^」]*」|『[^』]*』|“[^”]*”|"[^"\n]*"/gu, (quoted) =>
+      /取消|改发|\b(?:cancel|redirect)\b/iu.test(quoted) ? " " : quoted,
+    )
+    .replace(start, "")
+    .trim();
+  if (/^(?:看看|查看|查询|检查|确认|告诉我|是否|怎么|如何)/u.test(instruction)) return undefined;
+  if (
+    (!/取消(?:了|过|成功|失败|完成)|(?:了吗|是否|没有|有没有|能不能)[。！!]?$/u.test(instruction) &&
+      /^(?:(?:把|刚才|刚刚|上次|这|那)[^，。！!,]{0,80}?)?取消[^，。！!,]{0,120}[。！!]?$/u.test(
+        instruction,
+      )) ||
+    /^(?:(?:please|could you)\s+)?cancel\s+(?:the last|that|this|the file|the transfer)\b[^?]{0,80}$/iu.test(
+      instruction,
+    )
+  )
+    return "cancel";
+  if (
+    (/^(?:(?:把|刚才|刚刚|前面|这|那)[^，。！!,]{0,160}?)?改发(?:给|到|至)\s*[^，。！!,]+[。！!]?$/u.test(
+      instruction,
+    ) &&
+      !/是否|(?:已|有没有)改发/u.test(instruction)) ||
+    /^(?:(?:please|could you)\s+)?redirect\s+.{0,80}\bto\s+\S/iu.test(instruction)
+  )
+    return "redirect";
+  return undefined;
+}
+
+export function threadFileRedirectDestination(message: string): ThreadFileDestination {
+  const text = message.normalize("NFKC").trim();
+  const chinese = /改发(?:给|到|至)\s*(.+)/u.exec(text);
+  if (chinese) return threadFileDestination(`发到${chinese[1]}`);
+  return threadFileDestination(
+    text.replace(/^(?:please\s+|could you\s+)?redirect\b/iu, "transfer"),
+  );
+}

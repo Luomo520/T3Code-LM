@@ -6,9 +6,11 @@ import {
   EnvironmentId,
   EventId,
   MessageId,
+  NodeId,
   ProjectId,
   ProviderInstanceId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2DomainEvent,
@@ -25,7 +27,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { AssetSigner, layer as assetSignerLayer } from "../../../assets/AssetSigner.ts";
+import { layer as assetSignerLayer } from "../../../assets/AssetSigner.ts";
 import * as EnvironmentAuth from "../../../auth/EnvironmentAuth.ts";
 import * as McpOAuth from "../../../auth/McpOAuth.ts";
 import { layer as secretStoreLayer } from "../../../auth/ServerSecretStore.ts";
@@ -272,6 +274,7 @@ it.live(
         role: "user" | "assistant",
         timestamp: DateTime.Utc,
         activeThread = threadId,
+        alias = clientAlias,
       ) =>
         apply({
           type: "message.updated",
@@ -285,7 +288,7 @@ it.live(
             createdBy: role === "user" ? "user" : "agent",
             creationSource: role === "user" ? "mobile" : "provider",
             ...(role === "user"
-              ? { clientOrigin: { clientAlias, surface: "mobile", deviceType: "phone" } }
+              ? { clientOrigin: { clientAlias: alias, surface: "mobile", deviceType: "phone" } }
               : {}),
             runId: null,
             nodeId: null,
@@ -297,13 +300,13 @@ it.live(
         } as never);
 
       let ordinal = 0;
-      const turn = (text: string) =>
+      const turn = (text: string, alias = clientAlias) =>
         Effect.gen(function* () {
           ordinal++;
           const time = DateTime.add(now, { seconds: ordinal });
           const id = RunId.make(`file-save-run-${ordinal}`);
           const messageId = MessageId.make(`file-save-user-${ordinal}`);
-          yield* writeMessage(messageId, text, "user", time);
+          yield* writeMessage(messageId, text, "user", time, threadId, alias);
           yield* apply({
             type: "run.created",
             threadId,
@@ -335,6 +338,15 @@ it.live(
       const decodeReceipt = Schema.decodeUnknownEffect(
         ThreadFileSaveToolkit.tools.t3_thread_file_save_status.successSchema,
       );
+      const manage = (action: "cancel" | "redirect", args: Record<string, unknown> = {}) =>
+        call("t3_thread_file_save", { action, ...args });
+      const receiveLink = (id: string, session: typeof phoneSession) =>
+        readFileHandoff({ _tag: "receive", threadId, id }, session).pipe(
+          Effect.map((reply) => {
+            if (reply._tag !== "receive") throw new Error("Expected a signed receive URL.");
+            return reply;
+          }),
+        );
       const receive = (
         file: string,
         source: object,
@@ -450,16 +462,209 @@ it.live(
       expect(
         (yield* save({ _tag: "workspaceOutput", path: "验证传输.txt" })).structuredContent,
       ).toMatchObject({ status: "choose_target" });
-      yield* sessions.issue({
+
+      const workspaceSource = { _tag: "workspaceOutput", path: "验证传输.txt" };
+      yield* turn("把 验证传输.txt 发到这台手机");
+      const { id: redirectedId } = yield* decodeReceipt(
+        (yield* save(workspaceSource)).structuredContent,
+      );
+      const oldLink = yield* receiveLink(redirectedId, phoneSession);
+      const oldReceipt = {
+        _tag: "confirmSaved" as const,
+        threadId,
+        id: redirectedId,
+        sha256: oldLink.sha256,
+        sizeBytes: oldLink.sizeBytes,
+        savedPath: "Download/old.txt",
+      };
+      yield* turn("取消刚才那份了吗？");
+      expect((yield* manage("cancel")).isError).toBe(true);
+      yield* turn("取消不存在.txt");
+      expect((yield* manage("cancel")).isError).toBe(true);
+      yield* turn("取消生成任务");
+      expect((yield* manage("cancel")).isError).toBe(true);
+      const computerHash = yield* digest.digest(
+        Digest.sha256,
+        new TextEncoder().encode(`t3-message-origin:session:${computerSession.sessionId}`),
+      );
+      yield* turn(`取消 ${redirectedId}`, Buffer.from(computerHash).toString("base64url"));
+      expect((yield* manage("cancel", { id: redirectedId })).isError).toBe(true);
+      yield* turn("改发到书房电脑");
+      expect(
+        (yield* manage("redirect", { id: "00000000-0000-0000-0000-000000000000" })).isError,
+      ).toBe(true);
+      expect((yield* manage("redirect")).structuredContent).toMatchObject({
+        id: redirectedId,
+        recipientLabel: "书房电脑",
+        status: "awaiting_save",
+      });
+      expect((yield* manage("redirect")).structuredContent).toMatchObject({ id: redirectedId });
+      expect((yield* http.get(oldLink.relativeUrl)).status).toBe(404);
+      expect(yield* readFileHandoff({ _tag: "inbox" }, phoneSession)).toMatchObject({
+        transfers: [],
+      });
+      expect(yield* readFileHandoff({ _tag: "inbox" }, computerSession)).toMatchObject({
+        transfers: [expect.objectContaining({ id: redirectedId })],
+      });
+      for (const session of [phoneSession, computerSession]) {
+        expect(yield* Effect.result(readFileHandoff(oldReceipt, session))).toMatchObject({
+          _tag: "Failure",
+        });
+      }
+      const newLink = yield* receiveLink(redirectedId, computerSession);
+      const download = yield* http.get(newLink.relativeUrl, { headers: { range: "bytes=0-3" } });
+      expect(download.status).toBe(206);
+      expect(Buffer.from(yield* download.arrayBuffer)).toEqual(
+        Buffer.from(bytes("验证传输.txt")).subarray(0, 4),
+      );
+      yield* turn("取消刚才那份");
+      expect((yield* manage("cancel")).structuredContent).toMatchObject({
+        id: redirectedId,
+        status: "awaiting_save",
+        claimed: true,
+      });
+      yield* turn("改发到这台手机");
+      expect((yield* manage("redirect")).structuredContent).toMatchObject({
+        id: redirectedId,
+        recipientLabel: "书房电脑",
+        status: "awaiting_save",
+        claimed: true,
+      });
+      yield* readFileHandoff({ ...oldReceipt, savedPath: "Downloads/new.txt" }, computerSession);
+      yield* turn("取消刚才那份");
+      expect((yield* manage("cancel")).structuredContent).toMatchObject({
+        status: "saved",
+        savedPath: "Downloads/new.txt",
+      });
+
+      yield* turn("把 验证传输.txt 发到这台手机");
+      const { id: cancelledId } = yield* decodeReceipt(
+        (yield* save(workspaceSource)).structuredContent,
+      );
+      const cancelledLink = yield* receiveLink(cancelledId, phoneSession);
+      yield* turn("取消刚才那份");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect((yield* manage("cancel")).structuredContent).toMatchObject({
+          id: cancelledId,
+          status: "cancelled",
+        });
+      }
+      expect((yield* http.get(cancelledLink.relativeUrl)).status).toBe(404);
+      expect(yield* readFileHandoff({ _tag: "inbox" }, phoneSession)).toMatchObject({
+        transfers: [],
+      });
+
+      yield* turn("把 验证传输.txt 发到这台手机");
+      const { id: racedId } = yield* decodeReceipt(
+        (yield* save(workspaceSource)).structuredContent,
+      );
+      const racedLink = yield* receiveLink(racedId, phoneSession);
+      yield* turn("取消刚才那份");
+      const [racedDownload] = yield* Effect.all(
+        [http.get(racedLink.relativeUrl), manage("cancel")],
+        { concurrency: "unbounded" },
+      );
+      const settled = yield* manage("cancel");
+      if (racedDownload.status === 200) {
+        expect(yield* racedDownload.text).toBe(bytes("验证传输.txt"));
+        expect(settled.structuredContent).toMatchObject({
+          id: racedId,
+          status: "awaiting_save",
+          claimed: true,
+        });
+      } else {
+        expect([404, 409]).toContain(racedDownload.status);
+        expect(settled.structuredContent).toMatchObject({ id: racedId, status: "cancelled" });
+      }
+
+      const secondDesktop = yield* sessions.issue({
         subject: "owner",
         method: "bearer-access-token",
         scopes,
         client: { deviceType: "desktop", label: "书房电脑" },
       });
-      yield* turn("把 验证传输.txt 发到书房电脑");
-      expect(
-        (yield* save({ _tag: "workspaceOutput", path: "验证传输.txt" })).structuredContent,
-      ).toMatchObject({ status: "choose_target" });
+      const secondComputerSession = yield* sessions.verify(secondDesktop.token);
+      const choosing = yield* turn("把 验证传输.txt 发到书房电脑");
+      const decodeSave = Schema.decodeUnknownEffect(
+        ThreadFileSaveToolkit.tools.t3_thread_file_save.successSchema,
+      );
+      const destinations = yield* decodeSave((yield* save(workspaceSource)).structuredContent);
+      if (destinations.status !== "choose_target")
+        return yield* Effect.die("Expected device choices.");
+      const sameName = destinations.devices.filter(({ label }) => label.startsWith("书房电脑 · "));
+      expect(new Set(sameName.map(({ label }) => label)).size).toBe(2);
+      const selected = sameName[0]!.label;
+      expect((yield* save(workspaceSource, selected)).structuredContent).toMatchObject({
+        status: "choose_target",
+      });
+      const requestId = RuntimeRequestId.make("choose-file-device");
+      const nodeId = NodeId.make("file-save-root");
+      yield* apply({
+        type: "turn-item.updated",
+        threadId,
+        runId: choosing.id,
+        occurredAt: choosing.time,
+        payload: {
+          id: TurnItemId.make("file-save-device-options"),
+          threadId,
+          runId: choosing.id,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "completed",
+          title: null,
+          startedAt: choosing.time,
+          completedAt: choosing.time,
+          updatedAt: choosing.time,
+          type: "user_input_request",
+          requestId,
+          questions: [
+            {
+              id: "t3-file-save-target",
+              header: "设备",
+              question: "请选择接收文件的设备。",
+              options: sameName.map(({ label }) => ({ label, description: "书房电脑" })),
+            },
+          ],
+        },
+      } as never);
+      yield* apply({
+        type: "runtime-request.updated",
+        threadId,
+        runId: choosing.id,
+        nodeId,
+        occurredAt: choosing.time,
+        payload: {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "resolved",
+          responseCapability: { type: "message" },
+          createdAt: choosing.time,
+          resolvedAt: choosing.time,
+          answers: { "t3-file-save-target": selected },
+        },
+      } as never);
+      expect((yield* save(workspaceSource, sameName[1]!.label)).structuredContent).toMatchObject({
+        status: "choose_target",
+      });
+      const { id: matchedId } = yield* decodeReceipt(
+        (yield* save(workspaceSource, selected)).structuredContent,
+      );
+      const matched = yield* Effect.forEach([computerSession, secondComputerSession], (session) =>
+        readFileHandoff({ _tag: "inbox" }, session).pipe(
+          Effect.map(
+            (reply) => reply._tag === "inbox" && reply.transfers.some(({ id }) => id === matchedId),
+          ),
+        ),
+      );
+      expect(matched).toContain(true);
+      expect(matched).toContain(false);
       yield* turn("把 outside.txt 发到这台手机");
       expect((yield* save({ _tag: "workspaceOutput", path: "../outside.txt" })).isError).toBe(true);
       expect((yield* save({ _tag: "workspaceOutput", path: "outside.txt" })).isError).toBe(true);

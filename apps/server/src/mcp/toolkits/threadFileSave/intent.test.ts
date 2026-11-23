@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { hasExplicitThreadFileSaveIntent, threadFileDestination } from "./intent.ts";
+import {
+  hasExplicitThreadFileSaveIntent,
+  threadFileDestination,
+  threadFileManagementIntent,
+  threadFileRedirectDestination,
+} from "./intent.ts";
 
 describe("会话文件保存请求", () => {
   it.each([
@@ -33,6 +38,32 @@ describe("会话文件保存请求", () => {
     "Just show it. Don't download the screenshot.",
     "Tell me whether you can preview the file.",
   ])("只查看时不触发保存 %s", (text) => expect(hasExplicitThreadFileSaveIntent(text)).toBe(false));
+});
+
+describe("取消和改发已有会话传输", () => {
+  it.each([
+    ["取消刚才那份", "cancel"],
+    ["请取消 report.pdf", "cancel"],
+    ["改发到书房电脑", "redirect"],
+    ["把刚才那份改发给这台手机", "redirect"],
+    ["Please redirect the last transfer to Studio", "redirect"],
+    ["别取消刚才那份", undefined],
+    ["取消刚才那份了吗？", undefined],
+    ["取消了吗", undefined],
+    ["上次我说“取消刚才那份”", undefined],
+    ["看看刚才那份是否改发到书房电脑", undefined],
+    ["Can I redirect that to Studio?", undefined],
+  ])("识别 %s", (text, action) => {
+    expect(threadFileManagementIntent(text)).toBe(action);
+  });
+
+  it.each([
+    ["刚才那份改发到书房电脑", { kind: "named", label: "书房电脑" }],
+    ["把刚才那份改发给这台手机", { kind: "current", device: "mobile" }],
+    ["Please redirect the last transfer to Studio", { kind: "named", label: "studio" }],
+  ])("从 %s 确认新接收设备", (text, destination) => {
+    expect(threadFileRedirectDestination(text)).toEqual(destination);
+  });
 });
 
 describe("原话中的目的设备", () => {

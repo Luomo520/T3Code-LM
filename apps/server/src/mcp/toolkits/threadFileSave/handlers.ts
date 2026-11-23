@@ -16,6 +16,7 @@ import { SessionStore } from "../../../auth/SessionStore.ts";
 import { getCompanionStore } from "../../../companion/store.ts";
 import { ServerConfig } from "../../../config.ts";
 import {
+  manageThreadFileHandoff,
   readThreadFileHandoffStatus,
   stageThreadFileHandoff,
 } from "../../../fileExchange/FileHandoff.ts";
@@ -24,7 +25,12 @@ import { requireThreadScope } from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { callerLinkOrigin } from "../../linkOrigin.ts";
 import { assertLiveCaller, readCaller, unavailable } from "../../threadAccess.ts";
-import { hasExplicitThreadFileSaveIntent, threadFileDestination } from "./intent.ts";
+import {
+  hasExplicitThreadFileSaveIntent,
+  threadFileDestination,
+  threadFileManagementIntent,
+  threadFileRedirectDestination,
+} from "./intent.ts";
 import { ThreadFileSaveToolkit } from "./tools.ts";
 import { resolveWorkspaceOutput } from "./workspaceOutput.ts";
 
@@ -58,6 +64,14 @@ const localThreadCaller = Effect.fn("ThreadFileSave.localThreadCaller")(function
 export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
   t3_thread_file_save: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
+      const { action, source, id: requestedId, target } = input;
+      if (
+        (action === undefined && (!source || requestedId !== undefined)) ||
+        (action !== undefined && source !== undefined) ||
+        (action === "cancel" && target !== undefined)
+      ) {
+        return yield* invalid("请指定发送来源或既有传输操作。");
+      }
       const { thread, threads } = yield* localThreadCaller();
       const { threadId } = thread;
       const records = yield* threads
@@ -82,7 +96,14 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
       ) {
         return yield* invalid("请从已连接的客户端发出保存请求。");
       }
-      if (!hasExplicitThreadFileSaveIntent(userMessage.text)) {
+      if (action !== undefined) {
+        if (threadFileManagementIntent(userMessage.text) !== action) {
+          return yield* invalid("请在原会话明确要求取消或改发这次文件传输。");
+        }
+      } else if (
+        !hasExplicitThreadFileSaveIntent(userMessage.text) ||
+        threadFileManagementIntent(userMessage.text)
+      ) {
         return yield* invalid("请在当前会话明确说明要保存文件，或使用附件旁的保存操作。");
       }
       const { clientAlias, surface } = userMessage.clientOrigin;
@@ -121,20 +142,50 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
       )?.client;
       if (!requester) return yield* invalid("发出保存请求的客户端授权已变化，请重新连接后再试。");
       const selectable = [
-        ...new Map(aliases.toReversed().map((entry) => [entry.alias, entry.client])).values(),
+        ...new Map(aliases.toReversed().map((entry) => [entry.alias, entry])).values(),
       ];
+      const deliveryRequest = {
+        threadId,
+        requestText: userMessage.text,
+        requester: requester.sessionId,
+        requesterAlias: clientAlias,
+        requestId: userMessage.id,
+        ordinal: run.ordinal,
+        ...(requestedId === undefined ? {} : { requestedId }),
+      };
+      if (action === "cancel") {
+        return yield* manageThreadFileHandoff(deliveryRequest).pipe(
+          Effect.mapError((error) => invalid(error.message)),
+        );
+      }
+      const normalizedLabel = (value: string) => value.normalize("NFKC").toLocaleLowerCase();
+      const choicesByDevice = selectable.map(({ client, alias }) => {
+        const label = deviceLabel(client);
+        const duplicates = selectable.filter(
+          (entry) => normalizedLabel(deviceLabel(entry.client)) === normalizedLabel(label),
+        );
+        return {
+          client,
+          label: duplicates.length > 1 ? `${label} · ${alias.slice(0, 12)}` : label,
+        };
+      });
       const exactClients = (name: string) =>
-        selectable.filter((client) =>
-          [deviceLabel(client), client.client.label].some(
-            (candidate) => candidate?.normalize("NFKC").toLocaleLowerCase() === name,
+        choicesByDevice.filter(({ client, label }) =>
+          [label, deviceLabel(client), client.client.label].some(
+            (candidate) => candidate !== undefined && normalizedLabel(candidate) === name,
           ),
         );
-      const destination = threadFileDestination(userMessage.text);
+      const destination =
+        action === "redirect"
+          ? threadFileRedirectDestination(userMessage.text)
+          : threadFileDestination(userMessage.text);
       const requestedClients = destination.kind === "named" ? exactClients(destination.label) : [];
       const chosenClients =
-        input.target === undefined
+        target === undefined
           ? []
-          : exactClients(input.target.normalize("NFKC").toLocaleLowerCase());
+          : choicesByDevice.filter(
+              ({ label }) => normalizedLabel(label) === normalizedLabel(target),
+            );
       const namedRecipient = chosenClients.length === 1 ? chosenClients[0] : undefined;
       const currentRecipient =
         destination.kind === "current" &&
@@ -151,27 +202,25 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
             runtimeRequestStatuses: ["resolved"],
           })
           .pipe(Effect.mapError(unavailable));
-        const displayedName = deviceLabel(namedRecipient).normalize("NFKC").toLocaleLowerCase();
+        const displayedName = normalizedLabel(namedRecipient.label);
         choseNamedDevice = choices.turnItems.some((item) => {
           if (item.type !== "user_input_request") return false;
           const question = item.questions.find((candidate) => candidate.id === deviceChoiceId);
-          const option = question?.options.find(
-            (candidate) => candidate.label.normalize("NFKC").toLocaleLowerCase() === displayedName,
-          );
-          if (!option) return false;
+          if (!question || question.multiSelect) return false;
           const answer = choices.runtimeRequests.find(
             (request) => request.id === item.requestId && request.kind === "user_input",
           )?.answers?.[deviceChoiceId];
           const selected = selectedOption(answer);
-          return (
-            selected === option.label || (option.value !== undefined && selected === option.value)
+          const matched = question.options.filter(
+            (option) => (option.value ?? option.label) === selected,
           );
+          return matched.length === 1 && normalizedLabel(matched[0]!.label) === displayedName;
         });
       }
       const recipient =
         requestedClients.length === 1
-          ? requestedClients[0]
-          : (currentRecipient ?? (choseNamedDevice ? namedRecipient : undefined));
+          ? requestedClients[0]?.client
+          : (currentRecipient ?? (choseNamedDevice ? namedRecipient?.client : undefined));
       if (!recipient) {
         return {
           status: "choose_target" as const,
@@ -179,14 +228,21 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
             destination.kind === "current" && surface === "web"
               ? "请从会话使用浏览器下载，或选择接收文件的配对设备。"
               : "无法唯一确定接收设备，请使用已配对设备的完整名称。",
-          devices: selectable.map((client) => ({
-            label: deviceLabel(client),
+          devices: choicesByDevice.map(({ client, label }) => ({
+            label,
             online: client.connected,
           })),
         };
       }
 
-      const { source } = input;
+      if (action === "redirect") {
+        return yield* manageThreadFileHandoff({
+          ...deliveryRequest,
+          recipient: recipient.sessionId,
+        }).pipe(Effect.mapError((error) => invalid(error.message)));
+      }
+
+      if (!source) return yield* invalid("请指定要发送的文件。");
       const config = yield* ServerConfig;
       let file: {
         readonly sourcePath: string;
@@ -255,6 +311,8 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
         threadId,
         id,
         requester: requester.sessionId,
+        requesterAlias: clientAlias,
+        sourceOrdinal: run.ordinal,
         recipient: recipient.sessionId,
         autoReceive: true,
       }).pipe(Effect.mapError((error) => invalid(error.message)));

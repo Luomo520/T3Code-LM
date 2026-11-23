@@ -62,7 +62,11 @@ import {
   DESKTOP_RENDERER_ORIGINS,
 } from "./httpCors.ts";
 import { requestUrl } from "./requestUrl.ts";
-import { receiveFileHandoffChunk, resolveFileHandoff } from "./fileExchange/FileHandoff.ts";
+import {
+  claimThreadFileHandoff,
+  receiveFileHandoffChunk,
+  resolveFileHandoff,
+} from "./fileExchange/FileHandoff.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -567,6 +571,12 @@ const handoffHttpResponse = Effect.fn("handoffHttpResponse")(
       request.headers["if-range"],
       request.method === "HEAD" ? "HEAD" : "GET",
     );
+    if (
+      request.method === "GET" &&
+      (response.status === 200 || response.status === 206) &&
+      !(yield* claimThreadFileHandoff(transfer))
+    )
+      return HttpServerResponse.empty({ status: 409 });
     return HttpServerResponse.setHeader(
       response,
       "Repr-Digest",

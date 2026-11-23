@@ -28,24 +28,29 @@ const result = Schema.Struct({
   name: Schema.String,
   recipientLabel: Schema.String,
   status: Schema.Literals(["awaiting_save", "saved", "cancelled"]),
+  claimed: Schema.optionalKey(Schema.Literal(true)),
   savedPath: Schema.optionalKey(Schema.String),
   installation: Schema.optionalKey(FileHandoffInstallation),
 });
 
 const save = Tool.make("t3_thread_file_save", {
   description:
-    "Send a file only when the user explicitly asks to save it or send it to a device. For previews, show it in the thread. Use delivery for a file in this project's release inventory. Use workspaceOutput for a project file whose exact name or path the user gives, or a file created or edited in this turn, with the exact path recorded by the edit or printed on its own output line by the command that created it. To reuse a file linked in an earlier assistant reply, add its messageId. Existing attachments and completed companion tasks are also supported. The server uses the unique device named as destination in the user request or the authenticated sender for this device. After a device-choice response, pass the selected exact device label. On choose_target, ask an in-thread single-choice question with id t3-file-save-target and the exact labels, or ask for a save request naming the device. Use t3_thread_file_save_status to verify the receipt.",
+    "To manage an existing delivery in this thread, use action cancel or redirect only for an explicit user request. Omit id for the last relevant delivery. Claimed means the recipient started receiving it; report its actual state. Send a file only when the user explicitly asks to save it or send it to a device. For previews, show it in the thread. Use delivery for a file in this project's release inventory. Use workspaceOutput for a project file whose exact name or path the user gives, or a file created or edited in this turn, with the exact path recorded by the edit or printed on its own output line by the command that created it. To reuse a file linked in an earlier assistant reply, add its messageId. Existing attachments and completed companion tasks are also supported. The server uses the unique device named as destination in the user request or the authenticated sender for this device. After a device-choice response, pass the selected exact device label. On choose_target, ask an in-thread single-choice question with id t3-file-save-target and the exact labels, or ask for a save request naming the device. Use t3_thread_file_save_status to verify the receipt.",
   parameters: Schema.Struct({
-    source: Schema.Union([
-      Schema.TaggedStruct("delivery", { path: filePath }),
-      Schema.TaggedStruct("workspaceOutput", {
-        path: filePath,
-        messageId: Schema.optionalKey(MessageId),
-      }),
-      Schema.TaggedStruct("attachment", { messageId: MessageId, attachmentId: ChatAttachmentId }),
-      Schema.TaggedStruct("companionScreenshot", { taskId: identifier }),
-      Schema.TaggedStruct("companionFile", { taskId: identifier }),
-    ]),
+    source: Schema.optionalKey(
+      Schema.Union([
+        Schema.TaggedStruct("delivery", { path: filePath }),
+        Schema.TaggedStruct("workspaceOutput", {
+          path: filePath,
+          messageId: Schema.optionalKey(MessageId),
+        }),
+        Schema.TaggedStruct("attachment", { messageId: MessageId, attachmentId: ChatAttachmentId }),
+        Schema.TaggedStruct("companionScreenshot", { taskId: identifier }),
+        Schema.TaggedStruct("companionFile", { taskId: identifier }),
+      ]),
+    ),
+    action: Schema.optionalKey(Schema.Literals(["cancel", "redirect"])),
+    id: Schema.optionalKey(identifier),
     target: Schema.optionalKey(identifier),
   }),
   success: Schema.Union([
