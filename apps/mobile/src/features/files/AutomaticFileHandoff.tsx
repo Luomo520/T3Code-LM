@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
 import {
   createFileHandoffAtoms,
   unwrapFileHandoff,
@@ -9,6 +11,8 @@ import { useIsFocused } from "@react-navigation/native";
 import { AppText } from "../../components/ui/AppText";
 
 import { connectionAtomRuntime } from "../../connection/runtime";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { mobilePreferencesAtom } from "../../state/preferences";
 import { isAppActive, useAppActive } from "../../lib/appState";
 import { supportsAutomaticFileHandoff } from "../../lib/systemFileDownload";
 import { useEnvironmentQuery } from "../../state/query";
@@ -16,6 +20,7 @@ import { useEnvironmentScope, usePreparedConnection } from "../../state/session"
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { advanceAutomaticHandoff } from "./automatic-file-handoff";
+import { automaticFileHandoffEnabled } from "./automatic-file-handoff-preferences";
 
 const atoms = createFileHandoffAtoms(connectionAtomRuntime);
 const quiet = { reportFailure: false, reportDefect: false };
@@ -27,6 +32,10 @@ function EnvironmentAutomaticFileHandoff({
   const connection = usePreparedConnection(environmentId);
   const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const ready = canRead && connection._tag === "Some";
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const autoReceive = AsyncResult.isSuccess(preferences)
+    ? automaticFileHandoffEnabled(preferences.value, environmentId)
+    : false;
   const query = useEnvironmentQuery(
     ready ? atoms.list({ environmentId, input: { _tag: "inbox" } }) : null,
   );
@@ -53,6 +62,14 @@ function EnvironmentAutomaticFileHandoff({
             environmentId,
             httpBaseUrl,
             active,
+            canStartDownload: () => {
+              // 领取链接返回时，可能已经在设置里关掉自动接收。
+              const latest = appAtomRegistry.get(mobilePreferencesAtom);
+              return (
+                AsyncResult.isSuccess(latest) &&
+                automaticFileHandoffEnabled(latest.value, environmentId)
+              );
+            },
             request: async (input) => unwrapFileHandoff(await receive({ environmentId, input })),
           });
           if (outcome === "saved") {
@@ -89,6 +106,12 @@ function EnvironmentAutomaticFileHandoff({
     if (!ready || success === null) return;
     void processInbox();
   }, [ready, success]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 重新开启时立即检查待收任务并允许重试。
+  useEffect(() => {
+    if (!autoReceive) return;
+    retryAfter.current.clear();
+    void processInbox();
+  }, [autoReceive]);
   return null;
 }
 

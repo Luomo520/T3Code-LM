@@ -20,6 +20,7 @@ export async function advanceAutomaticHandoff(
     readonly environmentId: EnvironmentId;
     readonly httpBaseUrl: string;
     readonly active: () => boolean;
+    readonly canStartDownload: () => boolean;
     readonly request: (input: FileHandoffRequest) => Promise<FileHandoffReply>;
   },
 ): Promise<"saved" | "waiting"> {
@@ -44,10 +45,10 @@ export async function advanceAutomaticHandoff(
       });
       return receipt._tag === "finished" && receipt.disposition === "saved" ? "saved" : "waiting";
     }
-    if (local?.nativeId) return "waiting";
+    if (local?.nativeId || !options.canStartDownload()) return "waiting";
 
     const release = await options.request({ _tag: "receive", threadId, id });
-    if (!options.active()) return "waiting";
+    if (!options.active() || !options.canStartDownload()) return "waiting";
     if (
       release._tag !== "receive" ||
       release.sizeBytes !== item.sizeBytes ||

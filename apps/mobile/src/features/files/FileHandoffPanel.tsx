@@ -19,7 +19,7 @@ import { getDocumentAsync } from "expo-document-picker";
 import { fetch } from "expo/fetch";
 import { File, Paths } from "expo-file-system";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { AppState, Platform, ScrollView, View } from "react-native";
+import { Platform, ScrollView, View } from "react-native";
 
 import { AppText } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
@@ -35,6 +35,7 @@ import {
   showDownloadedFiles,
   type FileDownload,
 } from "../../lib/systemFileDownload";
+import { useAppActive } from "../../lib/appState";
 import { uuidv4 } from "../../lib/uuid";
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentScope, usePreparedConnection } from "../../state/session";
@@ -68,6 +69,7 @@ export function FileHandoffPanel(context: Context) {
           <FileHandoffContents
             key={JSON.stringify([context.environmentId, context.threadId])}
             {...context}
+            visible={open}
           />
         </View>
       )}
@@ -97,7 +99,8 @@ function deleteSelection(selection: Selection | null) {
   }
 }
 
-function FileHandoffContents({ environmentId, threadId }: Context) {
+function FileHandoffContents({ environmentId, threadId, visible }: Context & { visible: boolean }) {
+  const appActive = useAppActive();
   const connection = usePreparedConnection(environmentId);
   const list = useEnvironmentQuery(
     atoms.list({ environmentId, input: { _tag: "list", threadId } }),
@@ -112,11 +115,19 @@ function FileHandoffContents({ environmentId, threadId }: Context) {
   const downloadKey = JSON.stringify([environmentId, threadId]);
   const [download, setDownload] = useState(() => downloadsByThread.get(downloadKey) ?? null);
   const [closing, setClosing] = useState<string | null>(null);
-  const [receiptPending, setReceiptPending] = useState(false);
+  // 直传在发回执前已经落盘，重开面板时继续回报，避免把旧文件当作进行中的下载。
+  const [receiptPending, setReceiptPending] = useState(() =>
+    Boolean(download?.supportsReceipt && download.uri),
+  );
   const sendingReceipt = useRef(false);
   const acknowledged = useRef(new Set<string>());
-  const [downloadState, setDownloadState] = useState<FileDownload | null>(null);
-  const [busyDownload, setBusyDownload] = useState(false);
+  const [downloadState, setDownloadState] = useState<FileDownload | null>(() =>
+    download?.uri
+      ? { status: "downloaded", bytesDownloaded: download.sizeBytes, uri: download.uri }
+      : null,
+  );
+  const [receivingId, setReceivingId] = useState<string | null>(null);
+  const busyDownload = receivingId !== null;
   const [choosingRecipient, setChoosingRecipient] = useState(false);
   const upload = useRef<AbortController | null>(null);
   const directDownload = useRef<AbortController | null>(null);
@@ -130,11 +141,11 @@ function FileHandoffContents({ environmentId, threadId }: Context) {
   const refreshList = list.refresh;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 前台接收面板及时显示另一台设备发来的直连邀请。
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (AppState.currentState === "active") refreshList();
-    }, 5_000);
+    if (!appActive || !visible) return;
+    refreshList();
+    const timer = setInterval(refreshList, 5_000);
     return () => clearInterval(timer);
-  }, [refreshList]);
+  }, [appActive, visible, refreshList]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 面板关闭时取消上传并释放文档选择器缓存。
   useEffect(
@@ -165,7 +176,8 @@ function FileHandoffContents({ environmentId, threadId }: Context) {
         }),
       );
       acknowledged.current.add(saved.id);
-      downloadsByThread.delete(downloadKey);
+      if (downloadsByThread.get(downloadKey)?.id === saved.id)
+        downloadsByThread.delete(downloadKey);
       setReceiptPending(false);
       setError(null);
       setDownload((current) => (current?.id === saved.id ? null : current));
@@ -266,7 +278,9 @@ function FileHandoffContents({ environmentId, threadId }: Context) {
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 连接恢复后重发已保存文件的回执。
   useEffect(() => {
-    if (connection._tag === "Some" && receiptPending) retryReceipt();
+    if (connection._tag !== "Some" || !receiptPending || !snapshot) return;
+    // oxlint-disable-next-line react/set-state-in-effect -- 向远端重交保存回执，只有异步请求返回后才更新界面。
+    retryReceipt();
   }, [connection._tag, receiptPending, snapshot]);
 
   const downloadRetryable =
@@ -393,11 +407,17 @@ function FileHandoffContents({ environmentId, threadId }: Context) {
   const downloadInProgress =
     download !== null && !downloadRetryable && downloadState?.status !== "downloaded";
   async function downloadFile(item: FileHandoffTransfer) {
-    if (busyDownload || downloadInProgress || receiptPending || connection._tag !== "Some") return;
+    if (
+      directDownload.current ||
+      downloadInProgress ||
+      receiptPending ||
+      connection._tag !== "Some"
+    )
+      return;
     const id = item.id;
     const controller = new AbortController();
     directDownload.current = controller;
-    setBusyDownload(true);
+    setReceivingId(id);
     setError(null);
     try {
       const handoffKey = await fileHandoffDownloadKey(environmentId, threadId, item.id);
@@ -505,7 +525,7 @@ function FileHandoffContents({ environmentId, threadId }: Context) {
       setError(fileHandoffErrorMessage(cause, "下载未开始，请重试。"));
     } finally {
       directDownload.current = null;
-      setBusyDownload(false);
+      setReceivingId(null);
     }
   }
 
@@ -645,11 +665,13 @@ function FileHandoffContents({ environmentId, threadId }: Context) {
                 (download?.id === item.id && !downloadRetryable)
               }
               label={
-                download?.id === item.id
-                  ? currentDownloadLabel
-                  : item.directSha256
-                    ? "直连接收"
-                    : "下载"
+                receivingId === item.id
+                  ? "正在接收…"
+                  : download?.id === item.id
+                    ? currentDownloadLabel
+                    : item.directSha256
+                      ? "直连接收"
+                      : "下载"
               }
               onPress={() => void downloadFile(item)}
             />

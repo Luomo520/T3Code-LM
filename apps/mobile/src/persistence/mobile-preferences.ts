@@ -80,6 +80,7 @@ const WorkspaceSelections = Schema.Struct({
 });
 export type WorkspaceSelections = typeof WorkspaceSelections.Type;
 
+const isEnvironmentId = Schema.is(EnvironmentId);
 const isThreadListFilters = Schema.is(ThreadListFilters);
 const isWorkspaceSelections = Schema.is(WorkspaceSelections);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
@@ -95,6 +96,7 @@ export interface Preferences {
   readonly pullRequestHideTestFiles?: boolean;
   readonly pullRequestMergeMethod?: PullRequestMergeMethod;
   readonly liveActivitiesEnabled?: boolean;
+  readonly automaticFileHandoffDisabledEnvironments?: ReadonlyArray<EnvironmentId>;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
   readonly darkThemeId?: MobileThemeId;
@@ -187,6 +189,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     pullRequestHideTestFiles?: boolean;
     pullRequestMergeMethod?: PullRequestMergeMethod;
     liveActivitiesEnabled?: boolean;
+    automaticFileHandoffDisabledEnvironments?: ReadonlyArray<EnvironmentId>;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
     darkThemeId?: MobileThemeId;
@@ -246,6 +249,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
     preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
+  }
+  if (Array.isArray(parsed.automaticFileHandoffDisabledEnvironments)) {
+    preferences.automaticFileHandoffDisabledEnvironments = [
+      ...new Set(parsed.automaticFileHandoffDisabledEnvironments.filter(isEnvironmentId)),
+    ];
   }
   if (
     typeof parsed.themeId === "string" &&

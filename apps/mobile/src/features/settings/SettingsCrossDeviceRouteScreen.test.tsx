@@ -8,6 +8,8 @@ import {
   type AuthEnvironmentScope,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Exit from "effect/Exit";
+import type { Preferences } from "../../persistence/mobile-preferences";
 import { AsyncResult } from "effect/reactivity";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -38,6 +40,9 @@ const harness = vi.hoisted(() => ({
   online: true,
   loading: false,
   supportsWindowsCompanion: false,
+  supportsAutomaticHandoff: false,
+  preferences: {} as Preferences,
+  savePreferences: vi.fn(),
   windowsCompanionEnabled: false,
   scopes: new Set<AuthEnvironmentScope>(),
   environments: [] as ConnectedEnvironmentSummary[],
@@ -58,7 +63,13 @@ function serverConfig() {
 }
 
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: string) => (atom === "config" ? serverConfig() : { _tag: "Success" }),
+  useAtomValue: (atom: string) =>
+    atom === "config"
+      ? serverConfig()
+      : atom === "preferences"
+        ? AsyncResult.success(harness.preferences)
+        : { _tag: "Success" },
+  useAtomSet: () => harness.savePreferences,
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
@@ -69,6 +80,13 @@ vi.mock("../../components/ui/Dialog", () => ({
 }));
 vi.mock("../../state/atom-registry", () => ({
   appAtomRegistry: { get: (atom: string) => (atom === "config" ? serverConfig() : harness.online) },
+}));
+vi.mock("../../lib/systemFileDownload", () => ({
+  supportsAutomaticFileHandoff: () => harness.supportsAutomaticHandoff,
+}));
+vi.mock("../../state/preferences", () => ({
+  mobilePreferencesAtom: "preferences",
+  updateMobilePreferencesAtom: "update-preferences",
 }));
 vi.mock("../../state/auth", () => ({
   authEnvironment: {
@@ -237,6 +255,12 @@ describe("Android 多端互控", () => {
     harness.online = true;
     harness.loading = false;
     harness.supportsWindowsCompanion = false;
+    harness.supportsAutomaticHandoff = false;
+    harness.preferences = {};
+    harness.savePreferences.mockImplementation(async ({ transform }) => {
+      harness.preferences = { ...harness.preferences, ...transform(harness.preferences) };
+      return Exit.succeed(harness.preferences);
+    });
     harness.windowsCompanionEnabled = false;
     harness.scopes.clear();
     harness.environments = [environment];
@@ -287,6 +311,20 @@ describe("Android 多端互控", () => {
     expect(harness.subscribe).not.toHaveBeenCalled();
     await click("家庭 NAS");
     expect(harness.navigate).toHaveBeenCalledWith("SettingsEnvironmentDetail", { environmentId });
+  });
+
+  it("在已配对环境中保存本机自动接收设置，也支持离线切换", async () => {
+    harness.supportsAutomaticHandoff = true;
+    harness.environments = [{ ...environment, connectionState: "offline" }];
+    await render(accessPage());
+    expect(button("自动接收会话文件")?.getAttribute("aria-checked")).toBe("true");
+    await click("自动接收会话文件");
+    expect(harness.preferences.automaticFileHandoffDisabledEnvironments).toEqual([environmentId]);
+    await render(accessPage("read-from-stored-settings"));
+    expect(button("自动接收会话文件")?.getAttribute("aria-checked")).toBe("false");
+    await click("自动接收会话文件");
+    expect(harness.preferences.automaticFileHandoffDisabledEnvironments).toEqual([]);
+    expect(harness.updateSettings).not.toHaveBeenCalled();
   });
 
   it("环境离线时不请求授权会话", async () => {

@@ -26,6 +26,7 @@ import { environmentSession, readEnvironmentScope, sessionHasScope } from "../..
 import { useAtomCommand } from "../../state/use-atom-command";
 import { environmentStatusText } from "../connection/environmentStatusText";
 import { LocalApkInstallSection } from "./components/LocalApkInstallSection";
+import { AutomaticFileHandoffSettings } from "./components/AutomaticFileHandoffSettings";
 import { AndroidUsbBindingSettings } from "./components/AndroidUsbBindingSettings";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsScreen } from "./components/SettingsScreen";
@@ -190,6 +191,7 @@ function CrossDeviceAccess({ environmentId }: { readonly environmentId: Environm
             />
           </SettingsSection>
         ) : null}
+        {environment ? <AutomaticFileHandoffSettings environmentId={environmentId} /> : null}
         {environment ? (
           <WindowsCompanionSettings environmentId={environmentId} connected={connected} />
         ) : null}

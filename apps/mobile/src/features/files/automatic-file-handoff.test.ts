@@ -9,6 +9,10 @@ const native = vi.hoisted(() => ({
 vi.mock("../../lib/systemFileDownload", () => native);
 
 import { advanceAutomaticHandoff } from "./automatic-file-handoff";
+import {
+  automaticFileHandoffEnabled,
+  automaticFileHandoffPreferencePatch,
+} from "./automatic-file-handoff-preferences";
 
 function fixture() {
   native.enqueueFileDownload.mockReset();
@@ -28,6 +32,7 @@ function fixture() {
     environmentId: EnvironmentId.make("linked-environment"),
     httpBaseUrl: "http://127.0.0.1:3773",
     active: vi.fn(() => true),
+    canStartDownload: vi.fn(() => true),
     request: vi.fn(),
   };
   return { item, options };
@@ -99,5 +104,72 @@ it("does not start a download if the app goes into the background while obtainin
   });
 
   await advanceAutomaticHandoff(item, options);
+  expect(native.enqueueFileDownload).not.toHaveBeenCalled();
+});
+
+it("controls each paired environment separately and defaults to enabled", () => {
+  const home = EnvironmentId.make("home");
+  const office = EnvironmentId.make("office");
+  expect(automaticFileHandoffEnabled({}, home)).toBe(true);
+  const bothDisabled = automaticFileHandoffPreferencePatch(
+    automaticFileHandoffPreferencePatch({}, home, false),
+    office,
+    false,
+  );
+  expect(automaticFileHandoffEnabled(bothDisabled, home)).toBe(false);
+  expect(automaticFileHandoffEnabled(bothDisabled, office)).toBe(false);
+  const homeEnabled = automaticFileHandoffPreferencePatch(bothDisabled, home, true);
+  expect(automaticFileHandoffEnabled(homeEnabled, home)).toBe(true);
+  expect(automaticFileHandoffEnabled(homeEnabled, office)).toBe(false);
+});
+
+it("leaves a pending file untouched when disabled and can claim it after re-enabling", async () => {
+  const { item, options } = fixture();
+  native.readHandoffDownload.mockResolvedValue(null);
+  options.canStartDownload.mockReturnValue(false);
+  await advanceAutomaticHandoff(item, options);
+  expect(options.request).not.toHaveBeenCalled();
+  expect(native.enqueueFileDownload).not.toHaveBeenCalled();
+
+  options.canStartDownload.mockReturnValue(true);
+  options.request.mockResolvedValue({
+    _tag: "receive",
+    name: item.name,
+    sizeBytes: item.sizeBytes,
+    sha256: item.sha256,
+    relativeUrl: "/api/assets/file-handoff/token",
+  });
+  await advanceAutomaticHandoff(item, options);
+  expect(native.enqueueFileDownload).toHaveBeenCalledOnce();
+});
+
+it("checks the setting again after a pending download link returns", async () => {
+  const { item, options } = fixture();
+  native.readHandoffDownload.mockResolvedValue(null);
+  options.request.mockImplementation(async () => {
+    options.canStartDownload.mockReturnValue(false);
+    return {
+      _tag: "receive",
+      name: item.name,
+      sizeBytes: item.sizeBytes,
+      sha256: item.sha256,
+      relativeUrl: "/api/assets/file-handoff/token",
+    };
+  });
+  await advanceAutomaticHandoff(item, options);
+  expect(options.request).toHaveBeenCalledOnce();
+  expect(native.enqueueFileDownload).not.toHaveBeenCalled();
+});
+
+it("still confirms an already verified file while automatic receiving is off", async () => {
+  const { item, options } = fixture();
+  options.canStartDownload.mockReturnValue(false);
+  native.readHandoffDownload.mockResolvedValue({
+    status: "downloaded",
+    uri: "content://downloads/7",
+  });
+  options.request.mockResolvedValue({ _tag: "finished", disposition: "saved" });
+  expect(await advanceAutomaticHandoff(item, options)).toBe("saved");
+  expect(options.request).toHaveBeenCalledWith(expect.objectContaining({ _tag: "confirmSaved" }));
   expect(native.enqueueFileDownload).not.toHaveBeenCalled();
 });
