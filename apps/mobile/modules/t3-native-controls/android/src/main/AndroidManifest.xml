@@ -13,6 +13,7 @@
     </intent>
   </queries>
   <application>
+    <receiver android:name=".T3ReceivedApkInstallSession" android:exported="false" />
     <provider
       android:name="rikka.shizuku.ShizukuProvider"
       android:authorities="${applicationId}.shizuku"

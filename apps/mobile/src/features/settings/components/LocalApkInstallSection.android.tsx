@@ -1,6 +1,6 @@
 import { requireOptionalNativeModule } from "expo";
 import { useEffect, useState } from "react";
-import { Alert, AppState, View } from "react-native";
+import { AppState, View } from "react-native";
 
 import { AppText } from "../../../components/ui/AppText";
 import { SettingsRow } from "./SettingsRow";
@@ -14,13 +14,14 @@ interface SelectedApk {
   readonly versionCode: string;
 }
 
-type InstallMethod = "system" | "shizuku";
+type InstallMethod = "system" | "adb" | "root";
 type InstallResult =
   | { readonly status: "installed" | "cancelled" | "permission-required" }
   | { readonly status: "failed"; readonly message: string };
 
 const accessLabels = {
   unavailable: "请先启动 Shizuku 或 Sui",
+  unsupported: "此 Android 版本请使用系统安装器",
   available: "可请求授权",
   denied: "已拒绝，可在授权管理中为 T3 开启权限",
   adb: "ADB 已授权",
@@ -142,15 +143,9 @@ export function LocalApkInstallSection() {
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
+      setAccess(await native.getDeviceAccess().catch(() => "unavailable" as const));
       setPending(null);
     }
-  }
-
-  function confirmShizuku(apk: SelectedApk) {
-    Alert.alert("通过 Shizuku / Sui 安装？", `${apk.name}\n${apkDetails(apk)}`, [
-      { text: "取消", style: "cancel" },
-      { text: "安装", onPress: () => void install(apk, "shizuku") },
-    ]);
   }
 
   return (
@@ -160,7 +155,7 @@ export function LocalApkInstallSection() {
           icon="bolt.circle"
           label="请求 ADB / Root 授权"
           value={access ? accessLabels[access] : "正在检查…"}
-          disabled={pending !== null || access === "adb" || access === "root"}
+          disabled={pending !== null || access !== "available"}
           onPress={() => void requestAccess()}
         />
       </SettingsSection>
@@ -180,12 +175,14 @@ export function LocalApkInstallSection() {
               disabled={pending !== null}
               onPress={() => void install(selected, "system")}
             />
-            <SettingsRow
-              icon="bolt.circle"
-              label="通过 Shizuku / Sui 安装"
-              disabled={pending !== null}
-              onPress={() => confirmShizuku(selected)}
-            />
+            {access === "adb" || access === "root" ? (
+              <SettingsRow
+                icon="bolt.circle"
+                label={access === "root" ? "使用 Root 安装" : "使用 ADB 安装"}
+                disabled={pending !== null}
+                onPress={() => void install(selected, access)}
+              />
+            ) : null}
           </>
         ) : null}
       </SettingsSection>

@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.CompletableDeferred
@@ -15,6 +16,10 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 
 internal object T3ShizukuApkInstaller {
+  const val ROOT_UID = 0
+  const val ADB_UID = 2000
+  const val ACCESS_CHANGED = "设备授权已变化。请选择系统安装器，或刷新设备授权后重新确认。"
+
   private val nextRequestCode = AtomicInteger(7346)
 
   private fun available() = Shizuku.pingBinder() && !Shizuku.isPreV11()
@@ -44,10 +49,13 @@ internal object T3ShizukuApkInstaller {
 
   fun accessStatus(): String = runCatching {
     when {
+      // Android 9 起，系统命令可核对安装会话与 APK 的包名。
+      Build.VERSION.SDK_INT < Build.VERSION_CODES.P -> "unsupported"
       !available() -> "unavailable"
       !authorized() -> if (Shizuku.shouldShowRequestPermissionRationale()) "denied" else "available"
-      Shizuku.getUid() == 0 -> "root"
-      else -> "adb"
+      Shizuku.getUid() == ROOT_UID -> "root"
+      Shizuku.getUid() == ADB_UID -> "adb"
+      else -> "unavailable"
     }
   }.getOrDefault("unavailable")
 
@@ -58,10 +66,12 @@ internal object T3ShizukuApkInstaller {
     return accessStatus()
   }
 
-  suspend fun install(context: Context, apk: File): String? {
-    check(available()) { "Shizuku / Sui 当前不可用。请在设备上启动服务后重试。" }
-    check(requestPermission() && available() && authorized()) {
-      "安装需要 Shizuku / Sui 授权。请检查服务和应用授权后重试。"
+  suspend fun install(context: Context, apk: File, packageName: String, method: String): String? {
+    check(accessStatus() == method) { ACCESS_CHANGED }
+    val expectedUid = when (method) {
+      "adb" -> ADB_UID
+      "root" -> ROOT_UID
+      else -> error("无法识别所选设备身份。")
     }
 
     val service = CompletableDeferred<IT3ApkInstallService>()
@@ -77,15 +87,15 @@ internal object T3ShizukuApkInstaller {
     val args = Shizuku.UserServiceArgs(ComponentName(context, T3ApkInstallService::class.java))
       .daemon(false)
       .processNameSuffix("t3ApkInstall")
-      .version(1)
+      .version(2)
 
     try {
       Shizuku.bindUserService(args, connection)
       val installer = withTimeoutOrNull(15_000) { service.await() }
         ?: error("连接 Shizuku / Sui 安装服务超时，请检查服务后重试。")
-      check(available() && authorized()) { "Shizuku / Sui 已断开或授权已撤销。" }
       return withContext(Dispatchers.IO) {
-        val pipe = installer.openInstallStream(apk.length())
+        check(accessStatus() == method) { ACCESS_CHANGED }
+        val pipe = installer.openInstallStream(apk.length(), expectedUid, packageName)
         val transfer = runCatching {
           ParcelFileDescriptor.AutoCloseOutputStream(pipe).use { output ->
             apk.inputStream().use { input -> input.copyTo(output) }

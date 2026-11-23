@@ -1,6 +1,7 @@
 package expo.modules.t3nativecontrols
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -10,6 +11,8 @@ import android.os.Build
 import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import expo.modules.kotlin.events.OnActivityResultPayload
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.functions.Coroutine
@@ -40,11 +43,35 @@ class T3LocalApkInstallModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("T3LocalApkInstall")
+    Events("onReceivedInstallChanged")
+
+    OnCreate {
+      T3ReceivedApkInstallSession.openConfirmation = { intent ->
+        val activity = appContext.currentActivity
+        if (activity != null && (activity as? LifecycleOwner)?.lifecycle?.currentState == Lifecycle.State.RESUMED) {
+          runCatching { activity.startActivity(intent) }.isSuccess
+        } else false
+      }
+      T3ReceivedApkInstallSession.onResult = { key -> sendEvent("onReceivedInstallChanged", mapOf("key" to key)) }
+    }
+
+    OnDestroy {
+      T3ReceivedApkInstallSession.openConfirmation = null
+      T3ReceivedApkInstallSession.onResult = null
+    }
+
+    AsyncFunction("resumeReceivedInstall") { key: String ->
+      val activity = appContext.currentActivity ?: return@AsyncFunction false
+      T3ReceivedApkInstallSession.resumeConfirmation(context(), key, activity)
+    }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("getDeviceAccess") { T3ShizukuApkInstaller.accessStatus() }
 
     AsyncFunction("requestDeviceAccess").Coroutine<String> {
-      runExclusive { T3ShizukuApkInstaller.requestAccess() }
+      runExclusive {
+        check(appContext.currentActivity?.hasWindowFocus() == true) { "请在应用前台请求设备授权。" }
+        T3ShizukuApkInstaller.requestAccess()
+      }
     }
 
     AsyncFunction("getSelectedApk") {
@@ -74,11 +101,7 @@ class T3LocalApkInstallModule : Module() {
       withContext(Dispatchers.IO) { readReceivedInstall(key) }
     }
 
-    AsyncFunction("cancelReceivedInstall") { key: String ->
-      require(key.isNotEmpty() && key.length <= 4096)
-      check(context().getSharedPreferences("received-apk-install", Context.MODE_PRIVATE)
-        .edit().putString(key, "cancelled").commit()) { "无法保存取消记录。" }
-    }
+    AsyncFunction("cancelReceivedInstall") { key: String -> recordCancelled(key) }
 
     AsyncFunction("prepareReceivedApk") Coroutine { uriString: String, name: String, size: Double, sha256: String, receiptKey: String ->
       runExclusive {
@@ -105,23 +128,57 @@ class T3LocalApkInstallModule : Module() {
       runExclusive {
         val apk = selection?.takeIf { it.file.name == id && it.file.isFile }
           ?: error("所选 APK 已失效，请重新选择文件。")
-        val store = context().getSharedPreferences("received-apk-install", Context.MODE_PRIVATE)
-        apk.receiptKey?.let { key ->
-          // 在拉起系统界面前写入预期版本，进程重启后可核对系统记录。
-          check(store.edit().putString(key, "${apk.packageName}:${apk.versionCode}:${apk.receivedHash}").commit()) { "无法保存安装记录，请重试。" }
+        require(method == "system" || method == "adb" || method == "root") { "无法识别所选安装方式。" }
+        if (method != "system") {
+          val previous = apk.receiptKey?.let { key ->
+            context().getSharedPreferences(T3ReceivedApkInstallSession.STORE, Context.MODE_PRIVATE).getString(key, null)
+          }
+          check(T3ReceivedApkInstallSession.readAttempt(previous)?.optString("status") != "pending") {
+            "此 APK 的系统安装仍在等待结果，可继续使用系统安装器。"
+          }
+          check(T3ShizukuApkInstaller.accessStatus() == method) { T3ShizukuApkInstaller.ACCESS_CHANGED }
+          if (!confirmDeviceInstall(apk, method)) {
+            apk.receiptKey?.let(::recordCancelled)
+            return@runExclusive mapOf("status" to "cancelled")
+          }
+          check(T3ShizukuApkInstaller.accessStatus() == method) { T3ShizukuApkInstaller.ACCESS_CHANGED }
         }
-        val result = when (method) {
-          "system" -> systemInstall(apk)
-          "shizuku" -> {
-            val error = T3ShizukuApkInstaller.install(context(), apk.file)
+        if (method == "system" && apk.receiptKey != null) {
+          if (requireSystemInstallPermission()) return@runExclusive mapOf("status" to "permission-required")
+          withContext(Dispatchers.IO) {
+            T3ReceivedApkInstallSession.launch(
+              context(), apk.receiptKey, apk.file, apk.packageName, apk.version ?: apk.versionCode.toString(), apk.versionCode,
+            )
+          }
+          apk.file.delete()
+          selection = null
+          return@runExclusive mapOf("status" to "pending")
+        }
+        val store = context().getSharedPreferences(T3ReceivedApkInstallSession.STORE, Context.MODE_PRIVATE)
+        val priorReceipt = apk.receiptKey?.let { store.getString(it, null) }
+        apk.receiptKey?.let { key ->
+          // 在拉起安装器前写入预期版本，进程重启后可核对系统记录。
+          check(store.edit().putString(key, "${apk.packageName}:${apk.versionCode}:${apk.receivedHash}").commit()) {
+            "无法保存安装记录，请重试。"
+          }
+        }
+        val result = try {
+          if (method == "system") systemInstall(apk)
+          else {
+            val error = T3ShizukuApkInstaller.install(context(), apk.file, apk.packageName, method)
             if (error == null) mapOf("status" to "installed")
             else mapOf("status" to "failed", "message" to error)
           }
-          else -> error("无法识别所选安装方式。")
+        } catch (error: Exception) {
+          apk.receiptKey?.let { store.edit().putString(it, priorReceipt).commit() }
+          throw error
         }
-        if (apk.receiptKey != null && result["status"] != "installed") {
-          if (result["status"] == "cancelled") store.edit().putString(apk.receiptKey, "cancelled").commit()
-          else store.edit().remove(apk.receiptKey).commit()
+        apk.receiptKey?.let {
+          when (result["status"]) {
+            "installed" -> Unit
+            "cancelled" -> recordCancelled(it)
+            else -> store.edit().putString(it, priorReceipt).commit()
+          }
         }
         if (result["status"] == "installed") {
           apk.file.delete()
@@ -142,11 +199,64 @@ class T3LocalApkInstallModule : Module() {
 
   private fun context(): Context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
 
+  private fun recordCancelled(key: String): Boolean {
+    require(key.isNotEmpty() && key.length <= 4096)
+    val store = context().getSharedPreferences(T3ReceivedApkInstallSession.STORE, Context.MODE_PRIVATE)
+    return synchronized(T3ReceivedApkInstallSession::class.java) {
+      val status = T3ReceivedApkInstallSession.readAttempt(store.getString(key, null))?.optString("status")
+      if (status == "pending" || status == "verified") return@synchronized false
+      check(store.edit().putString(key, "cancelled").commit()) { "无法保存取消记录。" }
+      true
+    }
+  }
+
+  private suspend fun confirmDeviceInstall(apk: SelectedApk, method: String): Boolean {
+    val activity = appContext.currentActivity ?: error("请在应用前台继续操作。")
+    check(!activity.isFinishing && (activity as? LifecycleOwner)?.lifecycle?.currentState == Lifecycle.State.RESUMED) {
+      "请在应用前台确认安装。"
+    }
+    val identity = if (method == "root") "Root" else "ADB"
+    val version = apk.version?.let { "版本 $it · " }.orEmpty()
+    val dialog = AlertDialog.Builder(activity)
+      .setTitle("使用 $identity 安装 APK？")
+      .setMessage("${apk.packageName}\n${version}构建 ${apk.versionCode}")
+      .setNegativeButton("取消", null)
+      .create()
+    try {
+      return suspendCancellableCoroutine { continuation ->
+        dialog.setButton(AlertDialog.BUTTON_POSITIVE, "安装") { _, _ ->
+          if (continuation.isActive) continuation.resume(true)
+        }
+        dialog.setOnDismissListener {
+          if (continuation.isActive) continuation.resume(false)
+        }
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
+      }
+    } finally {
+      dialog.setOnDismissListener(null)
+      dialog.dismiss()
+    }
+  }
+
   @Suppress("DEPRECATION")
   private fun readReceivedInstall(key: String): Map<String, String>? {
-    val saved = context().getSharedPreferences("received-apk-install", Context.MODE_PRIVATE)
+    val saved = context().getSharedPreferences(T3ReceivedApkInstallSession.STORE, Context.MODE_PRIVATE)
       .getString(key, null) ?: return null
     if (saved == "cancelled") return mapOf("status" to "cancelled")
+    T3ReceivedApkInstallSession.readAttempt(saved)?.let { record ->
+      return when (val status = record.optString("status")) {
+        "verified" -> mapOf(
+          "status" to status,
+          "packageName" to record.getString("packageName"),
+          "version" to record.getString("version"),
+          "versionCode" to record.getString("versionCode"),
+        )
+        "pending", "cancelled" -> mapOf("status" to status)
+        "failed" -> mapOf("status" to status, "message" to record.getString("message"))
+        else -> null
+      }
+    }
     val fields = saved.split(':', limit = 3)
     if (fields.size != 3) return null
     val (pkg, expectedCode, expectedHash) = fields
@@ -239,13 +349,17 @@ class T3LocalApkInstallModule : Module() {
     }
   }
 
+  private fun requireSystemInstallPermission(): Boolean {
+    val activity = appContext.currentActivity ?: error("请在应用前台继续操作。")
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || activity.packageManager.canRequestPackageInstalls()) return false
+    activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+    return true
+  }
+
   @Suppress("DEPRECATION")
   private suspend fun systemInstall(apk: SelectedApk): Map<String, String> {
+    if (requireSystemInstallPermission()) return mapOf("status" to "permission-required")
     val activity = appContext.currentActivity ?: error("请在应用前台继续操作。")
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
-      activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
-      return mapOf("status" to "permission-required")
-    }
     val apkUri = FileProvider.getUriForFile(activity, "${activity.packageName}.FileSystemFileProvider", apk.file)
     val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
       data = apkUri
