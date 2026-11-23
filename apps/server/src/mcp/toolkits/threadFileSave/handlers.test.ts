@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  ChatAttachmentId,
   EnvironmentId,
   EventId,
   MessageId,
@@ -13,6 +14,7 @@ import {
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
+  type ChatAttachment,
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
 import { McpSchema } from "effect/ai";
@@ -28,10 +30,15 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { layer as assetSignerLayer } from "../../../assets/AssetSigner.ts";
+import {
+  createDeterministicAttachmentId,
+  resolveAttachmentPath,
+} from "../../../attachmentStore.ts";
 import * as EnvironmentAuth from "../../../auth/EnvironmentAuth.ts";
 import * as McpOAuth from "../../../auth/McpOAuth.ts";
 import { layer as secretStoreLayer } from "../../../auth/ServerSecretStore.ts";
 import { SessionStore } from "../../../auth/SessionStore.ts";
+import { createCompanionStore } from "../../../companion/store.ts";
 import { ServerConfig } from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { readFileHandoff } from "../../../fileExchange/FileHandoff.ts";
@@ -192,12 +199,15 @@ it.live(
       });
       const phoneSession = yield* sessions.verify(mobile.token);
       const computerSession = yield* sessions.verify(desktop.token);
-      const encoded = new TextEncoder().encode(
-        `t3-message-origin:session:${phoneSession.sessionId}`,
-      );
-      const clientAlias = Buffer.from(yield* digest.digest(Digest.sha256, encoded)).toString(
-        "base64url",
-      );
+      const sessionAlias = (session: typeof phoneSession) =>
+        digest
+          .digest(
+            Digest.sha256,
+            new TextEncoder().encode(`t3-message-origin:session:${session.sessionId}`),
+          )
+          .pipe(Effect.map((hash) => Buffer.from(hash).toString("base64url")));
+      const clientAlias = yield* sessionAlias(phoneSession);
+      const computerAlias = yield* sessionAlias(computerSession);
       const credential = yield* registry.issue({
         threadId,
         providerInstanceId: ProviderInstanceId.make("codex"),
@@ -275,6 +285,8 @@ it.live(
         timestamp: DateTime.Utc,
         activeThread = threadId,
         alias = clientAlias,
+        surface: "mobile" | "desktop" = "mobile",
+        attachments: ReadonlyArray<ChatAttachment> = [],
       ) =>
         apply({
           type: "message.updated",
@@ -286,27 +298,34 @@ it.live(
             role,
             threadId: activeThread,
             createdBy: role === "user" ? "user" : "agent",
-            creationSource: role === "user" ? "mobile" : "provider",
+            creationSource:
+              role === "assistant" ? "provider" : surface === "mobile" ? "mobile" : "web",
             ...(role === "user"
-              ? { clientOrigin: { clientAlias: alias, surface: "mobile", deviceType: "phone" } }
+              ? {
+                  clientOrigin: {
+                    clientAlias: alias,
+                    surface,
+                    deviceType: surface === "mobile" ? "phone" : "desktop",
+                  },
+                }
               : {}),
             runId: null,
             nodeId: null,
             streaming: false,
-            attachments: [],
+            attachments,
             createdAt: timestamp,
             updatedAt: timestamp,
           },
         } as never);
 
       let ordinal = 0;
-      const turn = (text: string, alias = clientAlias) =>
+      const turn = (text: string, alias = clientAlias, surface: "mobile" | "desktop" = "mobile") =>
         Effect.gen(function* () {
           ordinal++;
           const time = DateTime.add(now, { seconds: ordinal });
           const id = RunId.make(`file-save-run-${ordinal}`);
           const messageId = MessageId.make(`file-save-user-${ordinal}`);
-          yield* writeMessage(messageId, text, "user", time, threadId, alias);
+          yield* writeMessage(messageId, text, "user", time, threadId, alias, surface);
           yield* apply({
             type: "run.created",
             threadId,
@@ -458,6 +477,118 @@ it.live(
       expect((yield* save({ _tag: "workspaceOutput", path: "重复.txt" })).isError).toBe(true);
       yield* turn("把子目录/重复.txt发到这台手机");
       yield* receive("子目录/重复.txt", { _tag: "workspaceOutput", path: "子目录/重复.txt" });
+
+      // 用合成图片完成一次本地伴侣任务，再将其作为原会话附件保存。
+      const companion = yield* Effect.acquireRelease(
+        Effect.sync(() => createCompanionStore(config.stateDir)),
+        (store) => Effect.sync(() => store.close()),
+      );
+      const captureDevice = companion.enroll(companion.pair().code, "合成截图设备", {});
+      const capture = companion.enqueue(threadId, captureDevice.deviceId, "screenshot", "once");
+      expect(companion.poll(captureDevice.token, "合成截图设备", {}).job?.id).toBe(capture.id);
+      const imageBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4X88AAAP/AX9v1mSAAAAAAElFTkSuQmCC";
+      const originalPng = Buffer.from(imageBase64, "base64");
+      companion.complete(captureDevice.token, {
+        id: capture.id,
+        status: "done",
+        message: "合成原图",
+        imageBase64,
+      });
+      const capturedPath = companion.result(threadId, capture.id).imagePath!;
+      expect(Buffer.from(yield* fs.readFile(capturedPath))).toEqual(originalPng);
+      const screenshotMessage = MessageId.make("original-screenshot");
+      const screenshot: ChatAttachment = {
+        type: "image",
+        id: ChatAttachmentId.make(createDeterministicAttachmentId(threadId, capture.id)!),
+        name: "原始截图.png",
+        mimeType: "image/png",
+        sizeBytes: originalPng.length,
+      };
+      const originalPath = resolveAttachmentPath({
+        attachmentsDir: config.attachmentsDir,
+        attachment: screenshot,
+      })!;
+      yield* fs.copyFile(capturedPath, originalPath);
+      const preview = yield* turn("给我看看刚才的截图");
+      yield* writeMessage(
+        screenshotMessage,
+        "原始截图",
+        "assistant",
+        preview.time,
+        threadId,
+        clientAlias,
+        "mobile",
+        [screenshot],
+      );
+      const screenshotSource = {
+        _tag: "attachment",
+        messageId: screenshotMessage,
+        attachmentId: screenshot.id,
+      };
+      expect((yield* save(screenshotSource)).isError).toBe(true);
+      const remoteScreenshotMessage = MessageId.make("remote-screenshot");
+      yield* writeMessage(
+        remoteScreenshotMessage,
+        "另一会话",
+        "assistant",
+        preview.time,
+        otherThread,
+        clientAlias,
+        "mobile",
+        [screenshot],
+      );
+      yield* turn("把刚才那张保存到这台电脑", computerAlias, "desktop");
+      expect(
+        (yield* save({ ...screenshotSource, messageId: remoteScreenshotMessage })).isError,
+      ).toBe(true);
+      const screenshotDelivery = yield* decodeReceipt(
+        (yield* save(screenshotSource)).structuredContent,
+      );
+      expect(screenshotDelivery).toMatchObject({
+        recipientLabel: "书房电脑",
+        name: screenshot.name,
+        status: "awaiting_save",
+      });
+      const screenshotId = screenshotDelivery.id;
+      const originalSha = yield* digest.digestHex(Digest.sha256, originalPng);
+      expect(yield* readFileHandoff({ _tag: "inbox" }, phoneSession)).toMatchObject({
+        transfers: [],
+      });
+      expect(yield* readFileHandoff({ _tag: "inbox" }, computerSession)).toMatchObject({
+        transfers: [expect.objectContaining({ threadId, id: screenshotId, sha256: originalSha })],
+      });
+      const screenshotLink = yield* receiveLink(screenshotId, computerSession);
+      const screenshotResponse = yield* http.get(screenshotLink.relativeUrl);
+      expect(screenshotResponse.status).toBe(200);
+      expect(Buffer.from(yield* screenshotResponse.arrayBuffer)).toEqual(originalPng);
+      const screenshotReceipt = {
+        _tag: "confirmSaved" as const,
+        threadId,
+        id: screenshotId,
+        sha256: originalSha,
+        sizeBytes: originalPng.length,
+        savedPath: "Downloads/原始截图.png",
+      };
+      expect(yield* Effect.result(readFileHandoff(screenshotReceipt, phoneSession))).toMatchObject({
+        _tag: "Failure",
+      });
+      yield* readFileHandoff(screenshotReceipt, computerSession);
+      expect(
+        (yield* call("t3_thread_file_save_status", { id: screenshotId })).structuredContent,
+      ).toMatchObject({
+        status: "saved",
+        savedPath: screenshotReceipt.savedPath,
+      });
+      expect(companion.list()[0]?.recentTasks).toMatchObject([
+        {
+          id: capture.id,
+          action: "screenshot",
+          status: "done",
+        },
+      ]);
+      expect(Buffer.from(yield* fs.readFile(originalPath))).toEqual(originalPng);
+
       yield* turn("把 验证传输.txt 发到书房电脑或者手机");
       expect(
         (yield* save({ _tag: "workspaceOutput", path: "验证传输.txt" })).structuredContent,
@@ -483,11 +614,7 @@ it.live(
       expect((yield* manage("cancel")).isError).toBe(true);
       yield* turn("取消生成任务");
       expect((yield* manage("cancel")).isError).toBe(true);
-      const computerHash = yield* digest.digest(
-        Digest.sha256,
-        new TextEncoder().encode(`t3-message-origin:session:${computerSession.sessionId}`),
-      );
-      yield* turn(`取消 ${redirectedId}`, Buffer.from(computerHash).toString("base64url"));
+      yield* turn(`取消 ${redirectedId}`, computerAlias, "desktop");
       expect((yield* manage("cancel", { id: redirectedId })).isError).toBe(true);
       yield* turn("改发到书房电脑");
       expect(
