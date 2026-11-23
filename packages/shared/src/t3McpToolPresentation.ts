@@ -294,6 +294,11 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "device",
     "device",
   ),
+  t3_thread_save_workspace_file: tool(
+    ["发送", "正在准备", "已准备", "项目文件"],
+    "device",
+    "device",
+  ),
   t3_thread_file_save: tool(["发送", "正在准备", "已准备", "会话文件"], "device", "device"),
   t3_thread_file_save_status: tool(
     ["查看", "正在读取", "已读取", "文件保存回执"],

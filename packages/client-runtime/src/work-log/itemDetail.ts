@@ -303,7 +303,12 @@ export function companionRecordingOutput(item: OrchestrationV2TurnItem) {
 export function threadFileSaveOutput(item: OrchestrationV2TurnItem) {
   if (item.type !== "dynamic_tool" || item.outputOmitted === true) return null;
   const tool = resolveT3McpToolId(item.toolName);
-  if (tool !== "t3_thread_file_save" && tool !== "t3_thread_file_save_status") return null;
+  if (
+    tool !== "t3_thread_save_workspace_file" &&
+    tool !== "t3_thread_file_save" &&
+    tool !== "t3_thread_file_save_status"
+  )
+    return null;
   const text = dynamicToolOutputText(item);
   const result = text ? parseJson(text) : null;
   if (
@@ -321,6 +326,7 @@ export function threadFileSaveOutput(item: OrchestrationV2TurnItem) {
       } as const;
     case "saved": {
       const installed = result.installation;
+      const id = typeof result.id === "string" ? result.id : null;
       if (
         isRecord(installed) &&
         installed.status === "verified" &&
@@ -330,17 +336,20 @@ export function threadFileSaveOutput(item: OrchestrationV2TurnItem) {
       ) {
         return {
           status: result.status,
+          id,
           text: `${result.recipientLabel} 已核验安装 ${installed.packageName} ${installed.version}（${installed.versionCode}）。`,
         } as const;
       }
       if (isRecord(installed) && installed.status === "cancelled") {
         return {
           status: result.status,
+          id,
           text: `${result.recipientLabel} 已取消安装。文件已保存${typeof result.savedPath === "string" ? `到 ${result.savedPath}` : ""}。`,
         } as const;
       }
       return {
         status: result.status,
+        id,
         text:
           typeof result.savedPath === "string"
             ? `已保存到 ${result.savedPath}`

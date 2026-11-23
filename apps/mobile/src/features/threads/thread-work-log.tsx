@@ -1192,7 +1192,8 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
           ) : null}
           {fileSave ? (
             <View className="gap-1.5 pb-1.5">
-              {fileSave.status === "awaiting_save" && fileSave.id ? (
+              {(fileSave.status === "awaiting_save" || fileSave.status === "saved") &&
+              fileSave.id ? (
                 <ThreadFileHandoffReceipt
                   environmentId={props.environmentId}
                   threadId={shownItem.threadId}

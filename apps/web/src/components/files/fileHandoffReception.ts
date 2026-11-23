@@ -156,7 +156,11 @@ export async function receiveAgentFile(
         await saveBrowserHandoff(url, destination, sizeBytes, sha256);
         verified = {};
       } else if (desktop?.downloadFile && desktop.onFileDownload) {
-        const event = await startVerifiedDesktopDownload({ url, fileName: result.name });
+        const event = await startVerifiedDesktopDownload({
+          url,
+          fileName: result.name,
+          sha256: result.sha256,
+        });
         if (!event) throw new Error("文件未保存。");
         verified = event.savedPath ? { savedPath: event.savedPath } : {};
       } else {

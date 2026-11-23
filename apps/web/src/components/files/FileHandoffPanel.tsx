@@ -23,6 +23,7 @@ import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { openDesktopHandoffPeer } from "./desktopHandoffPeer";
+import { SavedFileHandoffLocation } from "./SavedFileHandoffLocation";
 
 import {
   fileHandoffAtoms as atoms,
@@ -235,7 +236,11 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
         await saveBrowserHandoff(url, destination, result.sizeBytes, result.sha256);
         verified = true;
       } else if (window.desktopBridge && item.expiresAt !== undefined) {
-        const saved = await startVerifiedDesktopDownload({ url, fileName: result.name });
+        const saved = await startVerifiedDesktopDownload({
+          url,
+          fileName: result.name,
+          sha256: result.sha256,
+        });
         verified = saved !== null;
         savedPath = saved?.savedPath;
       } else {
@@ -354,6 +359,9 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
               </details>
             )}
           </div>
+          {!item.outgoing && item.disposition === "saved" ? (
+            <SavedFileHandoffLocation threadId={threadId} transferId={item.id} />
+          ) : null}
           {item.outgoing && item.expiresAt !== undefined && !item.disposition ? (
             <Button
               variant="outline"

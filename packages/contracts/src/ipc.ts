@@ -1061,6 +1061,7 @@ export interface DesktopFileDownloadEvent {
   readonly receivedBytes: number;
   readonly totalBytes: number;
   readonly savedPath?: string;
+  readonly verifiedSha256?: string;
 }
 
 export interface DesktopAutomaticFileDownload {
@@ -1071,7 +1072,18 @@ export interface DesktopAutomaticFileDownload {
   readonly sha256: string;
 }
 
+export interface DesktopSavedFileHandoff {
+  readonly threadId: string;
+  readonly transferId: string;
+  readonly reveal: boolean;
+}
+
+export type DesktopSavedFileHandoffStatus = "available" | "missing" | "unknown";
+
 export interface DesktopBridge {
+  locateSavedFileHandoff?: (
+    input: DesktopSavedFileHandoff,
+  ) => Promise<DesktopSavedFileHandoffStatus>;
   downloadHandoffFile?: (input: DesktopAutomaticFileDownload) => Promise<{ savedPath: string }>;
   downloadFile?: (input: {
     url: string;

@@ -26,6 +26,7 @@ import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Button } from "../ui/button";
 import { FileHandoffPanel } from "../files/FileHandoffPanel";
 import { ThreadFileSaveStatus } from "../files/ThreadFileReception";
+import { SavedFileHandoffLocation } from "../files/SavedFileHandoffLocation";
 import { toastManager } from "../ui/toast";
 import { downloadMedia } from "../media/mediaContent";
 import ChatMarkdown from "../ChatMarkdown";
@@ -259,6 +260,16 @@ function FileSaveOutput(props: {
   };
 }) {
   const { fileSave, thread } = props;
+  if (fileSave.status === "saved") {
+    return (
+      <div className="space-y-1.5">
+        <p>{fileSave.text}</p>
+        {fileSave.id ? (
+          <SavedFileHandoffLocation threadId={thread.threadId} transferId={fileSave.id} />
+        ) : null}
+      </div>
+    );
+  }
   if (fileSave.status !== "awaiting_save") return <p>{fileSave.text}</p>;
   return fileSave.id ? (
     <ThreadFileSaveStatus thread={thread} id={fileSave.id} fallback={fileSave.text} />

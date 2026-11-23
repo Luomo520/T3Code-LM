@@ -105,21 +105,25 @@ describe("thread file save receipt", () => {
     const item = toolItem([{ type: "text", text: JSON.stringify(result) }], tool);
     expect(threadFileSaveOutput(item)).toEqual({
       status: "saved",
+      id: null,
       text: "手机 已核验安装 app.t3code 0.2.4（9223372036854775807）。",
     });
   });
 
-  it("marks staged files as awaiting a save on the recipient", () => {
-    const item = toolItem(
-      {
-        name: "t3-code.apk",
-        recipientLabel: "手机",
-        status: "awaiting_save",
-      },
-      "t3-code.t3_thread_file_save",
-    );
-    expect(threadFileSaveOutput(item)).toMatchObject({ status: "awaiting_save" });
-  });
+  it.each(["t3-code.t3_thread_file_save", "t3-code.t3_thread_save_workspace_file"])(
+    "shows a receipt for %s",
+    (tool) => {
+      const item = toolItem(
+        {
+          name: "t3-code.apk",
+          recipientLabel: "手机",
+          status: "awaiting_save",
+        },
+        tool,
+      );
+      expect(threadFileSaveOutput(item)).toMatchObject({ status: "awaiting_save" });
+    },
+  );
 });
 
 describe("tool image output parsing", () => {

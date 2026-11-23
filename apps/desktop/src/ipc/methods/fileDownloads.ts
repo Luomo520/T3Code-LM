@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Schema from "effect/Schema";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import { ThreadId } from "@t3tools/contracts";
+import { locateSavedFileHandoff as locateHandoff } from "../../downloads/SavedFileHandoffs.ts";
 import {
   downloadFile as start,
   downloadHandoffFile as startHandoff,
@@ -40,6 +42,22 @@ export const downloadHandoffFile = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.fileDownloads.startHandoff")(function* (input, event) {
     return yield* Effect.tryPromise({
       try: () => startHandoff(input, event?.sender.id),
+      catch: (cause) => new FileDownloadError({ cause }),
+    });
+  }),
+});
+
+export const locateSavedFileHandoff = DesktopIpc.makeIpcMethod({
+  channel: "desktop:locate-saved-file-handoff",
+  payload: Schema.Struct({
+    threadId: ThreadId,
+    transferId: Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/u)),
+    reveal: Schema.Boolean,
+  }),
+  result: Schema.Literals(["available", "missing", "unknown"]),
+  handler: Effect.fn("desktop.ipc.fileDownloads.locateHandoff")(function* (input) {
+    return yield* Effect.tryPromise({
+      try: () => locateHandoff(input),
       catch: (cause) => new FileDownloadError({ cause }),
     });
   }),

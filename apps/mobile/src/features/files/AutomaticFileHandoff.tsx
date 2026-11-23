@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import {
   createFileHandoffAtoms,
+  formatFileHandoffReceipt,
   unwrapFileHandoff,
 } from "@t3tools/client-runtime/state/fileHandoff";
 import { AuthOrchestrationReadScope, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
@@ -149,19 +150,20 @@ export function ThreadFileHandoffReceipt({
       ? query.data.transfers.find(({ id }) => id === transferId)
       : undefined;
   const refresh = query.refresh;
-  const settled = item?.disposition !== undefined;
+  // 保存 APK 后仍可能收到安装回执，包括用户取消后重新安装的结果。
+  const awaitingInstallation =
+    item?.disposition === "saved" &&
+    item.name.toLowerCase().endsWith(".apk") &&
+    item.installation?.status !== "verified";
+  const refreshInterval = awaitingInstallation ? 15_000 : 5_000;
+  const settled = item?.disposition !== undefined && !awaitingInstallation;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 可见的原会话消息显示接收设备的持久回执。
   useEffect(() => {
     if (!ready || settled) return;
-    const timer = setInterval(refresh, 5_000);
+    const timer = setInterval(refresh, refreshInterval);
     return () => clearInterval(timer);
-  }, [ready, refresh, settled]);
-  const text =
-    item?.disposition === "saved"
-      ? `${item.recipientLabel} 已保存并校验 ${item.name}${item.savedPath ? `，位置 ${item.savedPath}` : ""}。`
-      : item?.disposition === "cancelled"
-        ? `${item.name} 的传输已取消。`
-        : initialText;
+  }, [ready, refresh, refreshInterval, settled]);
+  const text = (item && formatFileHandoffReceipt(item)) ?? initialText;
   return (
     <AppText selectable accessibilityLiveRegion="polite" className="text-sm text-foreground">
       {text}

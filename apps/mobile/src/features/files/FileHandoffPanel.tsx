@@ -622,31 +622,31 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
                 SHA-256 {item.sha256}
               </AppText>
             )}
+            {!item.outgoing &&
+            item.disposition === "saved" &&
+            item.sha256 &&
+            item.savedPath &&
+            /\.apk$/i.test(item.name) ? (
+              <ReceivedApkInstallAction
+                name={item.name}
+                sizeBytes={item.sizeBytes}
+                sha256={item.sha256}
+                uri={item.savedPath}
+                receiptKey={JSON.stringify([environmentId, threadId, item.id, item.sha256])}
+                installation={item.installation}
+                onReport={async (installation) => {
+                  await request({
+                    _tag: "reportInstall",
+                    threadId,
+                    id: item.id,
+                    sha256: item.sha256!,
+                    installation,
+                  });
+                  list.refresh();
+                }}
+              />
+            ) : null}
           </View>
-          {!item.outgoing &&
-          item.disposition === "saved" &&
-          item.sha256 &&
-          item.savedPath &&
-          /\.apk$/i.test(item.name) ? (
-            <ReceivedApkInstallAction
-              name={item.name}
-              sizeBytes={item.sizeBytes}
-              sha256={item.sha256}
-              uri={item.savedPath}
-              receiptKey={JSON.stringify([environmentId, threadId, item.id, item.sha256])}
-              installation={item.installation}
-              onReport={async (installation) => {
-                await request({
-                  _tag: "reportInstall",
-                  threadId,
-                  id: item.id,
-                  sha256: item.sha256!,
-                  installation,
-                });
-                list.refresh();
-              }}
-            />
-          ) : null}
           {item.outgoing && item.expiresAt !== undefined && !item.disposition ? (
             <Button
               size="compact"

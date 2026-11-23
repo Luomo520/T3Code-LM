@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   sender: vi.fn(),
   owner: vi.fn(),
   lstat: vi.fn(),
+  record: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("node:fs/promises", () => ({
   readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
@@ -18,6 +19,10 @@ vi.mock("node:fs/promises", () => ({
 vi.mock("./ResumableDownload.ts", () => ({
   downloadKey: () => "destination",
   downloadToFile: mocks.downloadToFile,
+}));
+vi.mock("./SavedFileHandoffs.ts", async (original) => ({
+  ...(await original<typeof import("./SavedFileHandoffs.ts")>()),
+  recordSavedFileHandoff: mocks.record,
 }));
 vi.mock("electron", () => ({
   webContents: { fromId: mocks.sender },
@@ -116,11 +121,16 @@ describe("file downloads", () => {
         exclusiveDestination: true,
       }),
     );
+    expect(mocks.record).toHaveBeenCalledExactlyOnceWith(
+      { threadKey: "a".repeat(64), transferId },
+      result[0]?.savedPath,
+    );
     expect(send).toHaveBeenLastCalledWith(
       "desktop:file-download-event",
       expect.objectContaining({
         state: "completed",
         savedPath: result[0]?.savedPath,
+        verifiedSha256: sha256,
       }),
     );
   });

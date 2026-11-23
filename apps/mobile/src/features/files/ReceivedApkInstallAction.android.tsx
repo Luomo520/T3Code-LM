@@ -65,6 +65,7 @@ export function ReceivedApkInstallAction(file: ReceivedApkInstallProps) {
     else if (current.status === "pending")
       setMessage("等待系统完成安装。若确认界面未出现，可再次点按安装。");
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 在安装广播或返回前台时读取该包的系统安装回执。
   useEffect(() => {
     if (!native || verified) return;
     let active = true;
@@ -151,7 +152,7 @@ export function ReceivedApkInstallAction(file: ReceivedApkInstallProps) {
   }
 
   return (
-    <View className="gap-1">
+    <View className="mt-1 items-start gap-1">
       {retryReceipt ? (
         <Button label="重试安装回执" size="compact" onPress={() => void report(retryReceipt)} />
       ) : verified && file.installation?.status === "verified" ? (

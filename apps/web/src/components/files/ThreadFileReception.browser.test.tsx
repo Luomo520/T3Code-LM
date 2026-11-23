@@ -83,6 +83,7 @@ it("hands the file to the browser from the original thread and reports browser s
 });
 
 it("replaces the original pending tool result with the verified destination", async () => {
+  using _bridge = stubGlobal("desktopBridge", undefined);
   mocks.list = [
     {
       ...transfer,
@@ -99,4 +100,69 @@ it("replaces the original pending tool result with the verified destination", as
   await expect.element(screen.getByText(/Windows PC 已保存并校验 test\.zip/)).toBeVisible();
   await expect.element(screen.getByText(/Downloads\\test\.zip/)).toBeVisible();
   await expect.element(screen.getByText("等待保存")).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("button", { name: "打开所在位置" }))
+    .not.toBeInTheDocument();
+});
+
+it("offers the local folder action through transfer identity and handles a file moved since render", async () => {
+  const locate = vi.fn().mockResolvedValueOnce("available").mockResolvedValueOnce("missing");
+  using _bridge = stubGlobal("desktopBridge", { locateSavedFileHandoff: locate });
+  mocks.list = [{ ...transfer, disposition: "saved", savedPath: "C:\\remote\\untrusted.zip" }];
+  await using screen = await render(
+    <ThreadFileSaveStatus thread={thread} id={transfer.id} fallback="等待保存" />,
+    { router: false },
+  );
+  const open = screen.getByRole("button", { name: "打开所在位置" });
+  await expect.element(open).toBeVisible();
+  await userEvent.click(open);
+  expect(locate.mock.calls).toEqual([
+    [{ threadId: thread.threadId, transferId: transfer.id, reveal: false }],
+    [{ threadId: thread.threadId, transferId: transfer.id, reveal: true }],
+  ]);
+  await expect.element(screen.getByText("文件已移动、删除或替换。")).toBeVisible();
+});
+
+it("withholds the folder action when the local desktop has no matching record", async () => {
+  const locate = vi.fn().mockResolvedValue("unknown");
+  using _bridge = stubGlobal("desktopBridge", { locateSavedFileHandoff: locate });
+  mocks.list = [{ ...transfer, disposition: "saved", savedPath: "C:\\remote\\untrusted.zip" }];
+  await using screen = await render(
+    <ThreadFileSaveStatus thread={thread} id={transfer.id} fallback="等待保存" />,
+    { router: false },
+  );
+  await expect.poll(() => locate.mock.calls.length).toBe(1);
+  await expect
+    .element(screen.getByRole("button", { name: "打开所在位置" }))
+    .not.toBeInTheDocument();
+});
+
+it("shows a cancelled installation and its later verified retry in the original conversation", async () => {
+  const apk = {
+    ...transfer,
+    name: "sample.apk",
+    disposition: "saved" as const,
+    savedPath: "Download/t3code/sample.apk",
+    installation: { status: "cancelled" as const },
+  };
+  mocks.list = [apk];
+  const result = <ThreadFileSaveStatus thread={thread} id={apk.id} fallback="等待保存" />;
+  await using screen = await render(result, { router: false });
+  await expect.element(screen.getByText(/已取消安装，文件已保留/)).toBeVisible();
+  mocks.list = [
+    {
+      ...apk,
+      installation: {
+        status: "verified",
+        packageName: "dev.t3.fixture",
+        version: "1.0",
+        versionCode: "9223372036854775807",
+      },
+    },
+  ];
+  await screen.rerender(<ThreadFileSaveStatus thread={thread} id={apk.id} fallback="等待保存" />);
+  await expect
+    .element(screen.getByText(/dev\.t3\.fixture 1\.0（9223372036854775807）/))
+    .toBeVisible();
+  await expect.element(screen.getByText(/已取消安装/)).not.toBeInTheDocument();
 });

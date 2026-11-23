@@ -6,7 +6,10 @@ import {
   type FileHandoffTransfer,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { unwrapFileHandoff } from "@t3tools/client-runtime/state/fileHandoff";
+import {
+  formatFileHandoffReceipt,
+  unwrapFileHandoff,
+} from "@t3tools/client-runtime/state/fileHandoff";
 import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
 
 import { useConnectedEnvironmentIds } from "~/state/environments";
@@ -14,6 +17,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
+import { SavedFileHandoffLocation } from "./SavedFileHandoffLocation";
 import {
   fileHandoffAtoms,
   quietFileHandoff,
@@ -101,15 +105,17 @@ export function ThreadFileSaveStatus(props: {
 }) {
   const { httpBaseUrl, request, transfers } = useThreadHandoffs(props.thread);
   const file = transfers.find((item) => item.id === props.id);
-  if (file?.disposition === "saved") {
+  const settled = file ? formatFileHandoffReceipt(file) : null;
+  if (file && settled) {
     return (
-      <p>
-        {file.recipientLabel} 已保存并校验 {file.name}
-        {file.savedPath ? `，保存到 ${file.savedPath}` : "。"}
-      </p>
+      <div className="space-y-1.5">
+        <p>{settled}</p>
+        {file.disposition === "saved" && !file.outgoing ? (
+          <SavedFileHandoffLocation threadId={props.thread.threadId} transferId={file.id} />
+        ) : null}
+      </div>
     );
   }
-  if (file?.disposition === "cancelled") return <p>{file.name} 的传输已取消。</p>;
   if (httpBaseUrl && file?.autoReceive && !file.outgoing) {
     return (
       <ThreadFileReceipt
@@ -154,27 +160,25 @@ function ThreadFileReceipt(props: {
   const getReceipt = () => readFileReceipt(target);
   const receipt = useSyncExternalStore(subscribeFileReceipts, getReceipt, getReceipt);
   const status =
-    props.file.disposition === "saved"
-      ? props.file.savedPath
-        ? `已保存并校验 · ${props.file.savedPath}`
-        : "已保存并校验"
-      : props.file.disposition === "cancelled"
-        ? "传输已取消"
-        : receipt?.state === "working"
-          ? "正在接收…"
-          : receipt?.state === "saved"
-            ? receipt.savedPath
-              ? `已保存并校验 · ${receipt.savedPath}`
-              : "已保存并校验"
-            : receipt?.state === "downloaded"
-              ? "已交给浏览器下载，请在浏览器下载列表查看。"
-              : receipt?.state === "receipt"
-                ? "文件已保存，接收回执待发送。"
-                : receipt?.state === "failed"
-                  ? "文件未领取，请重试。"
-                  : desktop
-                    ? "等待桌面端接收…"
-                    : "等待保存";
+    formatFileHandoffReceipt(props.file) ??
+    (receipt?.state === "working"
+      ? "正在接收…"
+      : receipt?.state === "saved"
+        ? receipt.savedPath
+          ? `已保存并校验 · ${receipt.savedPath}`
+          : "已保存并校验"
+        : receipt?.state === "downloaded"
+          ? "已交给浏览器下载，请在浏览器下载列表查看。"
+          : receipt?.state === "receipt"
+            ? "文件已保存，接收回执待发送。"
+            : receipt?.state === "failed"
+              ? "文件未领取，请重试。"
+              : desktop
+                ? "等待桌面端接收…"
+                : "等待保存");
+  const showLocation =
+    props.file.disposition === "saved" ||
+    (!props.file.disposition && (receipt?.state === "saved" || receipt?.state === "receipt"));
   const canSave =
     !props.file.disposition &&
     props.file.sha256 &&
@@ -189,6 +193,9 @@ function ThreadFileReceipt(props: {
           {status}
         </div>
       </div>
+      {showLocation ? (
+        <SavedFileHandoffLocation threadId={props.thread.threadId} transferId={props.file.id} />
+      ) : null}
       {canSave ? (
         <Button
           size="sm"

@@ -79,7 +79,11 @@ export async function startFileDownload(file: { url: string; fileName: string })
   });
 }
 
-export async function startVerifiedDesktopDownload(file: { url: string; fileName: string }) {
+export async function startVerifiedDesktopDownload(file: {
+  url: string;
+  fileName: string;
+  sha256: string;
+}) {
   const bridge = window.desktopBridge;
   if (!bridge?.downloadFile || !bridge.onFileDownload) {
     await startFileDownload(file);
@@ -95,7 +99,7 @@ export async function startVerifiedDesktopDownload(file: { url: string; fileName
     else if (event.id === selectedId) announce?.(event);
   });
   try {
-    const result = await bridge.downloadFile(file);
+    const result = await bridge.downloadFile({ url: file.url, fileName: file.fileName });
     if (result.method === "cancelled") return null;
     if (result.method !== "builtin" || result.id === undefined) return null;
     selectedId = result.id;
@@ -105,7 +109,11 @@ export async function startVerifiedDesktopDownload(file: { url: string; fileName
         announce = resolve;
       }));
     if (event.state === "interrupted") throw new Error("下载或校验中断，请重试。");
-    return event.state === "completed" ? event : null;
+    if (event.state !== "completed") return null;
+    if (event.verifiedSha256 !== file.sha256) {
+      throw new Error("下载器未提供一致的 SHA-256 校验证明，无法确认接收。");
+    }
+    return event;
   } finally {
     unsubscribe();
   }

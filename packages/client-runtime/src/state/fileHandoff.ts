@@ -5,6 +5,7 @@ import {
   type FileHandoffRequest,
   type FileHandoffReply,
   type FileHandoffStart,
+  type FileHandoffTransfer,
 } from "@t3tools/contracts";
 import { createSha256 } from "@t3tools/shared/sha256";
 import { trySendDirectFile, type OpenHandoffPeer } from "./fileHandoffDirect.ts";
@@ -128,6 +129,22 @@ export async function sendHandoffFile(options: {
     offset += length;
     onProgress(offset);
   } while (offset < input.sizeBytes);
+}
+
+export function formatFileHandoffReceipt(
+  file: Pick<
+    FileHandoffTransfer,
+    "disposition" | "name" | "recipientLabel" | "savedPath" | "installation"
+  >,
+): string | null {
+  if (file.disposition === "cancelled") return `${file.name} 的传输已取消。`;
+  if (file.disposition !== "saved") return null;
+  const saved = `${file.recipientLabel} 已保存并校验 ${file.name}${file.savedPath ? `，保存到 ${file.savedPath}` : ""}。`;
+  const install = file.installation;
+  if (install?.status === "verified")
+    return `${saved}已核验安装 ${install.packageName} ${install.version}（${install.versionCode}）。`;
+  if (install?.status === "cancelled") return `${saved}已取消安装，文件已保留。`;
+  return saved;
 }
 
 export function fileHandoffErrorMessage(error: unknown, fallback: string) {

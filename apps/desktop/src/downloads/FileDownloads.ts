@@ -12,6 +12,7 @@ import {
   type DesktopFileDownloadEvent,
 } from "@t3tools/contracts";
 import { downloadKey, downloadToFile } from "./ResumableDownload.ts";
+import { receivedHandoffKey, recordSavedFileHandoff } from "./SavedFileHandoffs.ts";
 
 const active = new Map<string, { cancel: () => void; senderId: number }>();
 const builtinDestinations = new Set<string>();
@@ -82,6 +83,8 @@ function startBuiltinDownload(
   let previousProgress = -1;
   const source = new URL(url);
   const fileHandoff = source.pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/");
+  const handoffKey = receivedHandoffKey(source);
+  let verifiedSha256: string | undefined;
   const send = (state: DesktopFileDownloadEvent["state"]) => {
     if (!sender.isDestroyed())
       sender.send("desktop:file-download-event", {
@@ -90,7 +93,7 @@ function startBuiltinDownload(
         state,
         receivedBytes,
         totalBytes,
-        ...(fileHandoff && state === "completed" ? { savedPath: path } : {}),
+        ...(state === "completed" && verifiedSha256 ? { savedPath: path, verifiedSha256 } : {}),
       } satisfies DesktopFileDownloadEvent);
   };
   // Asset URLs rotate per request. The strong ETag identifies the file version within its origin.
@@ -129,6 +132,10 @@ function startBuiltinDownload(
         send("progressing");
       },
     });
+    verifiedSha256 = checksums?.[0]?.expectedHex;
+    if (handoffKey && verifiedSha256) {
+      await recordSavedFileHandoff(handoffKey, path).catch(() => undefined);
+    }
   };
   const completed = transfer()
     .then(
@@ -187,15 +194,8 @@ export async function downloadHandoffFile(
   senderId: number | undefined,
 ): Promise<{ savedPath: string }> {
   const url = new URL(validateDownloadUrl(input.url));
-  const token = url.pathname.slice(FILE_HANDOFF_ROUTE_PREFIX.length + 1);
-  if (
-    !url.pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/") ||
-    !/^handoff\.receive\.[0-9a-f]{64}\.[0-9a-f-]{36}\.[0-9]{13}\.[a-zA-Z0-9_-]+$/u.test(token) ||
-    token.split(".")[3] !== input.transferId ||
-    url.search ||
-    url.hash
-  )
-    throw new Error("文件传输地址无效。");
+  const handoffKey = receivedHandoffKey(url);
+  if (handoffKey?.transferId !== input.transferId) throw new Error("文件传输地址无效。");
   const sender = senderId === undefined ? undefined : Electron.webContents.fromId(senderId);
   if (!sender || sender.isDestroyed()) throw new Error("下载窗口已关闭，请重试。");
   const key = JSON.stringify([url.origin, input.transferId, input.sha256, input.sizeBytes]);
@@ -205,7 +205,10 @@ export async function downloadHandoffFile(
   const fileName = safeDownloadName(input.fileName);
   const launch = starting.then(async () => {
     const { path, verified } = await automaticDestination(fileName, input);
-    if (verified) return { path, task: null };
+    if (verified) {
+      await recordSavedFileHandoff(handoffKey, path).catch(() => undefined);
+      return { path, task: null };
+    }
     const task = startBuiltinDownload(
       sender,
       NodeCrypto.randomUUID(),
