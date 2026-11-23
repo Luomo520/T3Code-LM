@@ -3209,7 +3209,7 @@ export default function ChatView(props: ChatViewProps) {
           </div>
         )}
         {isServerThread && activeThreadRef && activeThreadKey ? (
-          <ThreadFileReception key={activeThreadKey} thread={activeThreadRef} />
+          <ThreadFileReception key={`reception:${activeThreadKey}`} thread={activeThreadRef} />
         ) : null}
         <ThreadNow
           key={routeThreadKey}
