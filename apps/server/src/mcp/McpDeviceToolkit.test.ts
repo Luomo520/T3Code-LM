@@ -160,7 +160,14 @@ it.effect("registers the device tools and returns the screenshot as image conten
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
       const names = server.tools.map(({ tool }) => tool.name).toSorted();
-      expect(names).toEqual(["device_close", "device_list", "device_open", "device_screenshot"]);
+      expect(names).toEqual([
+        "device_close",
+        "device_list",
+        "device_open",
+        "device_screenshot",
+        "device_t3_dock_read",
+        "device_t3_dock_select",
+      ]);
 
       const callWith = (capabilities: ReadonlyArray<McpInvocationContext.McpCapability>) =>
         Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities));

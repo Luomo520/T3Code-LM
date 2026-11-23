@@ -1,4 +1,6 @@
 import {
+  AndroidT3DockState,
+  AndroidT3DockTab,
   OrchestratorMcpFailure,
   DeviceToolCloseInput,
   DeviceToolError,
@@ -96,7 +98,35 @@ const DeviceCloseTool = Tool.make("device_close", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
 
-export const DeviceStandardToolkit = Toolkit.make(DeviceListTool, DeviceOpenTool, DeviceCloseTool);
+const DeviceT3DockRead = Tool.make("device_t3_dock_read", {
+  description:
+    "Read visible Dock labels and the active label in T3 Code on an Android phone opened by the user in this thread.",
+  parameters: DeviceToolTargetInput,
+  success: AndroidT3DockState,
+  failure: DeviceToolFailure,
+  dependencies,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Idempotent, true);
+
+const DeviceT3DockSelect = Tool.make("device_t3_dock_select", {
+  description:
+    "When the user asks to switch the foreground T3 Code Dock on their open Android phone, select the requested label and verify it. Manual device input takes priority.",
+  parameters: Schema.Struct({ ...DeviceToolTargetInput.fields, label: AndroidT3DockTab }),
+  success: AndroidT3DockState,
+  failure: DeviceToolFailure,
+  dependencies,
+})
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Idempotent, true);
+
+export const DeviceStandardToolkit = Toolkit.make(
+  DeviceListTool,
+  DeviceOpenTool,
+  DeviceCloseTool,
+  DeviceT3DockRead,
+  DeviceT3DockSelect,
+);
 
 export const DeviceScreenshotToolkit = Toolkit.make(DeviceScreenshotTool);
 
@@ -105,4 +135,6 @@ export const DeviceToolkit = Toolkit.make(
   DeviceOpenTool,
   DeviceScreenshotTool,
   DeviceCloseTool,
+  DeviceT3DockRead,
+  DeviceT3DockSelect,
 );

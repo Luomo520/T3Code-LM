@@ -24,6 +24,7 @@ export const deviceInputKey = (hostId: string, deviceId: string) =>
 
 export function makeDeviceInputQueue() {
   const devices = new Map<string, Entry[]>();
+  const dockActions = new Set<string>();
   const expire = (key: string, now: number) => {
     const queue = devices.get(key)?.filter((entry) => entry.deadline > now) ?? [];
     if (queue.length === 0) devices.delete(key);
@@ -44,7 +45,8 @@ export function makeDeviceInputQueue() {
         entry.threadId === input.threadId &&
         entry.panelId === input.panelId,
     );
-    if (input.action === "join" && index < 0) {
+    const fresh = input.action === "join" && index < 0;
+    if (fresh) {
       entries.push({
         sessionId,
         threadId: input.threadId,
@@ -62,18 +64,14 @@ export function makeDeviceInputQueue() {
       if (entries.length === 0) devices.delete(key);
       current = undefined;
     }
-    if (current && input.action === "join" && current.active && input.lease !== current.lease) {
-      // 失去客户端租约后重新接手必须重新自检，同时作废旧令牌。
-      current = { ...current, lease: NodeCrypto.randomUUID(), active: false };
-      entries[index] = current;
-    } else if (current && input.action !== "join" && input.lease !== current.lease) {
+    if (current && !fresh && input.lease !== current.lease) {
       current = undefined;
     }
     if (current) {
       if (input.action === "join" || current.lease === input.lease) {
         current.deadline = now + LEASE_MS;
       }
-      if (index === 0 && input.action === "activate" && current.lease === input.lease) {
+      if (index === 0 && input.action === "activate" && !dockActions.has(key)) {
         current.active = true;
       }
     }
@@ -87,6 +85,17 @@ export function makeDeviceInputQueue() {
 
   return {
     update,
+    reserveDockAction(key: string, now: number) {
+      expire(key, now);
+      if (devices.has(key) || dockActions.has(key)) return null;
+      dockActions.add(key);
+      return {
+        canStart: () => !devices.has(key),
+        release: () => {
+          dockActions.delete(key);
+        },
+      };
+    },
     allows(key: string, sessionId: AuthSessionId, lease: string, now: number) {
       const first = devices.get(key)?.[0];
       return (

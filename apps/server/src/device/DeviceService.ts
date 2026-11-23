@@ -1,5 +1,7 @@
 import {
   type AuthSessionId,
+  type AndroidT3DockState,
+  type AndroidT3DockTab,
   type DeviceActionInput,
   type DeviceInputQueueInput,
   type DeviceInputQueueReply,
@@ -78,6 +80,7 @@ import { isLocalSshDeviceHost, remoteSshDeviceHosts } from "./localSshDeviceHost
 
 import { readDeviceDetail, runDeviceAction } from "./DeviceActions.ts";
 import { deviceInputKey, makeDeviceInputQueue } from "./DeviceInputQueue.ts";
+import { androidT3Dock } from "./AndroidT3Dock.ts";
 import { readAndroidPhysicalDeviceStatus } from "./AndroidPhysicalDevice.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
@@ -228,6 +231,12 @@ export class DeviceService extends Context.Service<
       input: DeviceActionInput,
       sessionId?: AuthSessionId,
     ) => Effect.Effect<DeviceDetail, DeviceError>;
+    readonly t3Dock: (input: {
+      readonly threadId: ThreadId;
+      readonly hostId: DeviceHostId;
+      readonly deviceId: DeviceId;
+      readonly selection?: AndroidT3DockTab;
+    }) => Effect.Effect<AndroidT3DockState, DeviceError>;
     readonly physicalInputQueue: (
       input: DeviceInputQueueInput,
       sessionId: AuthSessionId,
@@ -1187,6 +1196,71 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     );
   });
 
+  const t3Dock: DeviceService["Service"]["t3Dock"] = Effect.fn("DeviceService.t3Dock")(
+    function* (input) {
+      const { state } = yield* SynchronizedRef.get(stateRef);
+      const device = findDevice(state, input.hostId, input.deviceId);
+      const ready = yield* currentReadiness(input.hostId);
+      if (
+        !device?.physical ||
+        device.platform !== "android" ||
+        !ready ||
+        !state.sessions.some(
+          (session) =>
+            session.hostId === input.hostId &&
+            session.deviceId === input.deviceId &&
+            session.threadId === input.threadId,
+        )
+      ) {
+        return yield* new DeviceHostUnavailableError({
+          hostId: input.hostId,
+          reason: "请先在原会话的设备面板打开已授权的 Android 真机。",
+        });
+      }
+      const read = () =>
+        SynchronizedRef.get(stateRef).pipe(
+          Effect.map(({ state: current }) =>
+            current.sessions.some(
+              (session) =>
+                session.hostId === input.hostId &&
+                session.deviceId === input.deviceId &&
+                session.threadId === input.threadId,
+            ),
+          ),
+        );
+      if (input.selection === undefined) {
+        return {
+          device,
+          ...(yield* androidT3Dock({
+            ...input,
+            run: ready.run,
+            serial: device.id,
+            canStart: () => false,
+          })),
+        };
+      }
+      const now = yield* Clock.currentTimeMillis;
+      const key = deviceInputKey(device.hostId, device.id);
+      const lease = deviceInputQueue.reserveDockAction(key, now);
+      if (!lease) {
+        return yield* new DeviceHostUnavailableError({
+          hostId: input.hostId,
+          reason: "设备输入已由用户或另一个会话占用，请释放后再试。",
+        });
+      }
+      return yield* androidT3Dock({
+        ...input,
+        run: ready.run,
+        serial: device.id,
+        canStart: () => lease.canStart(),
+        stillOpen: read(),
+      }).pipe(
+        Effect.map((result) => ({ device, ...result })),
+        Effect.ensuring(Effect.sync(lease.release)),
+      );
+    },
+  );
+
   const action: DeviceService["Service"]["action"] = Effect.fn("DeviceService.action")(
     function* (input, sessionId) {
       const { ready, device } = yield* resolveDevice(input.hostId, input.deviceId);
@@ -1401,6 +1475,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       shutdown,
       detail,
       action,
+      t3Dock,
       physicalInputQueue,
       physicalInputMode,
       allowsPhysicalInput,

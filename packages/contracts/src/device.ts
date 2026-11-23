@@ -712,6 +712,16 @@ export const DeviceToolTargetInput = Schema.Struct({
 });
 export type DeviceToolTargetInput = typeof DeviceToolTargetInput.Type;
 
+export const AndroidT3DockTab = Schema.Literals(["会话", "拉取请求", "用量", "设置"]);
+export type AndroidT3DockTab = typeof AndroidT3DockTab.Type;
+
+export const AndroidT3DockState = Schema.Struct({
+  device: DeviceSummary,
+  tabs: Schema.Array(AndroidT3DockTab),
+  selected: AndroidT3DockTab,
+});
+export type AndroidT3DockState = typeof AndroidT3DockState.Type;
+
 export const DeviceToolScreenshotResult = Schema.Struct({
   device: DeviceSummary,
   screenshot: Schema.Struct({

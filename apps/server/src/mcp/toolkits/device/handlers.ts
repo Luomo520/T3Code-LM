@@ -1,4 +1,6 @@
 import {
+  type AndroidT3DockTab,
+  type DeviceToolTargetInput,
   type DeviceError,
   type DeviceHostId,
   type DeviceHostSummary,
@@ -15,6 +17,10 @@ import * as DeviceService from "../../../device/DeviceService.ts";
 import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import {
+  isActiveRun,
+  ThreadManagementService,
+} from "../../../orchestration-v2/ThreadManagementService.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from "./tools.ts";
 
 function agentDeviceTargetArgs(device: DeviceSummary): ReadonlyArray<string> {
@@ -231,7 +237,83 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
 
 const toolError = (error: DeviceError | DeviceToolUnavailableError) => error;
 
+const dockAction = Effect.fn("device.dockAction")(function* (
+  input: DeviceToolTargetInput,
+  selection?: AndroidT3DockTab,
+) {
+  const scope = yield* requireDeviceAccess;
+  if (scope.thread.subagent) return yield* manualDeviceOnly();
+  const devices = yield* DeviceService.DeviceService;
+  const state = yield* devices.state;
+  const hostId = yield* resolveHostId(state.hosts, input.hostId);
+  const candidates = state.sessions.filter(
+    (session) =>
+      session.threadId === scope.thread.threadId &&
+      (hostId === undefined || session.hostId === hostId) &&
+      (input.deviceId === undefined || session.deviceId === input.deviceId) &&
+      state.devices.some(
+        (device) =>
+          device.hostId === session.hostId &&
+          device.id === session.deviceId &&
+          device.platform === "android" &&
+          device.physical,
+      ),
+  );
+  if (candidates.length !== 1) {
+    return yield* new DeviceToolUnavailableError({
+      reason: "请在原会话的设备面板打开一台已授权的 Android 真机。打开多台时请指定设备。",
+    });
+  }
+  if (selection !== undefined) {
+    const threads = yield* ThreadManagementService;
+    const threadId = scope.thread.threadId;
+    const unauthorized = () =>
+      new DeviceToolUnavailableError({
+        reason: "请由用户在原会话发出明确的 Dock 标签切换请求。",
+      });
+    const records = yield* threads
+      .getThreadRecords(threadId, ["runs"], {
+        runStatuses: ["starting", "running", "waiting"],
+      })
+      .pipe(Effect.mapError(unauthorized));
+    const run = records.runs
+      .filter(
+        (item) => item.providerInstanceId === scope.thread.providerInstanceId && isActiveRun(item),
+      )
+      .toSorted((left, right) => right.ordinal - left.ordinal)[0];
+    if (!run) return yield* unauthorized();
+    const message = (yield* threads
+      .getMessagesById(threadId, [run.userMessageId])
+      .pipe(Effect.mapError(unauthorized))).get(run.userMessageId);
+    const text = message?.text.normalize("NFKC") ?? "";
+    if (
+      message?.role !== "user" ||
+      message.createdBy !== "user" ||
+      !message.clientOrigin ||
+      !text.includes(selection) ||
+      !/(切换|点开|点击|选择|切到|switch|select|tap)/iu.test(text) ||
+      /(?:不要|不用|不必|别|禁止|如何|怎样|怎么|是否|能不能|don['’]t|do not|never|can i|could i|how (?:can|do|to))/iu.test(
+        text,
+      )
+    )
+      return yield* unauthorized();
+  }
+  const target = candidates[0]!;
+  return yield* devices.t3Dock({
+    threadId: target.threadId,
+    hostId: target.hostId,
+    deviceId: target.deviceId,
+    ...(selection === undefined ? {} : { selection }),
+  });
+});
+
 const handlers = {
+  device_t3_dock_read: McpToolAccess.readsAsCaller((input) =>
+    dockAction(input).pipe(Effect.mapError(toolError)),
+  ),
+  device_t3_dock_select: McpToolAccess.actsAsCaller(({ label, ...input }) =>
+    dockAction(input, label).pipe(Effect.mapError(toolError)),
+  ),
   device_list: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* requireDeviceAccess;

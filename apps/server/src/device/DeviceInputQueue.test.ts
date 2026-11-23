@@ -30,7 +30,9 @@ describe("foreground physical device input", () => {
     const third = queue.update(key, right, request("three", "join"), 2);
     expect(second).toMatchObject({ state: "waiting", ahead: 1, ownerThreadId: "one" });
     expect(third).toMatchObject({ state: "waiting", ahead: 2 });
-    expect(queue.update(key, left, request("one", "join"), 3).lease).toBe(first.lease);
+    expect(queue.update(key, left, request("one", "join"), 3).lease).toBeUndefined();
+    expect(queue.update(key, left, request("one", "join", first.lease), 3).lease).toBe(first.lease);
+    expect(queue.update(key, right, request("two", "join"), 3).lease).toBeUndefined();
     expect(queue.update(key, right, request("three", "activate", third.lease), 4).state).toBe(
       "waiting",
     );
@@ -59,11 +61,8 @@ describe("foreground physical device input", () => {
     queue.update(key, right, request("two", "activate", second.lease), 13002);
     expect(queue.allows(key, right, second.lease!, 13003)).toBe(true);
     expect(queue.update(key, right, request("two", "status"), 13004).state).toBe("idle");
-    const rejoined = queue.update(key, right, request("two", "join"), 13004);
-    expect(rejoined).toMatchObject({ state: "ready" });
-    expect(rejoined.lease).not.toBe(second.lease);
-    expect(queue.allows(key, right, second.lease!, 13005)).toBe(false);
-    expect(queue.allows(key, right, rejoined.lease!, 13005)).toBe(false);
+    expect(queue.update(key, right, request("two", "join"), 13004).lease).toBeUndefined();
+    expect(queue.allows(key, right, second.lease!, 13005)).toBe(true);
     queue.closeThread(key, ThreadId.make("two"));
     const restarted = queue.update(key, right, request("two", "join"), 13004);
     queue.update(key, right, request("two", "release", second.lease), 13005);
@@ -72,4 +71,21 @@ describe("foreground physical device input", () => {
     );
     expect(restarted.lease).not.toBe(second.lease);
   });
+});
+
+it("does not disclose the owner token and gives manual input precedence over a Dock action", () => {
+  const queue = makeDeviceInputQueue();
+  const auto = queue.reserveDockAction(key, 0)!;
+  const first = queue.update(key, left, request("one", "join"), 1);
+  expect(auto.canStart()).toBe(false);
+  expect(queue.update(key, left, request("one", "activate", first.lease), 2).state).toBe("ready");
+  auto.release();
+  expect(queue.update(key, left, request("one", "activate", first.lease), 3).state).toBe("active");
+  expect(queue.reserveDockAction(key, 4)).toBeNull();
+  expect(queue.update(key, right, request("one", "status"), 5).lease).toBeUndefined();
+  expect(
+    queue.update(key, left, { ...request("two", "status", first.lease), panelId: "one" }, 5).lease,
+  ).toBeUndefined();
+  expect(queue.update(key, left, request("one", "join", "wrong"), 5).lease).toBeUndefined();
+  expect(queue.update(key, left, request("one", "status", first.lease), 6).state).toBe("active");
 });
