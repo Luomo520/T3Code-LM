@@ -79,13 +79,10 @@ const waitForReceipt = Effect.fn("ThreadFileSave.waitForReceipt")(function* (
   const deadline = (yield* Clock.currentTimeMillis) + waitMs;
   let receipt = yield* read;
   // 保存和系统安装分别回报。明确查询安装结果时沿用同一个截止时间。
-  while (
-    (receipt.status === "awaiting_save" && !receipt.urlFailure) ||
-    (waitForInstall &&
-      receipt.status === "saved" &&
-      receipt.installRequested &&
-      !receipt.installation)
-  ) {
+  const awaitingResult = (value: typeof receipt) =>
+    (value.status === "awaiting_save" && !value.urlFailure) ||
+    (waitForInstall && value.status === "saved" && value.installRequested && !value.installation);
+  while (awaitingResult(receipt)) {
     const remaining = deadline - (yield* Clock.currentTimeMillis);
     if (remaining <= 0) break;
     yield* Effect.sleep(Math.min(remaining, 250));

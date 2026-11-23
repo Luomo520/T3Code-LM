@@ -774,12 +774,18 @@ it.live(
         },
         reconnectedPhone,
       );
-      // 让等待请求先读到 saved，验证迟到的安装回执能在同一个调用中返回。
       const laterReceipt = yield* call("t3_thread_file_save_status", {
         id: transfer.id,
-        waitMs: 1500,
-      }).pipe(Effect.forkChild);
-      yield* Effect.sleep(120);
+        waitMs: 5000,
+      }).pipe(Effect.forkChild({ startImmediately: true }));
+      // 即时查询已读到落盘回执时，等待安装的请求仍应留给手机的最终回执。
+      const pendingInstall = yield* call("t3_thread_file_save_status", { id: transfer.id });
+      expect(pendingInstall.structuredContent).toMatchObject({
+        status: "saved",
+        installRequested: true,
+      });
+      expect(pendingInstall.structuredContent).not.toHaveProperty("installation");
+      expect(laterReceipt.pollUnsafe()).toBeUndefined();
       yield* readFileHandoff(
         {
           _tag: "reportInstall",
