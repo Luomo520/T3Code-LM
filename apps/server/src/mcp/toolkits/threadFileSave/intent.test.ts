@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { hasExplicitThreadFileSaveIntent } from "./intent.ts";
+import { hasExplicitThreadFileSaveIntent, threadFileDestination } from "./intent.ts";
 
 describe("会话文件保存请求", () => {
   it.each([
@@ -10,6 +10,9 @@ describe("会话文件保存请求", () => {
     "Could you please save this to my desktop?",
     "请把它传到 K60 Pro",
     "把书房电脑的 APK 发到这台手机",
+    "把当前项目的 验证传输.txt 发到这台手机",
+    "把刚才那份传过来",
+    "生成一份记录然后发到这台手机",
     "Save the previous screenshot to this PC",
     "Transfer that file to my phone.",
   ])("识别明确请求 %s", (text) => expect(hasExplicitThreadFileSaveIntent(text)).toBe(true));
@@ -24,9 +27,27 @@ describe("会话文件保存请求", () => {
     "保存完成后会显示在哪？",
     "把书房电脑桌面截图发给我看看",
     "只给我看看，不要下载",
+    "看一下文件，别把验证传输.txt传过来",
     "别把这个文件下载到手机",
     "上次我说“保存到我的设备”，现在请看看有无传输记录",
     "Just show it. Don't download the screenshot.",
     "Tell me whether you can preview the file.",
   ])("只查看时不触发保存 %s", (text) => expect(hasExplicitThreadFileSaveIntent(text)).toBe(false));
+});
+
+describe("原话中的目的设备", () => {
+  it.each([
+    ["把刚才那个发到书房电脑", { kind: "named", label: "书房电脑" }],
+    ["把书房电脑的文件发到这台手机", { kind: "current", device: "mobile" }],
+    ["发送到「书房电脑」", { kind: "named", label: "书房电脑" }],
+    ["把这份发给「Studio」", { kind: "named", label: "studio" }],
+    ["Send this file to Studio", { kind: "named", label: "studio" }],
+    ["把刚才那份传过来", { kind: "current", device: "any" }],
+    ["保存到我的设备", { kind: "current", device: "any" }],
+    ["不要发到书房电脑", { kind: "unclear" }],
+    ["发到书房电脑或者客厅电脑", { kind: "unclear" }],
+    ["从书房电脑查看这份文件", { kind: "unclear" }],
+  ])("从 %s 确认接收设备", (message, expected) => {
+    expect(threadFileDestination(message)).toEqual(expected);
+  });
 });

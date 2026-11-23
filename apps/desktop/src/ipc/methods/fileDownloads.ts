@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import {
   downloadFile as start,
+  downloadHandoffFile as startHandoff,
   cancelFileDownload as cancel,
 } from "../../downloads/FileDownloads.ts";
 
@@ -26,6 +27,24 @@ export const downloadFile = DesktopIpc.makeIpcMethod({
     });
   }),
 });
+export const downloadHandoffFile = DesktopIpc.makeIpcMethod({
+  channel: "desktop:download-handoff-file",
+  payload: Schema.Struct({
+    url: Schema.String,
+    fileName: Schema.String,
+    transferId: Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/u)),
+    sizeBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
+  }),
+  result: Schema.Struct({ savedPath: Schema.String }),
+  handler: Effect.fn("desktop.ipc.fileDownloads.startHandoff")(function* (input, event) {
+    return yield* Effect.tryPromise({
+      try: () => startHandoff(input, event?.sender.id),
+      catch: (cause) => new FileDownloadError({ cause }),
+    });
+  }),
+});
+
 export const cancelFileDownload = DesktopIpc.makeIpcMethod({
   channel: "desktop:cancel-file-download",
   payload: Schema.String,

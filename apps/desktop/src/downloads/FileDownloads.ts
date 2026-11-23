@@ -1,11 +1,16 @@
 // @effect-diagnostics nodeBuiltinImport:off - Electron downloads use native paths and save dialogs.
 // @effect-diagnostics globalTimers:off - Bounded Electron event registration timeout; no idle timer.
 // Native downloads run only after an explicit renderer request.
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
 import * as Electron from "electron";
-import { FILE_HANDOFF_ROUTE_PREFIX, type DesktopFileDownloadEvent } from "@t3tools/contracts";
+import {
+  FILE_HANDOFF_ROUTE_PREFIX,
+  type DesktopAutomaticFileDownload,
+  type DesktopFileDownloadEvent,
+} from "@t3tools/contracts";
 import { downloadKey, downloadToFile } from "./ResumableDownload.ts";
 
 const active = new Map<string, { cancel: () => void; senderId: number }>();
@@ -63,6 +68,7 @@ function startBuiltinDownload(
   url: string,
   fileName: string,
   path: string,
+  automatic?: Pick<DesktopAutomaticFileDownload, "sizeBytes" | "sha256">,
 ) {
   const destinationKey = NodePath.resolve(path).toLowerCase();
   if (builtinDestinations.has(destinationKey)) {
@@ -95,12 +101,14 @@ function startBuiltinDownload(
     if (fileHandoff) {
       const head = await fetch(url, { method: "HEAD", signal: controller.signal });
       const expectedHex = /^"sha256-([0-9a-f]{64})"$/.exec(head.headers.get("etag") ?? "")?.[1];
-      if (!head.ok || !expectedHex) throw new Error("下载文件缺少有效的 SHA-256。");
+      if (!head.ok || !expectedHex || (automatic && automatic.sha256 !== expectedHex))
+        throw new Error("下载文件缺少与传输记录一致的 SHA-256。");
       checksums = [{ algorithm: "sha256", expectedHex }];
     }
     await downloadToFile({
       fetch,
       ...(checksums ? { checksums } : {}),
+      ...(automatic ? { expectedSizeBytes: automatic.sizeBytes, exclusiveDestination: true } : {}),
       url,
       destination: path,
       stagingDirectory: NodePath.join(
@@ -122,16 +130,108 @@ function startBuiltinDownload(
       },
     });
   };
-  void transfer()
+  const completed = transfer()
     .then(
-      () => send("completed"),
-      () => send(controller.signal.aborted ? "cancelled" : "interrupted"),
+      () => {
+        send("completed");
+        return true;
+      },
+      () => {
+        send(controller.signal.aborted ? "cancelled" : "interrupted");
+        return false;
+      },
     )
     .finally(() => {
       builtinDestinations.delete(destinationKey);
       active.delete(id);
     });
-  return { method: "builtin" as const, id };
+  return { method: "builtin" as const, id, completed };
+}
+
+const incomingHandoffs = new Map<string, Promise<{ savedPath: string }>>();
+
+async function automaticDestination(
+  fileName: string,
+  { transferId, sizeBytes, sha256 }: DesktopAutomaticFileDownload,
+) {
+  const directory = await downloadDirectory();
+  await NodeFSP.mkdir(directory, { recursive: true });
+  const { name, ext } = NodePath.parse(fileName);
+  for (let attempt = 0; ; attempt++) {
+    const suffix =
+      attempt === 1 ? ` (${transferId.slice(-8)})` : ` (${transferId.slice(-8)}-${attempt})`;
+    const candidate = NodePath.join(directory, attempt === 0 ? fileName : `${name}${suffix}${ext}`);
+    if (builtinDestinations.has(NodePath.resolve(candidate).toLowerCase())) continue;
+    let stat;
+    try {
+      stat = await NodeFSP.lstat(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return { path: candidate, verified: false };
+    }
+    if (stat.isFile() && stat.size === sizeBytes) {
+      // 回执发送前若桌面退出，重启后可以从默认位置复核已经写好的文件。
+      const hash = NodeCrypto.createHash("sha256");
+      try {
+        for await (const chunk of NodeFS.createReadStream(candidate)) hash.update(chunk);
+        if (hash.digest("hex") === sha256) return { path: candidate, verified: true };
+      } catch {
+        // 同名文件可能正被其他程序使用，继续保留它并选择另一个文件名。
+      }
+    }
+  }
+}
+
+export async function downloadHandoffFile(
+  input: DesktopAutomaticFileDownload,
+  senderId: number | undefined,
+): Promise<{ savedPath: string }> {
+  const url = new URL(validateDownloadUrl(input.url));
+  const token = url.pathname.slice(FILE_HANDOFF_ROUTE_PREFIX.length + 1);
+  if (
+    !url.pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/") ||
+    !/^handoff\.receive\.[0-9a-f]{64}\.[0-9a-f-]{36}\.[0-9]{13}\.[a-zA-Z0-9_-]+$/u.test(token) ||
+    token.split(".")[3] !== input.transferId ||
+    url.search ||
+    url.hash
+  )
+    throw new Error("文件传输地址无效。");
+  const sender = senderId === undefined ? undefined : Electron.webContents.fromId(senderId);
+  if (!sender || sender.isDestroyed()) throw new Error("下载窗口已关闭，请重试。");
+  const key = JSON.stringify([url.origin, input.transferId, input.sha256, input.sizeBytes]);
+  const existing = incomingHandoffs.get(key);
+  if (existing) return existing;
+
+  const fileName = safeDownloadName(input.fileName);
+  const launch = starting.then(async () => {
+    const { path, verified } = await automaticDestination(fileName, input);
+    if (verified) return { path, task: null };
+    const task = startBuiltinDownload(
+      sender,
+      NodeCrypto.randomUUID(),
+      url.href,
+      fileName,
+      path,
+      input,
+    );
+    return { path, task };
+  });
+  starting = launch.catch(() => undefined);
+  const operation = launch.then(async ({ path, task }) => {
+    if (task && !(await task.completed)) throw new Error("文件领取或校验中断，请重试。");
+    return { savedPath: path };
+  });
+  incomingHandoffs.set(key, operation);
+  void operation.then(
+    () => {
+      if (incomingHandoffs.size > 1024) {
+        const oldest = incomingHandoffs.keys().next().value;
+        if (oldest !== undefined) incomingHandoffs.delete(oldest);
+      }
+    },
+    () => incomingHandoffs.delete(key),
+  );
+  return operation;
 }
 
 export function downloadFile(
@@ -173,8 +273,10 @@ async function performDownload(
   } catch {
     /* The selection remains available for this app session. */
   }
-  if (platform === "win32" || new URL(url).pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/"))
-    return startBuiltinDownload(sender, id, url, fileName, path);
+  if (platform === "win32" || new URL(url).pathname.startsWith(FILE_HANDOFF_ROUTE_PREFIX + "/")) {
+    const task = startBuiltinDownload(sender, id, url, fileName, path);
+    return { method: task.method, id: task.id };
+  }
   await new Promise<void>((resolve, reject) => {
     const session = sender.session;
     const timer = setTimeout(() => {

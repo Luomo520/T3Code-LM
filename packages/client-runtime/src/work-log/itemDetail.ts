@@ -316,6 +316,7 @@ export function threadFileSaveOutput(item: OrchestrationV2TurnItem) {
     case "awaiting_save":
       return {
         status: result.status,
+        id: typeof result.id === "string" ? result.id : null,
         text: `${result.name} 已发送给 ${result.recipientLabel}，等待保存。`,
       } as const;
     case "saved": {

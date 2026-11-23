@@ -1,3 +1,4 @@
+import { ThreadFileReception } from "./files/ThreadFileReception";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -3190,6 +3191,7 @@ export default function ChatView(props: ChatViewProps) {
   // The end of the timeline holds the thread's present and next turns: what it is doing now,
   // its lifecycle status, guest messages awaiting you, then your queued messages.
   const timelineFooter =
+    !isServerThread &&
     pendingHandoff === null &&
     !hasThreadNow &&
     threadStatusLine === null &&
@@ -3206,6 +3208,9 @@ export default function ChatView(props: ChatViewProps) {
             />
           </div>
         )}
+        {isServerThread && activeThreadRef && activeThreadKey ? (
+          <ThreadFileReception key={activeThreadKey} thread={activeThreadRef} />
+        ) : null}
         <ThreadNow
           key={routeThreadKey}
           attention={attentionNow}

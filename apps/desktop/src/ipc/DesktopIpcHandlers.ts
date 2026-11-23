@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { downloadFile, cancelFileDownload } from "./methods/fileDownloads.ts";
+import { downloadFile, downloadHandoffFile, cancelFileDownload } from "./methods/fileDownloads.ts";
 
 import { receiveProviderAuthCallback, cancelProviderAuthCallback } from "./methods/providerAuth.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
@@ -155,6 +155,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);
   yield* ipc.handle(downloadFile);
+  yield* ipc.handle(downloadHandoffFile);
   yield* ipc.handle(cancelFileDownload);
   yield* ipc.handle(readMedia);
   yield* ipc.handle(receiveProviderAuthCallback);

@@ -1,5 +1,4 @@
 import {
-  createFileHandoffAtoms,
   fileHandoffErrorMessage,
   receiveDirectFile,
   sendHandoffFile,
@@ -15,9 +14,7 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
-import { createSha256 } from "@t3tools/shared/sha256";
 
-import { connectionAtomRuntime } from "~/connection/runtime";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { startFileDownload, startVerifiedDesktopDownload } from "~/lib/fileDownload";
 import { randomUUID } from "~/lib/utils";
@@ -27,8 +24,12 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { openDesktopHandoffPeer } from "./desktopHandoffPeer";
 
-const atoms = createFileHandoffAtoms(connectionAtomRuntime);
-const quiet = { reportFailure: false, reportDefect: false };
+import {
+  fileHandoffAtoms as atoms,
+  quietFileHandoff as quiet,
+  saveBrowserHandoff,
+  type SavePicker,
+} from "./fileHandoffReception";
 
 export function FileHandoffPanel({ thread }: { readonly thread: ScopedThreadRef }) {
   const [opened, setOpened] = useState(false);
@@ -45,40 +46,6 @@ export function FileHandoffPanel({ thread }: { readonly thread: ScopedThreadRef 
       {opened && <FileHandoffContents thread={thread} />}
     </details>
   );
-}
-
-type SavePicker = (options: { readonly suggestedName: string }) => Promise<FileSystemFileHandle>;
-
-async function saveBrowserHandoff(
-  url: string,
-  file: FileSystemFileHandle,
-  sizeBytes: number,
-  sha256: string,
-) {
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok || !response.body) throw new Error("无法读取文件，请重试。");
-  const reader = response.body.getReader();
-  const target = await file.createWritable();
-  const hash = createSha256();
-  let received = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.byteLength;
-      if (received > sizeBytes) throw new Error("收到的文件大小与传输记录不符。");
-      hash.update(value);
-      await target.write(value);
-    }
-    if (received !== sizeBytes || hash.digestHex() !== sha256)
-      throw new Error("文件 SHA-256 或大小校验失败，请重试。");
-    await target.close();
-  } catch (error) {
-    await target.abort().catch(() => undefined);
-    throw error;
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
 }
 
 function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
@@ -397,7 +364,7 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
               取消传输
             </Button>
           ) : null}
-          {!item.outgoing && !item.disposition && (
+          {!item.outgoing && !item.disposition && item.autoReceive !== true && (
             <Button
               variant="outline"
               size="sm"

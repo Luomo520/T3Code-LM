@@ -589,6 +589,41 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
   },
 );
 
+// 会话传输沿用下载的项目边界，并使用已核验的文件描述符读取。
+export const openWorkspaceFileForHandoff = Effect.fn("AssetAccess.openWorkspaceFileForHandoff")(
+  function* (input: {
+    readonly threadId: ThreadId;
+    readonly workspaceRoot: string;
+    readonly path: string;
+  }) {
+    const resource = {
+      _tag: "workspace-file",
+      threadId: input.threadId,
+      path: input.path,
+      disposition: "attachment",
+    } as const;
+    const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+    const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(input.workspaceRoot);
+    const canonical = yield* finalizeWorkspaceFileAsset({
+      workspaceRoot,
+      requestedPath: input.path,
+      resource,
+      expiresAt: 0,
+    });
+    if (canonical.claims.kind !== "workspace-download-exact") return null;
+    const { claims } = canonical;
+    const sourceFile = yield* openMediaFile(claims.filePath, claims);
+    if (
+      !sourceFile ||
+      sourceFile.info.size.toString() !== claims.size ||
+      sourceFile.info.mtimeNs.toString() !== claims.mtimeNs ||
+      sourceFile.info.ctimeNs.toString() !== claims.ctimeNs
+    )
+      return null;
+    return { sourceFile, sourcePath: claims.filePath, name: canonical.fileName };
+  },
+);
+
 export const issueCompanionFileDownload = Effect.fn("AssetAccess.issueCompanionFileDownload")(
   function* (threadId: ThreadId, source: string, downloadName?: string) {
     const config = yield* ServerConfig.ServerConfig;

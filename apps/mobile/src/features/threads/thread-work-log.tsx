@@ -83,6 +83,7 @@ import {
   turnItemOutputText,
 } from "@t3tools/client-runtime/work-log/item-detail";
 import { FileHandoffPanel } from "../files/FileHandoffPanel";
+import { ThreadFileHandoffReceipt } from "../files/AutomaticFileHandoff";
 import { ScreenshotSaveButton } from "./ScreenshotSaveButton";
 import { CompanionRecordingPlayer } from "./CompanionRecordingPlayer";
 import { useTurnItemDetail } from "../../state/queries";
@@ -1191,9 +1192,18 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
           ) : null}
           {fileSave ? (
             <View className="gap-1.5 pb-1.5">
-              <Text selectable className="text-sm text-foreground">
-                {fileSave.text}
-              </Text>
+              {fileSave.status === "awaiting_save" && fileSave.id ? (
+                <ThreadFileHandoffReceipt
+                  environmentId={props.environmentId}
+                  threadId={shownItem.threadId}
+                  transferId={fileSave.id}
+                  initialText={fileSave.text}
+                />
+              ) : (
+                <Text selectable className="text-sm text-foreground">
+                  {fileSave.text}
+                </Text>
+              )}
               {fileSave.status === "awaiting_save" && (
                 <FileHandoffPanel
                   environmentId={props.environmentId}

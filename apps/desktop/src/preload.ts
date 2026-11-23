@@ -259,6 +259,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   cancelProviderAuthCallback: (url: string) =>
     ipcRenderer.invoke(IpcChannels.CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
+  downloadHandoffFile: (input) => ipcRenderer.invoke("desktop:download-handoff-file", input),
   downloadFile: (input: { url: string; fileName: string }) =>
     ipcRenderer.invoke("desktop:download-file", input),
   cancelFileDownload: (id: string) => ipcRenderer.invoke("desktop:cancel-file-download", id),

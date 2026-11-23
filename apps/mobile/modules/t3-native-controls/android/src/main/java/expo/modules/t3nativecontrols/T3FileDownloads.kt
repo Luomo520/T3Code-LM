@@ -12,7 +12,7 @@ object T3FileDownloads {
   @Synchronized
   fun enqueue(
     context: Context, rawUrl: String, rawName: String, sizeBytes: Long?,
-    sha256: String? = null, handoffKey: String? = null,
+    sha256: String? = null, handoffKey: String? = null, automatic: Boolean = false,
   ): String {
     val uri = Uri.parse(rawUrl)
     require((uri.scheme == "http" || uri.scheme == "https") && uri.host != null &&
@@ -34,7 +34,7 @@ object T3FileDownloads {
       } else T3Downloads.findVerified(URL(rawUrl))?.let { return it.id }
     }
     val task = DownloadTask(URL(rawUrl), safeFileName(rawName), allowCellular = true,
-      fileBytes = sizeBytes, expectedSha256 = sha256, handoffKey = handoffKey)
+      fileBytes = sizeBytes, expectedSha256 = sha256, handoffKey = handoffKey, automaticHandoff = automatic)
     T3Downloads.start(context.applicationContext, task)
     return task.id
   }

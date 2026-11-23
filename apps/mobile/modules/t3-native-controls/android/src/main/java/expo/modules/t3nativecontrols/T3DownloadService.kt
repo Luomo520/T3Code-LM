@@ -56,6 +56,7 @@ internal class DownloadTask(
   fileBytes: Long? = null,
   val expectedSha256: String? = null,
   val handoffKey: String? = null,
+  val automaticHandoff: Boolean = false,
   private val saveUpdate: ((String, Uri) -> Unit)? = null,
 ) {
   val id = UUID.randomUUID().toString()
@@ -222,6 +223,11 @@ class T3DownloadService : Service() {
         startTransfer(task, gate, network)
         return
       }
+      if (task.automaticHandoff) {
+        // 自动收件的在途记录由应用下次前台恢复。无连接时停止本轮前台服务。
+        task.transition(DownloadState("failed", total = task.expectedBytes, retryable = true))
+        continue
+      }
       task.transition(DownloadState("paused", total = task.expectedBytes))
       if (paused == null) paused = task
     }
@@ -239,7 +245,7 @@ class T3DownloadService : Service() {
         if (destroyed) return@post
         main.removeCallbacks(refresh)
         active = null
-        if (!task.cancelled.get() && task.state.status in listOf("downloaded", "failed")) {
+        if (!task.automaticHandoff && !task.cancelled.get() && task.state.status in listOf("downloaded", "failed")) {
           notifications.notify(task.id, 1, finished(task))
         }
         pump()

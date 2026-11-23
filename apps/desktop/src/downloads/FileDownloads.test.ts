@@ -7,9 +7,12 @@ const mocks = vi.hoisted(() => ({
   dialog: vi.fn(),
   sender: vi.fn(),
   owner: vi.fn(),
+  lstat: vi.fn(),
 }));
 vi.mock("node:fs/promises", () => ({
   readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
+  lstat: mocks.lstat,
+  mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./ResumableDownload.ts", () => ({
@@ -25,6 +28,7 @@ vi.mock("electron", () => ({
 import {
   cancelFileDownload,
   downloadFile,
+  downloadHandoffFile,
   safeDownloadName,
   validateDownloadUrl,
 } from "./FileDownloads.ts";
@@ -76,6 +80,49 @@ describe("file downloads", () => {
     expect(mocks.downloadToFile.mock.calls[0]?.[0].signal.aborted).toBe(false);
     cancelFileDownload(id!, 7);
     expect(await finished).toMatchObject({ receivedBytes: 10, totalBytes: 20 });
+  });
+
+  it("saves one copy of an agent transfer with a verified size and checksum, without opening a picker", async () => {
+    vi.clearAllMocks();
+    const transferId = "a0000000-0000-4000-a000-000000000001";
+    const sha256 = "b".repeat(64);
+    const fileName = "收到的文件.txt";
+    const signedUrl = `https://thread.test/api/assets/file-handoff/handoff.receive.${"a".repeat(64)}.${transferId}.1800000000000.test-signature`;
+    const send = vi.fn();
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(null, {
+        headers: { etag: `"sha256-${sha256}"` },
+      }),
+    );
+    mocks.sender.mockReturnValue({ id: 7, isDestroyed: () => false, session: { fetch }, send });
+    mocks.lstat
+      .mockResolvedValueOnce({ isFile: () => true, size: 20 })
+      .mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    mocks.downloadToFile.mockResolvedValue(undefined);
+
+    const request = { url: signedUrl, fileName, transferId, sizeBytes: 22, sha256 };
+    const result = await Promise.all([
+      downloadHandoffFile(request, 7),
+      downloadHandoffFile(request, 7),
+    ]);
+    expect(result[0]).toEqual(result[1]);
+    expect(result[0]?.savedPath).toMatch(/收到的文件 \(00000001\)\.txt$/u);
+    expect(mocks.dialog).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(mocks.downloadToFile).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        checksums: [{ algorithm: "sha256", expectedHex: sha256 }],
+        expectedSizeBytes: 22,
+        exclusiveDestination: true,
+      }),
+    );
+    expect(send).toHaveBeenLastCalledWith(
+      "desktop:file-download-event",
+      expect.objectContaining({
+        state: "completed",
+        savedPath: result[0]?.savedPath,
+      }),
+    );
   });
 
   it("cancelling the save picker leaves no download listener or network request", async () => {

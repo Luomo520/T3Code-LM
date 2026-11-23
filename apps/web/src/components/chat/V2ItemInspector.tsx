@@ -25,6 +25,7 @@ import { useTurnItemDetail } from "../../state/queries";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Button } from "../ui/button";
 import { FileHandoffPanel } from "../files/FileHandoffPanel";
+import { ThreadFileSaveStatus } from "../files/ThreadFileReception";
 import { toastManager } from "../ui/toast";
 import { downloadMedia } from "../media/mediaContent";
 import ChatMarkdown from "../ChatMarkdown";
@@ -250,6 +251,25 @@ function ToolOutput(props: ToolOutputState) {
   ) : null;
 }
 
+function FileSaveOutput(props: {
+  readonly fileSave: NonNullable<ReturnType<typeof threadFileSaveOutput>>;
+  readonly thread: {
+    readonly environmentId: EnvironmentId;
+    readonly threadId: OrchestrationV2ProjectedTurnItem["sourceThreadId"];
+  };
+}) {
+  const { fileSave, thread } = props;
+  if (fileSave.status !== "awaiting_save") return <p>{fileSave.text}</p>;
+  return fileSave.id ? (
+    <ThreadFileSaveStatus thread={thread} id={fileSave.id} fallback={fileSave.text} />
+  ) : (
+    <>
+      <p>{fileSave.text}</p>
+      <FileHandoffPanel thread={thread} />
+    </>
+  );
+}
+
 export function FetchedToolOutput(props: {
   readonly onInitialOutputReady?: (() => void) | undefined;
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -267,12 +287,10 @@ export function FetchedToolOutput(props: {
   if (fileSave) {
     return (
       <div className="mt-1.5 space-y-1.5 text-xs">
-        <p>{fileSave.text}</p>
-        {fileSave.status === "awaiting_save" && (
-          <FileHandoffPanel
-            thread={{ environmentId: props.environmentId, threadId: item.threadId }}
-          />
-        )}
+        <FileSaveOutput
+          fileSave={fileSave}
+          thread={{ environmentId: props.environmentId, threadId: item.threadId }}
+        />
       </div>
     );
   }
@@ -480,12 +498,10 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
 
       {fileSave ? (
         <div className="space-y-1.5">
-          <p>{fileSave.text}</p>
-          {fileSave.status === "awaiting_save" && (
-            <FileHandoffPanel
-              thread={{ environmentId: props.environmentId, threadId: item.threadId }}
-            />
-          )}
+          <FileSaveOutput
+            fileSave={fileSave}
+            thread={{ environmentId: props.environmentId, threadId: item.threadId }}
+          />
         </div>
       ) : item.type === "dynamic_tool" ? (
         <ToolCallBody

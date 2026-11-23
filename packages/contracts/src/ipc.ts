@@ -1063,7 +1063,16 @@ export interface DesktopFileDownloadEvent {
   readonly savedPath?: string;
 }
 
+export interface DesktopAutomaticFileDownload {
+  readonly url: string;
+  readonly fileName: string;
+  readonly transferId: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+}
+
 export interface DesktopBridge {
+  downloadHandoffFile?: (input: DesktopAutomaticFileDownload) => Promise<{ savedPath: string }>;
   downloadFile?: (input: {
     url: string;
     fileName: string;

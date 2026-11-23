@@ -5,9 +5,11 @@ import {
   type AuthClientSession,
 } from "@t3tools/contracts";
 import * as Digest from "effect/crypto/Digest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
+import type { OpenMediaFile } from "../../../assets/MediaFile.ts";
 import { resolveAttachmentPath } from "../../../attachmentStore.ts";
 import { EnvironmentAuth } from "../../../auth/EnvironmentAuth.ts";
 import { SessionStore } from "../../../auth/SessionStore.ts";
@@ -22,8 +24,9 @@ import { requireThreadScope } from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { callerLinkOrigin } from "../../linkOrigin.ts";
 import { assertLiveCaller, readCaller, unavailable } from "../../threadAccess.ts";
-import { hasExplicitThreadFileSaveIntent } from "./intent.ts";
+import { hasExplicitThreadFileSaveIntent, threadFileDestination } from "./intent.ts";
 import { ThreadFileSaveToolkit } from "./tools.ts";
+import { resolveWorkspaceOutput } from "./workspaceOutput.ts";
 
 const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
@@ -120,26 +123,27 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
       const selectable = [
         ...new Map(aliases.toReversed().map((entry) => [entry.alias, entry.client])).values(),
       ];
-      const target = input.target?.toLocaleLowerCase();
-      const named =
-        target === undefined
-          ? []
-          : selectable.filter(
-              (client) =>
-                deviceLabel(client).toLocaleLowerCase() === target ||
-                client.client.label?.toLocaleLowerCase() === target,
-            );
-      const requestText = userMessage.text.normalize("NFKC").toLocaleLowerCase();
-      const namedRecipient = named.length === 1 ? named[0] : undefined;
-      const explicitlyNamed =
-        namedRecipient !== undefined &&
-        [deviceLabel(namedRecipient), namedRecipient.client.label].some(
-          (label) =>
-            label !== undefined &&
-            requestText.includes(label.normalize("NFKC").toLocaleLowerCase()),
+      const exactClients = (name: string) =>
+        selectable.filter((client) =>
+          [deviceLabel(client), client.client.label].some(
+            (candidate) => candidate?.normalize("NFKC").toLocaleLowerCase() === name,
+          ),
         );
+      const destination = threadFileDestination(userMessage.text);
+      const requestedClients = destination.kind === "named" ? exactClients(destination.label) : [];
+      const chosenClients =
+        input.target === undefined
+          ? []
+          : exactClients(input.target.normalize("NFKC").toLocaleLowerCase());
+      const namedRecipient = chosenClients.length === 1 ? chosenClients[0] : undefined;
+      const currentRecipient =
+        destination.kind === "current" &&
+        (surface === "mobile" || surface === "desktop") &&
+        (destination.device === "any" || destination.device === surface)
+          ? requester
+          : undefined;
       let choseNamedDevice = false;
-      if (namedRecipient && !explicitlyNamed && namedRecipient.sessionId !== requester.sessionId) {
+      if (namedRecipient && requestedClients.length !== 1 && currentRecipient === undefined) {
         const choices = yield* threads
           .getThreadRecords(threadId, ["turnItems", "runtimeRequests"], {
             turnItemRunIds: [run.id],
@@ -165,18 +169,14 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
         });
       }
       const recipient =
-        target === undefined
-          ? surface === "mobile" || surface === "desktop"
-            ? requester
-            : undefined
-          : explicitlyNamed || choseNamedDevice || namedRecipient?.sessionId === requester.sessionId
-            ? namedRecipient
-            : undefined;
+        requestedClients.length === 1
+          ? requestedClients[0]
+          : (currentRecipient ?? (choseNamedDevice ? namedRecipient : undefined));
       if (!recipient) {
         return {
           status: "choose_target" as const,
           reason:
-            target === undefined
+            destination.kind === "current" && surface === "web"
               ? "请从会话使用浏览器下载，或选择接收文件的配对设备。"
               : "无法唯一确定接收设备，请使用已配对设备的完整名称。",
           devices: selectable.map((client) => ({
@@ -192,8 +192,11 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
         readonly sourcePath: string;
         readonly name: string;
         readonly expectedSourceSha256?: string;
+        readonly sourceFile?: OpenMediaFile;
       };
-      if (source._tag === "attachment") {
+      if (source._tag === "delivery" || source._tag === "workspaceOutput") {
+        file = yield* resolveWorkspaceOutput(source, records.thread, run, userMessage, threads);
+      } else if (source._tag === "attachment") {
         const message = (yield* threads
           .getMessagesById(threadId, [source.messageId])
           .pipe(Effect.mapError(unavailable))).get(source.messageId);
@@ -232,10 +235,14 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
           [
             threadId,
             run.userMessageId,
-            source._tag,
+            source._tag === "delivery" || source._tag === "workspaceOutput"
+              ? "workspace"
+              : source._tag,
             ...(source._tag === "attachment"
               ? [source.messageId, source.attachmentId]
-              : [source.taskId]),
+              : source._tag === "delivery" || source._tag === "workspaceOutput"
+                ? [file.sourcePath]
+                : [source.taskId]),
             recipientAlias,
           ]
             .map((field) => `${field.length}:${field}`)
@@ -249,15 +256,25 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
         id,
         requester: requester.sessionId,
         recipient: recipient.sessionId,
+        autoReceive: true,
       }).pipe(Effect.mapError((error) => invalid(error.message)));
-    }),
+    }).pipe(Effect.scoped),
   ),
-  t3_thread_file_save_status: McpToolAccess.readsAsCaller(({ id }) =>
+  t3_thread_file_save_status: McpToolAccess.readsAsCaller(({ id, waitMs = 0 }) =>
     Effect.gen(function* () {
       const { thread } = yield* localThreadCaller();
-      return yield* readThreadFileHandoffStatus(thread.threadId, id).pipe(
+      const read = readThreadFileHandoffStatus(thread.threadId, id).pipe(
         Effect.mapError((error) => invalid(error.message)),
       );
+      const deadline = (yield* Clock.currentTimeMillis) + waitMs;
+      let receipt = yield* read;
+      while (receipt.status === "awaiting_save") {
+        const remaining = deadline - (yield* Clock.currentTimeMillis);
+        if (remaining <= 0) break;
+        yield* Effect.sleep(Math.min(remaining, 250));
+        receipt = yield* read;
+      }
+      return receipt;
     }),
   ),
 });

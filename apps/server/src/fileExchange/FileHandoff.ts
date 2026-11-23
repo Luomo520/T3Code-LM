@@ -13,6 +13,7 @@ import {
   type AuthSessionId,
   type FileHandoffInstallation,
   type FileHandoffReply,
+  type FileHandoffInboxTransfer,
   type FileHandoffRequest,
   type FileHandoffStart,
   type ThreadId,
@@ -24,6 +25,7 @@ import * as Stream from "effect/Stream";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import * as AssetSigner from "../assets/AssetSigner.ts";
+import type { OpenMediaFile } from "../assets/MediaFile.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -36,6 +38,13 @@ import {
   signalDirectHandoff,
 } from "./FileHandoffDirect.ts";
 
+import {
+  indexFileHandoff,
+  indexedFileHandoffs,
+  removeFromFileHandoffInbox,
+} from "./FileHandoffInbox.ts";
+
+const MAX_INBOX_RESULTS = 100;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const UPLOAD_LINK_TTL_MS = 60 * 60 * 1000;
 const MAX_TRANSFERS_PER_THREAD = 50;
@@ -56,6 +65,7 @@ interface HandoffRecord {
   readonly sha256: string | null;
   readonly disposition?: "saved" | "cancelled";
   readonly serverStaged?: true;
+  readonly autoReceive?: true;
   readonly directNegotiated?: true;
   readonly savedPath?: string;
   readonly installation?: FileHandoffInstallation;
@@ -212,6 +222,9 @@ async function sweepExpired(root: string, now: number) {
       activeWrites.add(marker);
       try {
         await NodeFSP.rm(contentsPath(directory, record.id), { force: true });
+        if (record.serverStaged && record.autoReceive) {
+          await removeFromFileHandoffInbox(root, record.recipient, key, record.id);
+        }
         if (record.expiresAt <= now) await NodeFSP.rm(marker, { force: true });
       } finally {
         activeWrites.delete(marker);
@@ -313,6 +326,8 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
   readonly recipient: AuthSessionId;
   readonly name: string;
   readonly sourcePath: string;
+  readonly sourceFile?: OpenMediaFile;
+  readonly autoReceive?: true;
   readonly expectedSourceSha256?: string;
 }) {
   const name = Array.from(input.name.replace(/[\\/\x00-\x1f\x7f]/gu, "_").trim())
@@ -356,6 +371,13 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
         ) {
           throw failure("文件传输资料发生变化，请重新选择设备。");
         }
+        if (existing.autoReceive && !existing.disposition && existing.expiresAt > now) {
+          await indexFileHandoff(root, existing.recipient, NodePath.basename(directory), {
+            threadId: input.threadId,
+            id: existing.id,
+            expiresAt: existing.expiresAt,
+          });
+        }
         return threadFileHandoffStatus(existing);
       }
       const records = await readRecords(directory);
@@ -365,15 +387,17 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
       ) {
         throw failure("此会话的文件传输记录已满。");
       }
-      const source = await NodeFSP.open(
-        input.sourcePath,
-        NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NOFOLLOW ?? 0),
-      );
+      const source =
+        input.sourceFile?.handle ??
+        (await NodeFSP.open(
+          input.sourcePath,
+          NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NOFOLLOW ?? 0),
+        ));
       let sizeBytes = 0;
       const hash = NodeCrypto.createHash("sha256");
       try {
-        const initial = await source.stat();
-        if (!initial.isFile() || initial.size > maxBytes)
+        const initial = input.sourceFile?.info ?? (await source.stat({ bigint: true }));
+        if (!initial.isFile() || initial.size > BigInt(maxBytes))
           throw failure("文件不可读取或超过附件大小上限。");
         await NodeFSP.rm(staging, { force: true });
         const output = await NodeFSP.open(staging, "wx", 0o600);
@@ -381,7 +405,7 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
           const buffer = Buffer.alloc(FILE_HANDOFF_CHUNK_BYTES);
           let bytesRead: number;
           do {
-            ({ bytesRead } = await source.read(buffer));
+            ({ bytesRead } = await source.read(buffer, 0, buffer.length, sizeBytes));
             if (bytesRead === 0) break;
             sizeBytes += bytesRead;
             if (sizeBytes > maxBytes) throw failure("文件超过附件大小上限。");
@@ -389,8 +413,12 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
             hash.update(bytes);
             await output.writeFile(bytes);
           } while (bytesRead > 0);
-          const current = await source.stat();
-          if (current.size !== sizeBytes || current.mtimeMs !== initial.mtimeMs) {
+          const current = await source.stat({ bigint: true });
+          if (
+            current.size !== BigInt(sizeBytes) ||
+            current.mtimeNs !== initial.mtimeNs ||
+            current.ctimeNs !== initial.ctimeNs
+          ) {
             throw failure("文件正在变化，请稍后重试。");
           }
           await output.sync();
@@ -398,13 +426,12 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
           await output.close();
         }
       } finally {
-        await source.close();
+        if (!input.sourceFile) await source.close();
       }
       const sha256 = hash.digest("hex");
       if (input.expectedSourceSha256 !== undefined && sha256 !== input.expectedSourceSha256) {
         throw failure("文件与设备回传时的 SHA-256 不符。");
       }
-      await NodeFSP.rename(staging, contentsPath(directory, input.id));
       const record: HandoffRecord = {
         id: input.id,
         sender: sender.sessionId,
@@ -417,7 +444,17 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
         expiresAt: now + RETENTION_MS,
         sha256,
         serverStaged: true,
+        ...(input.autoReceive === true ? { autoReceive: true } : {}),
       };
+      // 收件箱查阅时核对原记录，因此重启前仅写入的索引条目不会变成待收文件。
+      if (record.autoReceive) {
+        await indexFileHandoff(root, record.recipient, NodePath.basename(directory), {
+          threadId: input.threadId,
+          id: record.id,
+          expiresAt: record.expiresAt,
+        });
+      }
+      await NodeFSP.rename(staging, contentsPath(directory, input.id));
       await writeRecord(directory, record);
       return threadFileHandoffStatus(record);
     } finally {
@@ -455,10 +492,45 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
   input: FileHandoffRequest,
   session: EnvironmentAuth.AuthenticatedSession,
 ) {
-  const sessions = yield* authorizedClients;
   const root = yield* configuration;
-  const directory = transferDirectory(root, input.threadId);
   const now = yield* Clock.currentTimeMillis;
+  if (input._tag === "inbox") {
+    if (!session.scopes.includes(AuthOrchestrationReadScope)) {
+      return yield* failure("当前设备没有读取收件箱的权限。");
+    }
+    const transfers = yield* storage(async () => {
+      const candidates = await indexedFileHandoffs(root, session.sessionId, now);
+      const matches: FileHandoffInboxTransfer[] = [];
+      for (const { threadId, id } of candidates) {
+        const record = await readRecord(transferDirectory(root, threadId), id);
+        if (
+          !record?.serverStaged ||
+          !record.autoReceive ||
+          record.disposition ||
+          record.recipient !== session.sessionId ||
+          record.expiresAt <= now ||
+          record.sha256 === null
+        )
+          continue;
+        matches.push({
+          threadId,
+          id,
+          name: record.name,
+          sizeBytes: record.sizeBytes,
+          senderLabel: record.senderLabel,
+          expiresAt: record.expiresAt,
+          sha256: record.sha256,
+          autoReceive: true,
+        });
+        if (matches.length >= MAX_INBOX_RESULTS) break;
+      }
+      return matches;
+    });
+    return { _tag: "inbox", transfers } satisfies FileHandoffReply;
+  }
+
+  const sessions = yield* authorizedClients;
+  const directory = transferDirectory(root, input.threadId);
   if (input._tag === "list") {
     const records = yield* storage(async () => {
       await sweepExpired(root, now);
@@ -490,6 +562,7 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
             disposition,
             expectedSha256,
             serverStaged,
+            autoReceive,
             recipient,
             savedPath,
             installation,
@@ -503,6 +576,9 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
             expiresAt,
             outgoing:
               sender === session.sessionId && (!serverStaged || recipient !== session.sessionId),
+            ...(serverStaged && autoReceive && recipient === session.sessionId
+              ? { autoReceive: true as const }
+              : {}),
             ...(savedPath === undefined ? {} : { savedPath }),
             ...(installation === undefined ? {} : { installation }),
             ...(disposition === undefined ? {} : { disposition }),
@@ -639,6 +715,14 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
               : {}),
           });
           closeDirectHandoff(marker);
+        }
+        if (record.serverStaged && record.autoReceive) {
+          await removeFromFileHandoffInbox(
+            root,
+            record.recipient,
+            NodePath.basename(directory),
+            record.id,
+          );
         }
         await NodeFSP.rm(contentsPath(directory, input.id), { force: true });
       } finally {

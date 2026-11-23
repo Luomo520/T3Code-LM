@@ -26,6 +26,7 @@ export const FileHandoffInstallation = Schema.Union([
 export type FileHandoffInstallation = typeof FileHandoffInstallation.Type;
 
 export const FileHandoffRequest = Schema.Union([
+  Schema.TaggedStruct("inbox", {}),
   Schema.TaggedStruct("list", { threadId: ThreadId }),
   Schema.TaggedStruct("directStatus", { threadId: ThreadId, id: transferId }),
   Schema.TaggedStruct("directOffer", { threadId: ThreadId, id: transferId, sdp: directSdp }),
@@ -74,6 +75,7 @@ const transfer = Schema.Struct({
   senderLabel: Schema.String,
   recipientLabel: Schema.String,
   outgoing: Schema.Boolean,
+  autoReceive: Schema.optionalKey(Schema.Literal(true)),
   directSha256: Schema.optionalKey(sha256),
   savedPath: Schema.optionalKey(savedPath),
   installation: Schema.optionalKey(FileHandoffInstallation),
@@ -83,7 +85,20 @@ const transfer = Schema.Struct({
 });
 export type FileHandoffTransfer = typeof transfer.Type;
 
+export const FileHandoffInboxTransfer = Schema.Struct({
+  threadId: ThreadId,
+  id: transferId,
+  name: Schema.String,
+  sizeBytes,
+  sha256,
+  senderLabel: Schema.String,
+  expiresAt: Schema.Int,
+  autoReceive: Schema.Literal(true),
+});
+export type FileHandoffInboxTransfer = typeof FileHandoffInboxTransfer.Type;
+
 export const FileHandoffReply = Schema.Union([
+  Schema.TaggedStruct("inbox", { transfers: Schema.Array(FileHandoffInboxTransfer) }),
   Schema.TaggedStruct("finished", { disposition: handoffDisposition }),
   Schema.TaggedStruct("direct", {
     state: Schema.Literals(["active", "closed", "saved"]),

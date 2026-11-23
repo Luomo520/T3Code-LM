@@ -3,7 +3,7 @@ import { toastManager } from "~/components/ui/toast";
 
 const downloads = new Map<string, ReturnType<typeof toastManager.add>>();
 let listening = false;
-function observeDownloads() {
+export function observeFileDownloads() {
   const bridge = window.desktopBridge;
   if (listening || !bridge?.onFileDownload) return;
   listening = true;
@@ -50,7 +50,7 @@ export async function startFileDownload(file: { url: string; fileName: string })
   }
   const bridge = window.desktopBridge;
   if (bridge?.downloadFile) {
-    observeDownloads();
+    observeFileDownloads();
     const result = await bridge.downloadFile(file);
     if (result.method === "idm")
       toastManager.add({
@@ -85,7 +85,7 @@ export async function startVerifiedDesktopDownload(file: { url: string; fileName
     await startFileDownload(file);
     return null;
   }
-  observeDownloads();
+  observeFileDownloads();
   const terminal = new Map<string, DesktopFileDownloadEvent>();
   let selectedId: string | undefined;
   let announce: ((event: DesktopFileDownloadEvent) => void) | undefined;

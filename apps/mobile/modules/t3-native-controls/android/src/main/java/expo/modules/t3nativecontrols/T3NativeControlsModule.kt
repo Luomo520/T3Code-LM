@@ -46,6 +46,11 @@ class T3NativeControlsModule : Module() {
         size.takeIf { it.isFinite() && it in 0.0..9007199254740991.0 && it == it.toLong().toDouble() }?.toLong(),
         sha256, key)
     }
+    AsyncFunction("enqueueAutomaticHandoffDownload") { url: String, name: String, size: Double, sha256: String, key: String ->
+      require(size.isFinite() && size in 0.0..9007199254740991.0 && size == size.toLong().toDouble())
+      T3FileDownloads.enqueue(appContext.reactContext ?: error("应用尚未就绪。"),
+        url, name, size.toLong(), sha256, key, automatic = true)
+    }
     AsyncFunction("getHandoffDownload") { key: String, size: Double, sha256: String ->
       require(size.isFinite() && size in 0.0..9007199254740991.0 && size == size.toLong().toDouble())
       T3FileDownloads.handoffStatus(appContext.reactContext ?: error("应用尚未就绪。"), key, size.toLong(), sha256)

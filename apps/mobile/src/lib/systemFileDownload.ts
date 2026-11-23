@@ -34,6 +34,7 @@ interface NativeDownloads {
     sha256: string,
     key: string,
   ) => Promise<string>;
+  enqueueAutomaticHandoffDownload?: NativeDownloads["enqueueHandoffDownload"];
   getHandoffDownload?: (
     key: string,
     sizeBytes: number,
@@ -62,6 +63,7 @@ export async function enqueueFileDownload(
   sizeBytes?: number,
   sha256?: string,
   handoffKey?: string,
+  automatic = false,
 ): Promise<string> {
   const native = nativeDownloads();
   if (Number(Platform.Version) < 29) {
@@ -76,6 +78,12 @@ export async function enqueueFileDownload(
     }
   }
   if (sha256 !== undefined && sizeBytes !== undefined) {
+    if (automatic) {
+      if (!handoffKey || !native.enqueueAutomaticHandoffDownload) {
+        throw new WorkspaceDownloadError({ message: "此版本不支持自动领取文件。" });
+      }
+      return native.enqueueAutomaticHandoffDownload(url, name, sizeBytes, sha256, handoffKey);
+    }
     if (handoffKey && native.enqueueHandoffDownload) {
       return native.enqueueHandoffDownload(url, name, sizeBytes, sha256, handoffKey);
     }
@@ -95,6 +103,16 @@ export const fileHandoffDownloadKey = (
     CryptoDigestAlgorithm.SHA256,
     JSON.stringify([environmentId, threadId, transferId]),
   );
+
+export function supportsAutomaticFileHandoff() {
+  const native = requireOptionalNativeModule<NativeDownloads>("T3NativeControls");
+  return (
+    Platform.OS === "android" &&
+    Number(Platform.Version) >= 29 &&
+    typeof native?.getHandoffDownload === "function" &&
+    typeof native.enqueueAutomaticHandoffDownload === "function"
+  );
+}
 
 export const readHandoffDownload = (key: string, sizeBytes: number, sha256: string) =>
   nativeDownloads().getHandoffDownload?.(key, sizeBytes, sha256) ?? Promise.resolve(null);

@@ -3093,15 +3093,17 @@ export const layerWsRpc = (
                 }),
             ),
           ),
-        [WS_METHODS.fileHandoffRead]: (input) =>
-          threadManagement.getThreadShell(input.threadId).pipe(
+        [WS_METHODS.fileHandoffRead]: (input) => {
+          if (input._tag === "inbox") return readFileHandoff(input, currentSession);
+          return threadManagement.getThreadShell(input.threadId).pipe(
             Effect.filterOrFail(
               (thread) => thread !== null,
               () => new FileHandoffError({ message: "会话已不可用。" }),
             ),
             Effect.mapError(() => new FileHandoffError({ message: "会话已不可用。" })),
             Effect.andThen(readFileHandoff(input, currentSession)),
-          ),
+          );
+        },
         [WS_METHODS.fileHandoffStart]: (input) =>
           threadManagement.getThreadShell(input.threadId).pipe(
             Effect.filterOrFail(

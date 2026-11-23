@@ -25,6 +25,8 @@ interface DownloadOptions {
   readonly source: string;
   readonly headers?: Headers;
   readonly signal: AbortSignal;
+  readonly expectedSizeBytes?: number;
+  readonly exclusiveDestination?: boolean;
   readonly checksums?: ReadonlyArray<{
     readonly algorithm: "sha256" | "sha512";
     readonly expectedHex: string;
@@ -327,9 +329,27 @@ export async function downloadToFile(options: DownloadOptions): Promise<void> {
       downloadWhole(options, partialPath, response, activity, signal),
     );
   }
+  if (
+    options.expectedSizeBytes !== undefined &&
+    (await NodeFSP.stat(partialPath)).size !== options.expectedSizeBytes
+  ) {
+    await NodeFSP.rm(options.stagingDirectory, { recursive: true, force: true });
+    throw new Error("收到的文件大小与传输记录不符。");
+  }
   await checkIntegrity(partialPath, options);
   options.signal.throwIfAborted();
-  await NodeFSP.rename(partialPath, options.destination);
+  if (options.exclusiveDestination) {
+    // 自动领取没有覆盖确认，从已校验的临时文件发布，保留同名文件。
+    try {
+      await NodeFSP.link(partialPath, options.destination);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" && code !== "ENOTSUP" && code !== "EOPNOTSUPP") throw error;
+      await NodeFSP.copyFile(partialPath, options.destination, NodeFS.constants.COPYFILE_EXCL);
+    }
+  } else {
+    await NodeFSP.rename(partialPath, options.destination);
+  }
   await NodeFSP.rm(options.stagingDirectory, { recursive: true, force: true }).catch(
     () => undefined,
   );
