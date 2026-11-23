@@ -10,6 +10,7 @@ import { useEffect, useEffectEvent, useRef } from "react";
 import { ToastAndroid } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { AppText } from "../../components/ui/AppText";
+import * as Dialog from "../../components/ui/Dialog";
 
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -20,8 +21,10 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentScope, usePreparedConnection } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
+import { isAgentNotificationThreadOnScreen } from "../agent-awareness/notificationNavigation";
 import { advanceAutomaticHandoff } from "./automatic-file-handoff";
 import { automaticFileHandoffEnabled } from "./automatic-file-handoff-preferences";
+import { ReceivedApkInstallAction } from "./ReceivedApkInstallAction";
 
 const atoms = createFileHandoffAtoms(connectionAtomRuntime);
 const quiet = { reportFailure: false, reportDefect: false };
@@ -44,6 +47,7 @@ function EnvironmentAutomaticFileHandoff({
   const current = useRef(false);
   const running = useRef(false);
   const acknowledged = useRef(new Set<string>());
+  const offeredDownload = useRef<string | null>(null);
   const retryAfter = useRef(new Map<string, number>());
   const processInbox = useEffectEvent(async () => {
     if (running.current || connection._tag !== "Some" || query.data?._tag !== "inbox") return;
@@ -51,7 +55,89 @@ function EnvironmentAutomaticFileHandoff({
     const active = () => current.current && isAppActive();
     running.current = true;
     try {
-      for (const item of query.data.transfers) {
+      const regularTransfers = query.data.transfers.map((item) => ({
+        item,
+        explicitlyApproved: false,
+      }));
+      const urlDownloads = query.data.urlDownloads ?? [];
+      if (!offeredDownload.current && active()) {
+        const pending = urlDownloads.find(
+          (item) => !item.ready && !acknowledged.current.has(item.id),
+        );
+        if (pending) {
+          const { id, threadId } = pending;
+          offeredDownload.current = id;
+          const respond = async (action: "approveUrl" | "cancel") => {
+            if (!active()) {
+              offeredDownload.current = null;
+              return;
+            }
+            try {
+              if (action === "approveUrl")
+                ToastAndroid.show("正在获取来源文件…", ToastAndroid.SHORT);
+              const reply = unwrapFileHandoff(
+                await receive({ environmentId, input: { _tag: action, id, threadId } }),
+              );
+              if (action === "approveUrl" ? reply._tag !== "receive" : reply._tag !== "finished")
+                throw new Error("无法处理下载请求。");
+              if (action === "cancel") acknowledged.current.add(id);
+            } catch (error) {
+              if (!active()) {
+                offeredDownload.current = null;
+                return;
+              }
+              Dialog.alert(
+                "无法处理下载请求",
+                error instanceof Error ? error.message : "请检查来源网址后重试。",
+                [
+                  { text: "取消请求", onPress: () => void respond("cancel") },
+                  { text: "重试", onPress: () => void respond(action) },
+                ],
+                {
+                  onDismiss: () => {
+                    offeredDownload.current = null;
+                  },
+                },
+              );
+              return;
+            }
+            offeredDownload.current = null;
+            query.refresh();
+          };
+          Dialog.alert(
+            "下载到这台设备",
+            `${pending.senderLabel} 请求下载 ${pending.name}。
+
+${pending.sourceUrl}${
+              pending.failure
+                ? `
+
+${pending.failure}`
+                : ""
+            }`,
+            [
+              { text: "取消请求", onPress: () => void respond("cancel") },
+              { text: "确认下载", onPress: () => void respond("approveUrl") },
+            ],
+            {
+              onDismiss: () => {
+                offeredDownload.current = null;
+              },
+            },
+          );
+        }
+      }
+      const approvedTransfers = urlDownloads.flatMap((item) =>
+        item.ready
+          ? [
+              {
+                item: { ...item, ...item.ready, autoReceive: true as const },
+                explicitlyApproved: true,
+              },
+            ]
+          : [],
+      );
+      for (const { item, explicitlyApproved } of [...approvedTransfers, ...regularTransfers]) {
         if (!active()) return;
         if (
           acknowledged.current.has(item.id) ||
@@ -65,6 +151,7 @@ function EnvironmentAutomaticFileHandoff({
             active,
             canStartDownload: () => {
               // 领取链接返回时，可能已经在设置里关掉自动接收。
+              if (explicitlyApproved) return true;
               const latest = appAtomRegistry.get(mobilePreferencesAtom);
               return (
                 AsyncResult.isSuccess(latest) &&
@@ -75,7 +162,9 @@ function EnvironmentAutomaticFileHandoff({
           });
           if (outcome === "saved") {
             acknowledged.current.add(item.id);
-            if (active()) ToastAndroid.show(`已保存 ${item.name}`, ToastAndroid.SHORT);
+            if (active() && !isAgentNotificationThreadOnScreen(environmentId, item.threadId)) {
+              ToastAndroid.show(`已保存 ${item.name}`, ToastAndroid.SHORT);
+            }
           }
         } catch {
           // 保留服务器收件和本地部分文件，短暂故障恢复后继续领取。
@@ -150,9 +239,11 @@ export function ThreadFileHandoffReceipt({
       ? query.data.transfers.find(({ id }) => id === transferId)
       : undefined;
   const refresh = query.refresh;
-  // 保存 APK 后仍可能收到安装回执，包括用户取消后重新安装的结果。
+  const receive = useAtomCommand(atoms.receive, quiet);
+  // 用户取消后也可从已保存的 APK 继续安装，回执更新原会话。
   const awaitingInstallation =
     item?.disposition === "saved" &&
+    !item.urlDownload &&
     item.name.toLowerCase().endsWith(".apk") &&
     item.installation?.status !== "verified";
   const refreshInterval = awaitingInstallation ? 15_000 : 5_000;
@@ -164,9 +255,47 @@ export function ThreadFileHandoffReceipt({
     return () => clearInterval(timer);
   }, [ready, refresh, refreshInterval, settled]);
   const text = (item && formatFileHandoffReceipt(item)) ?? initialText;
+  const apk =
+    item &&
+    !item.outgoing &&
+    !item.urlDownload &&
+    item.installRequested &&
+    item.disposition === "saved" &&
+    item.sha256 &&
+    item.savedPath
+      ? { ...item, sha256: item.sha256, savedPath: item.savedPath }
+      : null;
   return (
-    <AppText selectable accessibilityLiveRegion="polite" className="text-sm text-foreground">
-      {text}
-    </AppText>
+    <>
+      <AppText selectable accessibilityLiveRegion="polite" className="text-sm text-foreground">
+        {text}
+      </AppText>
+      {apk && apk.installation?.status !== "verified" ? (
+        <ReceivedApkInstallAction
+          name={apk.name}
+          sizeBytes={apk.sizeBytes}
+          sha256={apk.sha256}
+          uri={apk.savedPath}
+          receiptKey={JSON.stringify([environmentId, threadId, apk.id, apk.sha256])}
+          installation={apk.installation}
+          systemOnly
+          onReport={async (installation) => {
+            unwrapFileHandoff(
+              await receive({
+                environmentId,
+                input: {
+                  _tag: "reportInstall",
+                  threadId,
+                  id: apk.id,
+                  sha256: apk.sha256,
+                  installation,
+                },
+              }),
+            );
+            refresh();
+          }}
+        />
+      ) : null}
+    </>
   );
 }

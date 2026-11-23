@@ -4,6 +4,9 @@ import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts
 export const FILE_HANDOFF_CHUNK_BYTES = 512 * 1024;
 export const FILE_HANDOFF_ROUTE_PREFIX = "/api/assets/file-handoff";
 
+export const FileHandoffMoveResult = Schema.Literals(["removed", "changed", "retained"]);
+export type FileHandoffMoveResult = typeof FileHandoffMoveResult.Type;
+
 const transferId = Schema.String.check(Schema.isPattern(/^[0-9a-f-]{36}$/));
 const sizeBytes = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const sha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
@@ -22,6 +25,7 @@ export const FileHandoffInstallation = Schema.Union([
     versionCode: Schema.String.check(Schema.isPattern(/^[0-9]{1,19}$/)),
   }),
   Schema.Struct({ status: Schema.Literal("cancelled") }),
+  Schema.Struct({ status: Schema.Literal("failed") }),
 ]);
 export type FileHandoffInstallation = typeof FileHandoffInstallation.Type;
 
@@ -32,6 +36,7 @@ export const FileHandoffRequest = Schema.Union([
   Schema.TaggedStruct("directOffer", { threadId: ThreadId, id: transferId, sdp: directSdp }),
   Schema.TaggedStruct("directAnswer", { threadId: ThreadId, id: transferId, sdp: directSdp }),
   Schema.TaggedStruct("directAbandon", { threadId: ThreadId, id: transferId }),
+  Schema.TaggedStruct("approveUrl", { threadId: ThreadId, id: transferId }),
   Schema.TaggedStruct("receive", { threadId: ThreadId, id: transferId }),
   Schema.TaggedStruct("cancel", { threadId: ThreadId, id: transferId }),
   Schema.TaggedStruct("reportInstall", {
@@ -75,9 +80,12 @@ const transfer = Schema.Struct({
   senderLabel: Schema.String,
   recipientLabel: Schema.String,
   outgoing: Schema.Boolean,
+  urlDownload: Schema.optionalKey(Schema.Literal(true)),
+  urlFailure: Schema.optionalKey(Schema.String),
   autoReceive: Schema.optionalKey(Schema.Literal(true)),
   directSha256: Schema.optionalKey(sha256),
   savedPath: Schema.optionalKey(savedPath),
+  installRequested: Schema.optionalKey(Schema.Literal(true)),
   installation: Schema.optionalKey(FileHandoffInstallation),
   expiresAt: Schema.optionalKey(Schema.Int),
   disposition: Schema.optionalKey(handoffDisposition),
@@ -97,8 +105,23 @@ export const FileHandoffInboxTransfer = Schema.Struct({
 });
 export type FileHandoffInboxTransfer = typeof FileHandoffInboxTransfer.Type;
 
+export const FileHandoffUrlDownload = Schema.Struct({
+  threadId: ThreadId,
+  id: transferId,
+  name: Schema.String,
+  sourceUrl: Schema.String,
+  failure: Schema.optionalKey(Schema.String),
+  senderLabel: Schema.String,
+  expiresAt: Schema.Int,
+  ready: Schema.optionalKey(Schema.Struct({ sizeBytes, sha256 })),
+});
+export type FileHandoffUrlDownload = typeof FileHandoffUrlDownload.Type;
+
 export const FileHandoffReply = Schema.Union([
-  Schema.TaggedStruct("inbox", { transfers: Schema.Array(FileHandoffInboxTransfer) }),
+  Schema.TaggedStruct("inbox", {
+    transfers: Schema.Array(FileHandoffInboxTransfer),
+    urlDownloads: Schema.optionalKey(Schema.Array(FileHandoffUrlDownload)),
+  }),
   Schema.TaggedStruct("finished", { disposition: handoffDisposition }),
   Schema.TaggedStruct("direct", {
     state: Schema.Literals(["active", "closed", "saved"]),

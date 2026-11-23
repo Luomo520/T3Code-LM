@@ -7,7 +7,7 @@ import type { ReceivedApkInstallProps, ReceivedInstallation } from "./ReceivedAp
 
 type InstallMethod = "system" | "adb" | "root";
 type LocalInstallStatus =
-  | ReceivedInstallation
+  | Exclude<ReceivedInstallation, { status: "failed" }>
   | { readonly status: "pending" }
   | { readonly status: "failed"; readonly message: string };
 
@@ -48,7 +48,9 @@ export function ReceivedApkInstallAction(file: ReceivedApkInstallProps) {
       setMessage(
         result.status === "verified"
           ? `已核实安装 ${result.packageName} · ${result.version}`
-          : "已取消安装，文件已保留。",
+          : result.status === "cancelled"
+            ? "已取消安装，文件已保留。"
+            : "安装未完成，文件已保留。",
       );
     } catch {
       if (reporting.current !== result) return;
@@ -61,8 +63,11 @@ export function ReceivedApkInstallAction(file: ReceivedApkInstallProps) {
     if (current.status === "verified") void report(current);
     else if (current.status === "cancelled" && file.installation?.status !== "cancelled")
       void report(current);
-    else if (current.status === "failed") setMessage(current.message);
-    else if (current.status === "pending")
+    else if (current.status === "failed") {
+      setMessage(current.message);
+      if (file.systemOnly && file.installation?.status !== "failed")
+        void report({ status: "failed" });
+    } else if (current.status === "pending")
       setMessage("等待系统完成安装。若确认界面未出现，可再次点按安装。");
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 在安装广播或返回前台时读取该包的系统安装回执。
@@ -105,7 +110,9 @@ export function ReceivedApkInstallAction(file: ReceivedApkInstallProps) {
         file.sha256,
         file.receiptKey,
       );
-      const access = await installer.getDeviceAccess().catch(() => "unavailable" as const);
+      const access = file.systemOnly
+        ? "unavailable"
+        : await installer.getDeviceAccess().catch(() => "unavailable" as const);
       const method = await new Promise<InstallMethod | null>((resolve) => {
         Alert.alert(
           "安装收到的 APK？",
@@ -136,15 +143,21 @@ export function ReceivedApkInstallAction(file: ReceivedApkInstallProps) {
         const current = await installer.readReceivedInstall(file.receiptKey);
         if (current?.status === "verified" || current?.status === "cancelled")
           await report(current);
-        else if (current?.status === "failed") setMessage(current.message);
-        else if (current?.status === "pending")
+        else if (current?.status === "failed") {
+          if (file.systemOnly) await report({ status: "failed" });
+          setMessage(current.message);
+        } else if (current?.status === "pending")
           setMessage("等待系统完成安装。若确认界面未出现，可再次点按安装。");
         else setMessage("安装器已返回，暂未从系统核实版本。");
       } else if (result.status === "permission-required")
         setMessage("允许安装应用后，可在这里继续。");
       else if (result.status === "cancelled") await report({ status: "cancelled" });
-      else setMessage(result.message ?? "安装失败，可重试。");
+      else {
+        if (file.systemOnly) await report({ status: "failed" });
+        setMessage(result.message ?? "安装失败，可重试。");
+      }
     } catch (error) {
+      if (file.systemOnly) await report({ status: "failed" });
       setMessage(error instanceof Error ? error.message : "无法打开已保存的 APK。");
     } finally {
       setBusy(false);
@@ -159,7 +172,7 @@ export function ReceivedApkInstallAction(file: ReceivedApkInstallProps) {
         <AppText textRole="footnote">{`已核实安装 ${file.installation.packageName} · ${file.installation.version}`}</AppText>
       ) : (
         <Button
-          label="安装已接收的 APK"
+          label={file.systemOnly ? "核对 APK 并安装" : "安装已接收的 APK"}
           size="compact"
           loading={busy}
           onPress={() => void prepare()}

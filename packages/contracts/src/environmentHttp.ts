@@ -1094,6 +1094,8 @@ export const CompanionPollInput = Schema.Struct({
   name: CompanionName,
   info: CompanionInfo,
   watchRecordingId: Schema.optionalKey(CompanionIdentifier),
+  watchTaskId: Schema.optionalKey(CompanionIdentifier),
+  recordingReceiptV1: Schema.optionalKey(Schema.Literal(true)),
 });
 export const CompanionCheckInput = Schema.Struct({
   name: Schema.optionalKey(CompanionName),
@@ -1108,10 +1110,21 @@ const CompanionFileBase64 = Schema.String.check(
 );
 export const CompanionCaptureKind = Schema.Literals(["window", "display"]);
 export const COMPANION_MAX_RECORDING_SECONDS = 30;
+export const CompanionCaptureMetadata = Schema.Struct({
+  capturedAt: Schema.String.check(
+    Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u),
+  ),
+  label: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(120),
+    Schema.isPattern(/^[^\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]+$/u),
+  ),
+});
 export const CompanionResultInput = Schema.Struct({
   captureScope: Schema.optionalKey(CompanionCaptureKind),
+  capture: Schema.optionalKey(CompanionCaptureMetadata),
   id: CompanionIdentifier,
-  status: Schema.Literals(["done", "failed"]),
+  status: Schema.Literals(["running", "done", "failed"]),
+  closeState: Schema.optionalKey(Schema.Literals(["waiting-for-exit", "exited"])),
   message: Schema.String.check(Schema.isMaxLength(4096)),
   file: Schema.optionalKey(
     Schema.Struct({
@@ -1141,6 +1154,40 @@ export const CompanionResultInput = Schema.Struct({
 });
 export const CompanionUnbindInput = Schema.Struct({});
 
+export const AndroidCaptureAction = Schema.Literals(["screenshot", "record-screen"]);
+export const AndroidCaptureFailure = Schema.Literals([
+  "denied",
+  "locked",
+  "revoked",
+  "canceled",
+  "failed",
+]);
+export const AndroidCaptureJob = Schema.Struct({
+  id: CompanionIdentifier,
+  threadId: ThreadId,
+  action: AndroidCaptureAction,
+  durationSeconds: Schema.Int.check(
+    Schema.isBetween({
+      minimum: 1,
+      maximum: COMPANION_MAX_RECORDING_SECONDS,
+    }),
+  ),
+  expiresAt: Schema.Number,
+});
+export const AndroidCaptureInput = Schema.Union([
+  Schema.TaggedStruct("listen", { name: CompanionName }),
+  Schema.TaggedStruct("approve", { id: CompanionIdentifier }),
+  Schema.TaggedStruct("status", { id: CompanionIdentifier }),
+  Schema.TaggedStruct("reject", { id: CompanionIdentifier, reason: AndroidCaptureFailure }),
+  Schema.TaggedStruct("complete", { id: CompanionIdentifier, media: CompanionFileBase64 }),
+]);
+export const AndroidCaptureReply = Schema.Union([
+  Schema.TaggedStruct("pending", { job: Schema.NullOr(AndroidCaptureJob) }),
+  Schema.TaggedStruct("active", { job: AndroidCaptureJob }),
+  Schema.TaggedStruct("inactive", {}),
+  Schema.TaggedStruct("accepted", {}),
+]);
+
 export const CompanionDevice = Schema.Struct({
   deviceId: CompanionIdentifier,
   name: CompanionName,
@@ -1151,6 +1198,7 @@ export const CompanionDevice = Schema.Struct({
   recentTasks: Schema.Array(
     Schema.Struct({
       id: CompanionIdentifier,
+      threadId: Schema.optionalKey(ThreadId),
       action: Schema.String,
       status: Schema.Literals(["queued", "running", "done", "failed", "canceled"]),
       updatedAt: Schema.String,
@@ -1161,6 +1209,14 @@ export const CompanionDevice = Schema.Struct({
 export type CompanionDevice = typeof CompanionDevice.Type;
 
 class EnvironmentCompanionsHttpApi extends HttpApiGroup.make("companions")
+  .add(
+    HttpApiEndpoint.post("androidCapture", "/api/companions/android-capture", {
+      headers: OptionalBearerHeaders,
+      payload: AndroidCaptureInput,
+      success: AndroidCaptureReply,
+      error: CompanionAdminErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
   .add(
     HttpApiEndpoint.post("pair", "/api/companions/pair", {
       headers: OptionalBearerHeaders,
@@ -1205,6 +1261,8 @@ class EnvironmentCompanionsHttpApi extends HttpApiGroup.make("companions")
       payload: CompanionPollInput,
       success: Schema.Struct({
         name: CompanionName,
+        jobActive: Schema.optionalKey(Schema.Boolean),
+        recordingReceiptState: Schema.optionalKey(Schema.Literals(["ready", "reported", "closed"])),
         stopRequested: Schema.optionalKey(Schema.Boolean),
         job: Schema.NullOr(
           Schema.Struct({
@@ -1255,6 +1313,35 @@ class EnvironmentCompanionsHttpApi extends HttpApiGroup.make("companions")
     }),
   ) {}
 
+const LinuxDeviceDiagnostic = Schema.Union([
+  Schema.Struct({ check: Schema.Literal("system_version"), kernelVersion: Schema.String }),
+  Schema.Struct({ check: Schema.Literal("available_space"), availableBytes: Schema.Number }),
+  Schema.Struct({ check: Schema.Literal("uptime"), uptimeSeconds: Schema.Number }),
+]);
+
+export const LinuxSshDevice = Schema.Struct({
+  deviceId: TrimmedNonEmptyString,
+  sftpAliases: Schema.Array(TrimmedNonEmptyString),
+  diagnosticAliases: Schema.Array(TrimmedNonEmptyString),
+  active: Schema.NullOr(Schema.Literals(["sftp-send", "sftp-receive", "ssh-diagnostics"])),
+  waiting: Schema.Number,
+  lastDiagnostic: Schema.optionalKey(
+    Schema.Struct({
+      result: LinuxDeviceDiagnostic,
+      checkedAt: Schema.String,
+    }),
+  ),
+});
+export type LinuxSshDevice = typeof LinuxSshDevice.Type;
+
+class EnvironmentLinuxDevicesHttpApi extends HttpApiGroup.make("linuxDevices").add(
+  HttpApiEndpoint.get("list", "/api/linux-devices", {
+    headers: OptionalBearerHeaders,
+    success: Schema.Struct({ devices: Schema.Array(LinuxSshDevice) }),
+    error: EnvironmentScopedOperationErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
@@ -1265,4 +1352,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentConnectHttpApi)
   .add(EnvironmentCompanionsHttpApi)
+  .add(EnvironmentLinuxDevicesHttpApi)
   .add(EnvironmentWebhooksHttpApi) {}

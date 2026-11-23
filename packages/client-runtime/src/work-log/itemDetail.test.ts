@@ -3,6 +3,7 @@ import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/con
 import * as DateTime from "effect/DateTime";
 
 import {
+  companionRecordingOutput,
   companionScreenshotOutput,
   isJsonToolText,
   threadFileSaveOutput,
@@ -85,6 +86,34 @@ describe("companion screenshot output", () => {
         outputOmitted: true,
       }),
     ).toBeNull();
+  });
+});
+
+describe("companion recording capture time", () => {
+  const reportedAt = "2026-11-23T09:12:05.123Z";
+  const original = {
+    status: "done",
+    action: "record-screen",
+    deviceName: "书房 PC",
+    captureScope: "window",
+    updatedAt: reportedAt,
+    recording: { url: "/api/assets/signed", expiresAt: 5 },
+  };
+  const tool = "t3-code-direct.t3_companion_result";
+
+  it("shows the selected window and the original first-frame time", () => {
+    const capture = { capturedAt: "2026-11-23T09:09:05.123Z", label: "记事本" };
+    const item = toolItem({ structuredContent: { ...original, capture } }, tool);
+    expect(companionRecordingOutput(item)?.caption).toBe(
+      "书房 PC · 窗口 记事本 · 录制开始 2026-11-23T09:09:05.123Z",
+    );
+  });
+
+  it("labels the timestamp in older recording results as the report time", () => {
+    const item = toolItem([{ type: "text", text: JSON.stringify(original) }], tool);
+    expect(companionRecordingOutput(item)?.caption).toBe(
+      `书房 PC · 所选窗口 · 上报时间 ${reportedAt}`,
+    );
   });
 });
 

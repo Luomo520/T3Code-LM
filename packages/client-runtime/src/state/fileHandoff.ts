@@ -4,6 +4,7 @@ import {
   type EnvironmentId,
   type FileHandoffRequest,
   type FileHandoffReply,
+  type FileHandoffMoveResult,
   type FileHandoffStart,
   type FileHandoffTransfer,
 } from "@t3tools/contracts";
@@ -87,24 +88,25 @@ export async function sendHandoffFile(options: {
     hash.update(chunk);
   }
   signal.throwIfAborted();
+  const sha256 = hash.digestHex();
   const result = unwrapFileHandoff(
-    await options.start({ environmentId, input: { ...input, sha256: hash.digestHex() } }),
+    await options.start({ environmentId, input: { ...input, sha256 } }),
   );
   const uploadUrl = resolveAssetUrl(options.httpBaseUrl, result.relativeUrl);
   if (!uploadUrl || result.offset > input.sizeBytes) throw new Error("文件传输进度无效。");
   onProgress(result.offset);
-  if (result.ready) return;
+  if (result.ready) return sha256;
   if (options.direct) {
     const direct = options.direct;
     if (result.direct) {
       if (
         await trySendDirectFile({ ...input, ...direct, signal, slice: options.slice, onProgress })
       )
-        return;
+        return sha256;
       const abandoned = await direct
         .request({ _tag: "directAbandon", threadId: input.threadId, id: input.id })
         .catch(() => null);
-      if (abandoned?._tag === "direct" && abandoned.state === "saved") return;
+      if (abandoned?._tag === "direct" && abandoned.state === "saved") return sha256;
       onProgress(result.offset);
     }
     direct.onFallback?.();
@@ -123,27 +125,63 @@ export async function sendHandoffFile(options: {
       const state = await options.direct
         ?.request({ _tag: "directStatus", threadId: input.threadId, id: input.id })
         .catch(() => null);
-      if (state?._tag === "direct" && state.state === "saved") return;
+      if (state?._tag === "direct" && state.state === "saved") return sha256;
       throw new Error(`上传中断（HTTP ${response.status}），请点击继续上传。`);
     }
     offset += length;
     onProgress(offset);
   } while (offset < input.sizeBytes);
+  return sha256;
+}
+
+export interface PendingFileMove {
+  readonly token: string;
+  readonly id: string;
+  readonly sha256: string;
+  readonly sizeBytes: number;
+}
+
+export function hasVerifiedFileMoveReceipt(
+  transfer: FileHandoffTransfer | undefined,
+  move: PendingFileMove,
+): boolean {
+  return (
+    transfer?.outgoing === true &&
+    transfer.id === move.id &&
+    transfer.disposition === "saved" &&
+    transfer.sizeBytes === move.sizeBytes &&
+    transfer.sha256 === move.sha256
+  );
+}
+
+export function formatFileMoveResult(result: FileHandoffMoveResult): string {
+  if (result === "removed") return "已移动到目标设备。";
+  if (result === "changed") return "已保存到目标设备，源文件有变化，已保留。";
+  return "已保存到目标设备，源文件仍保留。可在本机文件管理器中处理。";
 }
 
 export function formatFileHandoffReceipt(
   file: Pick<
     FileHandoffTransfer,
-    "disposition" | "name" | "recipientLabel" | "savedPath" | "installation"
+    | "disposition"
+    | "name"
+    | "recipientLabel"
+    | "savedPath"
+    | "installRequested"
+    | "installation"
+    | "urlFailure"
   >,
 ): string | null {
   if (file.disposition === "cancelled") return `${file.name} 的传输已取消。`;
+  if (file.urlFailure) return `来源文件下载失败。${file.urlFailure}`;
   if (file.disposition !== "saved") return null;
   const saved = `${file.recipientLabel} 已保存并校验 ${file.name}${file.savedPath ? `，保存到 ${file.savedPath}` : ""}。`;
   const install = file.installation;
   if (install?.status === "verified")
     return `${saved}已核验安装 ${install.packageName} ${install.version}（${install.versionCode}）。`;
   if (install?.status === "cancelled") return `${saved}已取消安装，文件已保留。`;
+  if (install?.status === "failed") return `${saved}安装未完成，可在手机上重试。`;
+  if (file.installRequested) return `${saved}请在接收手机上核对 APK 并确认安装。`;
   return saved;
 }
 

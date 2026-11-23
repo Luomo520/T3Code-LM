@@ -1,12 +1,19 @@
 import type { NotificationResponse } from "expo-notifications";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import {
+  isAgentNotificationThreadOnScreen,
+  setAgentNotificationPathname,
+} from "./notificationNavigation";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
 import {
   extractAgentNotificationDeepLink,
   routeAgentNotificationResponseOnce,
 } from "./notificationPayload";
+
+vi.mock("expo-notifications", () => ({}));
+vi.mock("./androidNotifications", () => ({ setAndroidThreadOnScreen: vi.fn() }));
 
 function responseWithData(data: Record<string, unknown>, identifier = "notification-1") {
   return {
@@ -23,6 +30,15 @@ function responseWithData(data: Record<string, unknown>, identifier = "notificat
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it("suppresses foreground notices only for the visible thread in the same environment", () => {
+  setAgentNotificationPathname("/threads/k60%20nas/thread%2F1/files");
+  expect(isAgentNotificationThreadOnScreen("k60 nas", "thread/1")).toBe(true);
+  expect(isAgentNotificationThreadOnScreen("office nas", "thread/1")).toBe(false);
+  expect(isAgentNotificationThreadOnScreen("k60 nas", "thread/2")).toBe(false);
+  setAgentNotificationPathname("/settings");
+  expect(isAgentNotificationThreadOnScreen("k60 nas", "thread/1")).toBe(false);
 });
 
 describe("consumeLastAgentNotificationResponse", () => {

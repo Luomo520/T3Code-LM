@@ -1,8 +1,14 @@
 import { AsyncResult } from "effect/reactivity";
-import { AuthSessionId, EnvironmentId, ThreadId, type FileHandoffReply } from "@t3tools/contracts";
+import {
+  AuthSessionId,
+  EnvironmentId,
+  ThreadId,
+  type FileHandoffReply,
+  type FileHandoffTransfer,
+} from "@t3tools/contracts";
 import { createSha256 } from "@t3tools/shared/sha256";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { sendHandoffFile } from "./fileHandoff.ts";
+import { hasVerifiedFileMoveReceipt, sendHandoffFile } from "./fileHandoff.ts";
 import { receiveDirectFile, type HandoffFrame, type HandoffPeer } from "./fileHandoffDirect.ts";
 
 const threadId = ThreadId.make("thread");
@@ -135,4 +141,33 @@ describe("文件直连接收", () => {
     expect(send.mock.calls).toEqual([[contents], ["done"]]);
     expect(post).not.toHaveBeenCalled();
   });
+});
+
+it("只使用同一笔发出传输中已保存且匹配大小与摘要的回执完成移动", () => {
+  const move = { id, token: "local-picker-token", sha256, sizeBytes: contents.length };
+  const saved = {
+    id,
+    name: "test.bin",
+    senderLabel: "Windows",
+    recipientLabel: "Android",
+    outgoing: true,
+    disposition: "saved",
+    sizeBytes: contents.length,
+    sha256,
+  } satisfies FileHandoffTransfer;
+
+  expect(hasVerifiedFileMoveReceipt(saved, move)).toBe(true);
+  const { disposition: _savedDisposition, ...uploaded } = saved;
+  for (const wrong of [
+    undefined,
+    uploaded,
+    { ...saved, disposition: "cancelled" as const },
+    { ...saved, outgoing: false },
+    { ...saved, id: "another-transfer" },
+    { ...saved, sizeBytes: 0 },
+    { ...saved, sha256: null },
+    { ...saved, sha256: "0".repeat(64) },
+  ]) {
+    expect(hasVerifiedFileMoveReceipt(wrong, move)).toBe(false);
+  }
 });

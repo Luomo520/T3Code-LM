@@ -56,6 +56,10 @@ export const AssetResource = Schema.Union([
     itemId: TurnItemId,
     index: NonNegativeInt,
   }),
+  Schema.TaggedStruct("companion-recording", {
+    threadId: ThreadId,
+    taskId: Schema.String.check(Schema.isPattern(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u)),
+  }),
   Schema.TaggedStruct("project-favicon", {
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
     // Cache-key hint only; the project projection supplies the authoritative path.

@@ -87,6 +87,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   windowsCompanion: Schema.optionalKey(Schema.Boolean),
+  linuxSshDevices: Schema.optionalKey(Schema.Boolean),
   androidUsbBinding: Schema.optionalKey(Schema.Boolean),
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
   questionAttachments: Schema.optionalKey(Schema.Boolean),

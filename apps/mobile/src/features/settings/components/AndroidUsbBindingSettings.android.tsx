@@ -107,6 +107,7 @@ export function AndroidUsbBindingSettings({
       {bound?.bound ? (
         <>
           <ListRowLayout label="已绑定本机 T3 App" description={bound.deviceName} />
+          <ListRowLayout label="USB 主机连接" description="在电脑的真机设备面板查看。" />
           <ListActionRow
             label="解除绑定"
             loading={busy === "unbindApp"}

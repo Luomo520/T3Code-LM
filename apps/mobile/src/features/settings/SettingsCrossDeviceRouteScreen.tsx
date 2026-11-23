@@ -28,6 +28,7 @@ import { environmentStatusText } from "../connection/environmentStatusText";
 import { LocalApkInstallSection } from "./components/LocalApkInstallSection";
 import { AutomaticFileHandoffSettings } from "./components/AutomaticFileHandoffSettings";
 import { AndroidUsbBindingSettings } from "./components/AndroidUsbBindingSettings";
+import { LinuxSshDeviceSettings } from "./components/LinuxSshDeviceSettings";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
@@ -194,6 +195,9 @@ function CrossDeviceAccess({ environmentId }: { readonly environmentId: Environm
         {environment ? <AutomaticFileHandoffSettings environmentId={environmentId} /> : null}
         {environment ? (
           <WindowsCompanionSettings environmentId={environmentId} connected={connected} />
+        ) : null}
+        {environment ? (
+          <LinuxSshDeviceSettings environmentId={environmentId} connected={connected} />
         ) : null}
         {environment ? (
           <AndroidUsbBindingSettings environmentId={environmentId} connected={connected} />

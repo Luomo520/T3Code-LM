@@ -23,6 +23,7 @@ import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-typ
 
 const harness = vi.hoisted(() => ({
   navigate: vi.fn(),
+  selectDetail: vi.fn(),
   confirm: vi.fn<(request: ConfirmDialogRequest) => void>(),
   alert:
     vi.fn<
@@ -40,6 +41,7 @@ const harness = vi.hoisted(() => ({
   online: true,
   loading: false,
   supportsWindowsCompanion: false,
+  supportsLinuxSsh: false,
   supportsAutomaticHandoff: false,
   preferences: {} as Preferences,
   savePreferences: vi.fn(),
@@ -54,10 +56,18 @@ vi.mock("@react-navigation/native", () => ({
   useFocusEffect: () => undefined,
   useNavigation: () => ({ navigate: harness.navigate, isFocused: () => true }),
 }));
+vi.mock("../layout/workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => harness.selectDetail,
+}));
 vi.mock("react-native", () => ({ AppState: { currentState: "active" } }));
 function serverConfig() {
   return {
-    environment: { capabilities: { windowsCompanion: harness.supportsWindowsCompanion } },
+    environment: {
+      capabilities: {
+        windowsCompanion: harness.supportsWindowsCompanion,
+        linuxSshDevices: harness.supportsLinuxSsh,
+      },
+    },
     settings: { windowsCompanionEnabled: harness.windowsCompanionEnabled },
   };
 }
@@ -111,11 +121,35 @@ vi.mock("../../state/query", () => ({
                   online: true,
                   info: {},
                   lastSeen: "2026-11-23T00:00:00Z",
-                  recentTasks: [],
+                  recentTasks: [
+                    {
+                      id: "task-test",
+                      threadId: "thread-test",
+                      action: "screenshot",
+                      status: "done",
+                      updatedAt: "2026-11-23T00:00:00Z",
+                    },
+                  ],
                 },
               ],
             }
-          : null,
+          : atom === "linux-devices"
+            ? {
+                devices: [
+                  {
+                    deviceId: "linux-test",
+                    sftpAliases: ["linux-files"],
+                    diagnosticAliases: ["linux-diagnostic"],
+                    waiting: 2,
+                    active: "ssh-diagnostics",
+                    lastDiagnostic: {
+                      result: { check: "system_version", kernelVersion: "Linux 6.12.0" },
+                      checkedAt: "2026-11-23T00:00:00Z",
+                    },
+                  },
+                ],
+              }
+            : null,
     error: atom ? harness.error : null,
     refresh: harness.refresh,
   }),
@@ -144,6 +178,9 @@ vi.mock("./windowsCompanionCommands", () => ({
     harness.readDevices(...args);
     return "devices";
   },
+}));
+vi.mock("./linuxSshDeviceQuery", () => ({
+  linuxSshDevices: () => "linux-devices",
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
@@ -255,6 +292,7 @@ describe("Android 多端互控", () => {
     harness.online = true;
     harness.loading = false;
     harness.supportsWindowsCompanion = false;
+    harness.supportsLinuxSsh = false;
     harness.supportsAutomaticHandoff = false;
     harness.preferences = {};
     harness.savePreferences.mockImplementation(async ({ transform }) => {
@@ -401,6 +439,13 @@ describe("Android 多端互控", () => {
     expect(harness.readDevices).toHaveBeenCalledWith({ environmentId, input: null });
     expect(container.textContent).toContain("已配对的电脑 在线");
     expect(harness.createPairing).not.toHaveBeenCalled();
+    await click("已配对的电脑 · 最近任务");
+    expect(container.textContent).toContain("task-test");
+    await click("截图 · 已完成");
+    expect(harness.selectDetail).toHaveBeenCalledWith({
+      name: "Thread",
+      params: { environmentId, threadId: "thread-test" },
+    });
 
     await click("生成一次性配对码");
     expect(harness.createPairing).toHaveBeenCalledExactlyOnceWith({ environmentId, input: null });
@@ -412,12 +457,16 @@ describe("Android 多端互控", () => {
 
   it("缺少写设置和管理访问授权时不会接入受控端 API", async () => {
     harness.supportsWindowsCompanion = true;
+    harness.supportsLinuxSsh = true;
     harness.windowsCompanionEnabled = true;
     harness.scopes.add(AuthAccessReadScope);
     await render(accessPage());
     expect(button("允许 Windows 受控端")?.disabled).toBe(true);
     expect(button("生成一次性配对码")).toBeUndefined();
     expect(harness.readDevices).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("linux-test");
+    expect(container.textContent).toContain("等待 2 项");
+    expect(container.textContent).toContain("Linux 6.12.0");
   });
 
   it("功能关闭时仍能重命名和解除已配对 Windows 设备", async () => {

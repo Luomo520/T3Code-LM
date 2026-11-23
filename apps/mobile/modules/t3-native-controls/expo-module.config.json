@@ -16,7 +16,9 @@
       "expo.modules.t3nativecontrols.T3KeyboardCommandsModule",
       "expo.modules.t3nativecontrols.T3FoldPostureModule",
       "expo.modules.t3nativecontrols.T3SecretInputModule",
-      "expo.modules.t3nativecontrols.T3LocalApkInstallModule"
+      "expo.modules.t3nativecontrols.T3LocalApkInstallModule",
+      "expo.modules.t3nativecontrols.T3LocalScreenCaptureModule",
+      "expo.modules.t3nativecontrols.T3LocalFileMoveModule"
     ]
   }
 }

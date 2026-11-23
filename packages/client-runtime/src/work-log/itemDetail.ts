@@ -288,7 +288,45 @@ export function companionRecordingOutput(item: OrchestrationV2TurnItem) {
     return null;
   }
   const recording = result.recording;
+  const taskId = result.id;
+  const resource =
+    typeof taskId === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(taskId)
+      ? { _tag: "companion-recording" as const, threadId: item.threadId, taskId }
+      : null;
+  const capture = isRecord(result.capture) ? result.capture : null;
+  const label = capture && typeof capture.label === "string" ? capture.label : null;
+  const source = label
+    ? result.captureScope === "window" && label !== "所选窗口"
+      ? `窗口 ${label}`
+      : label
+    : result.captureScope === "android-screen"
+      ? "Android 所选画面"
+      : result.captureScope === "window"
+        ? "所选窗口"
+        : result.captureScope === "display"
+          ? "所选显示器"
+          : "主显示器";
   return {
+    resource,
+    caption: [
+      result.deviceName,
+      source,
+      capture && typeof capture.capturedAt === "string"
+        ? `录制开始 ${capture.capturedAt}`
+        : typeof result.updatedAt === "string"
+          ? `上报时间 ${result.updatedAt}`
+          : null,
+    ]
+      .filter((value): value is string => typeof value === "string")
+      .join(" · "),
+    accessibilityLabel:
+      result.captureScope === "android-screen"
+        ? "Android 屏幕录屏"
+        : result.captureScope === "window"
+          ? "Windows 窗口录屏"
+          : result.captureScope === "display"
+            ? "Windows 显示器录屏"
+            : "Windows 主屏幕录屏",
     url: isRecord(recording) && typeof recording.url === "string" ? recording.url : null,
     expiresAt:
       isRecord(recording) &&
@@ -322,7 +360,12 @@ export function threadFileSaveOutput(item: OrchestrationV2TurnItem) {
       return {
         status: result.status,
         id: typeof result.id === "string" ? result.id : null,
-        text: `${result.name} 已发送给 ${result.recipientLabel}，等待保存。`,
+        text:
+          typeof result.urlFailure === "string"
+            ? `来源文件下载失败。 ${result.urlFailure}`
+            : result.urlDownload === true
+              ? `下载请求已发送给 ${result.recipientLabel}，等待该设备确认或保存 ${result.name}。`
+              : `${result.name} 已发送给 ${result.recipientLabel}，等待保存。`,
       } as const;
     case "saved": {
       const installed = result.installation;

@@ -1,13 +1,19 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
+  lookupWindowsCompanionMac,
+  windowsCompanionAvailability,
+  windowsCompanionCapabilities,
+  windowsCompanionNetworkAdapters,
+} from "@t3tools/client-runtime/device/windows-companion";
+import {
   AuthAccessWriteScope,
   AuthSettingsWriteScope,
   type CompanionDevice,
   isManagedSettingPath,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import { useCallback, useRef, useState } from "react";
+import { Fragment, useCallback, useRef, useState } from "react";
 import { AppState } from "react-native";
 
 import * as Dialog from "../../../components/ui/Dialog";
@@ -19,6 +25,7 @@ import { serverEnvironment } from "../../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../../state/session";
 import { useAtomCommand } from "../../../state/use-atom-command";
 import { environmentConnectedAtom } from "../../../state/use-remote-environment-registry";
+import { useSelectWorkspaceDetail } from "../../layout/workspace/useSelectWorkspaceDetail";
 import {
   createWindowsCompanionPairing,
   renameWindowsCompanion,
@@ -36,6 +43,7 @@ export function WindowsCompanionSettings({
   readonly connected: boolean;
 }) {
   const navigation = useNavigation();
+  const selectDetail = useSelectWorkspaceDetail();
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const canManageAccess = useEnvironmentScope(environmentId, AuthAccessWriteScope);
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
@@ -48,6 +56,7 @@ export function WindowsCompanionSettings({
   const revokeDevice = useAtomCommand(revokeWindowsCompanion, { reportFailure: false });
   const [busy, setBusy] = useState<"setting" | "pairing" | "device" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recentDeviceId, setRecentDeviceId] = useState<string | null>(null);
   const busyRef = useRef(false);
   const enabled = config?.settings.windowsCompanionEnabled;
   const managed = isManagedSettingPath(config?.managedPolicy, "windowsCompanionEnabled");
@@ -141,7 +150,7 @@ export function WindowsCompanionSettings({
   }
 
   function openDeviceActions(device: CompanionDevice) {
-    Dialog.alert(device.name, describeDevice(device), [
+    Dialog.alert(device.name, describeDevice(device, enabled === true), [
       { text: "取消", style: "cancel" },
       {
         text: "重命名",
@@ -178,6 +187,34 @@ export function WindowsCompanionSettings({
           }),
       },
     ]);
+  }
+
+  function lookUpDeviceByMac(pairedDevices: readonly CompanionDevice[]) {
+    Dialog.prompt({
+      title: "按 MAC 地址查找设备",
+      message: "输入设备网卡的 MAC 地址，例如 02:11:22:33:44:55。",
+      initialValue: "",
+      confirmText: "查找",
+      onConfirm: (address) => {
+        const matches = lookupWindowsCompanionMac(pairedDevices, address);
+        const match = matches?.length === 1 ? matches[0] : undefined;
+        Dialog.alert(
+          "MAC 地址查询",
+          !matches
+            ? "请输入有效的 MAC 地址。"
+            : match
+              ? `「${match.name}」上报了此地址。请核对设备的配对记录。`
+              : matches.length === 0
+                ? "已配对的设备未上报此 MAC 地址。"
+                : [
+                    "多台设备上报了此 MAC 地址，请核对设备的配对记录。",
+                    ...matches.map(
+                      (device) => `${device.name} · ${device.info.hostname || device.deviceId}`,
+                    ),
+                  ].join("\n"),
+        );
+      },
+    });
   }
 
   async function modifyDevice(action: () => Promise<{ readonly _tag: string }>) {
@@ -243,16 +280,60 @@ export function WindowsCompanionSettings({
           ) : devices.data.devices.length === 0 ? (
             <ListRowLayout label="尚未配对 Windows 设备" />
           ) : (
-            devices.data.devices.map((device) => (
+            <>
               <ListActionRow
-                key={device.deviceId}
-                icon="desktopcomputer"
-                label={device.name}
-                description={device.online ? "在线 · 设备详情" : "离线 · 设备详情"}
-                disabled={busy !== null}
-                onPress={() => openDeviceActions(device)}
+                icon="magnifyingglass"
+                label="按 MAC 地址查找设备"
+                onPress={() => lookUpDeviceByMac(devices.data?.devices ?? [])}
               />
-            ))
+              {devices.data.devices.map((device) => (
+                <Fragment key={device.deviceId}>
+                  <ListActionRow
+                    icon="desktopcomputer"
+                    label={device.name}
+                    description={`${connectionLabels[windowsCompanionAvailability(device, enabled)]} · 设备详情`}
+                    disabled={busy !== null}
+                    onPress={() => openDeviceActions(device)}
+                  />
+                  {device.recentTasks.length > 0 ? (
+                    <ListActionRow
+                      icon="clock"
+                      label={`${device.name} · 最近任务`}
+                      onPress={() =>
+                        setRecentDeviceId((current) =>
+                          current === device.deviceId ? null : device.deviceId,
+                        )
+                      }
+                    />
+                  ) : null}
+                  {recentDeviceId === device.deviceId
+                    ? device.recentTasks.map((task) => {
+                        const label = `${companionActionLabels[task.action] ?? task.action} · ${taskStatusLabels[task.status]}`;
+                        const description = [
+                          new Date(task.updatedAt).toLocaleString(),
+                          task.id,
+                          task.savedPath,
+                        ]
+                          .filter(Boolean)
+                          .join("\n");
+                        const threadId = task.threadId;
+                        return threadId ? (
+                          <ListActionRow
+                            key={task.id}
+                            label={label}
+                            description={`${description}\n打开原会话`}
+                            onPress={() =>
+                              selectDetail({ name: "Thread", params: { environmentId, threadId } })
+                            }
+                          />
+                        ) : (
+                          <ListRowLayout key={task.id} label={label} description={description} />
+                        );
+                      })
+                    : null}
+                </Fragment>
+              ))}
+            </>
           )}
           <ListActionRow
             icon="arrow.clockwise"
@@ -266,7 +347,16 @@ export function WindowsCompanionSettings({
   );
 }
 
-function describeDevice(device: CompanionDevice): string {
+const connectionLabels = {
+  disabled: "此环境已关闭",
+  locked: "Windows 已锁定",
+  paused: "接收已暂停",
+  offline: "离线",
+  unknown: "在线",
+  confirmOnDevice: "在线",
+};
+
+function describeDevice(device: CompanionDevice, enabled: boolean): string {
   const fields = [
     ["计算机名", device.info.hostname],
     ["Windows 版本", device.info.os],
@@ -274,33 +364,41 @@ function describeDevice(device: CompanionDevice): string {
     ["处理器", device.info.cpu],
     ["显卡", device.info.gpu],
     ["内存", device.info.memory],
-    ...Object.entries(device.info)
-      .filter(([key]) => /^network(?:[1-6])?$/.test(key))
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([, value]) => ["网卡", value]),
+    ...windowsCompanionNetworkAdapters(device.info).map(([, value]) => ["网卡", value]),
   ].flatMap(([label, value]) => (value ? [`${label} · ${value}`] : []));
   const updated = new Date(device.detailsUpdatedAt ?? device.lastSeen).toLocaleString();
+  const capabilities = windowsCompanionCapabilities(device, enabled);
+  const capabilityLabels = {
+    sendFile: "发送文件",
+    receiveFile: "接收文件",
+    screenshot: "截图",
+    screenRecording: "开始录屏",
+    desktopInput: "打开 T3 或操作记事本",
+    stopRecording: "停止录屏",
+    installApp: "安装应用",
+  };
+  const capabilityReasons = {
+    disabled: "请在此环境开启 Windows 受控端。",
+    offline: "请在这台电脑上打开受控端并恢复接收。",
+    paused: "请在这台电脑上恢复接收。",
+    inputPaused: "请在这台电脑的托盘菜单恢复远程输入。",
+    locked: "请解锁这台电脑并恢复接收。",
+    unknown: "请在这台电脑上运行设备自检。",
+    confirmOnDevice: "可用，需在这台电脑上确认。",
+    stopLocally: "请在这台电脑的受控端停止录屏。",
+    stopFromConversation: "可从原会话或在这台电脑上停止。",
+    noRecording: "录屏开始后可停止。",
+    unsupported: "Windows 受控端暂不支持安装应用。",
+  };
   return [
-    device.online ? "在线" : "离线",
+    connectionLabels[windowsCompanionAvailability(device, enabled)],
     `资料更新时间 · ${updated}`,
-    !device.online
-      ? "请在这台电脑上打开受控端并恢复接收。"
-      : device.info.desktopState === "locked"
-        ? "请先解锁 Windows，再确认收发文件、截图或录屏。"
-        : device.info.desktopState === "ready"
-          ? "可在这台电脑上确认收发文件、截图和录屏。"
-          : "请在这台电脑上核实桌面状态后再发送请求。",
-    ...(fields.filter((field) => field.startsWith("网卡 ·")).length > 1
-      ? ["以下网卡属于同一台已配对电脑。"]
-      : []),
+    "",
+    ...(Object.keys(capabilities) as (keyof typeof capabilities)[]).map(
+      (key) => `${capabilityLabels[key]} · ${capabilityReasons[capabilities[key]]}`,
+    ),
     "",
     ...(fields.length > 0 ? fields : ["在 Windows 受控端运行「设备自检」可发送设备资料。"]),
-    ...device.recentTasks.flatMap((task, index) => [
-      ...(index === 0 ? ["", "最近任务"] : []),
-      `${companionActionLabels[task.action] ?? task.action} · ${taskStatusLabels[task.status]} · ${new Date(task.updatedAt).toLocaleString()}`,
-      task.id,
-      ...(task.savedPath ? [task.savedPath] : []),
-    ]),
   ].join("\n");
 }
 

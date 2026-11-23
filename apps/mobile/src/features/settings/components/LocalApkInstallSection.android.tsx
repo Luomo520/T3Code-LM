@@ -55,6 +55,7 @@ export function LocalApkInstallSection() {
   const [message, setMessage] = useState<string | null>(null);
 
   const [access, setAccess] = useState<DeviceAccess | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 回到前台时刷新原生 Shizuku / Sui 授权状态。
   useEffect(() => {
     let active = true;
     const refresh = () =>
@@ -150,10 +151,10 @@ export function LocalApkInstallSection() {
 
   return (
     <View className="gap-2">
-      <SettingsSection title="设备授权">
+      <SettingsSection title="APK 安装授权">
         <SettingsRow
           icon="bolt.circle"
-          label="请求 ADB / Root 授权"
+          label="Shizuku / Sui 授权"
           value={access ? accessLabels[access] : "正在检查…"}
           disabled={pending !== null || access !== "available"}
           onPress={() => void requestAccess()}

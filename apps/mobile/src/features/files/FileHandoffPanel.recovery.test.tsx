@@ -1,4 +1,5 @@
 import {
+  AuthOrchestrationOperateScope,
   EnvironmentId,
   ThreadId,
   type FileHandoffRequest,
@@ -20,6 +21,14 @@ const state = vi.hoisted(() => ({
     refresh: vi.fn(),
     isPending: false,
   },
+  connected: true,
+  maySend: true,
+  capture: vi.fn(),
+  cancelCapture: vi.fn(async () => {}),
+  recordingStarted: null as ((event: { requestId: string }) => void) | null,
+  stopRecording: vi.fn(async () => {}),
+  send: vi.fn(async () => {}),
+  deleteFile: vi.fn(),
   direct: vi.fn(),
   receive: vi.fn(),
   readHandoff: vi.fn(),
@@ -28,6 +37,26 @@ const state = vi.hoisted(() => ({
   prepared: { _tag: "Some", value: { httpBaseUrl: "http://127.0.0.1:3000" } },
 }));
 
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.connected }));
+vi.mock("../../state/use-remote-environment-registry", () => ({
+  environmentConnectedAtom: vi.fn(),
+}));
+vi.mock("./localScreenCapture", () => ({
+  localScreenCapture: {
+    isUnlocked: async () => true,
+    capture: state.capture,
+    cancelCapture: state.cancelCapture,
+    stopRecording: state.stopRecording,
+    addListener: (_event: string, listener: (event: { requestId: string }) => void) => {
+      state.recordingStarted = listener;
+      return {
+        remove: () => {
+          state.recordingStarted = null;
+        },
+      };
+    },
+  },
+}));
 vi.mock("react-native", () => ({
   Platform: { OS: "android" },
   AppState: Object.assign(state.appState, {
@@ -46,9 +75,11 @@ vi.mock("expo-file-system", () => ({
     readonly exists = true;
     readonly uri = "file:///cache/handoff";
     create() {}
-    delete() {}
+    delete() {
+      state.deleteFile();
+    }
     open() {
-      return { writeBytes: vi.fn(), close: vi.fn() };
+      return { size: 42, writeBytes: vi.fn(), close: vi.fn() };
     }
   },
   Paths: { cache: "/cache" },
@@ -73,7 +104,8 @@ vi.mock("../../components/ui/Button", () => ({
 }));
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
 vi.mock("../../state/session", () => ({
-  useEnvironmentScope: () => true,
+  useEnvironmentScope: (_id: string, scope: string) =>
+    scope !== AuthOrchestrationOperateScope || state.maySend,
   usePreparedConnection: () => state.prepared,
 }));
 vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => state.list }));
@@ -97,7 +129,7 @@ vi.mock("@t3tools/client-runtime/state/fileHandoff", () => ({
   createFileHandoffAtoms: () => ({ list: vi.fn() }),
   fileHandoffErrorMessage: (_error: unknown, fallback: string) => fallback,
   receiveDirectFile: state.direct,
-  sendHandoffFile: vi.fn(),
+  sendHandoffFile: state.send,
   unwrapFileHandoff: (value: unknown) => value,
   waitForRelayedHandoff: vi.fn(),
 }));
@@ -135,6 +167,9 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.appState.currentState = "active";
   state.appStateListeners.clear();
+  state.connected = true;
+  state.maySend = true;
+  state.list.data.recipients = [];
   state.list.data.transfers = [firstTransfer];
   state.readHandoff.mockResolvedValue(null);
   state.saveDirect.mockResolvedValue(localUri);
@@ -260,6 +295,55 @@ androidTest("refreshes immediately on opening and returning to the foreground", 
   }
   expect(state.list.refresh).toHaveBeenCalledOnce();
 });
+
+androidTest(
+  "keeps an approved screenshot local until the user chooses a recipient and sends",
+  async () => {
+    const threadId = ThreadId.make("local-screenshot");
+    state.list.data.recipients = [{ id: "desktop-credential", label: "电脑", online: true }];
+    state.capture.mockResolvedValue({ uri: "file:///cache/screen.png", name: "截图.png" });
+    await openPanel(threadId);
+    await act(async () => button("截图").click());
+    expect(state.capture).toHaveBeenCalledWith("screenshot", "cache-file");
+    expect(state.send).not.toHaveBeenCalled();
+    expect(button("截图.png")).toBeDefined();
+    expect(button("发送").disabled).toBe(true);
+
+    await act(async () => button("选择接收设备").click());
+    await act(async () => button("电脑 · 在线 · ential").click());
+    await act(async () => button("发送").click());
+    expect(state.send).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ threadId, name: "截图.png" }) }),
+    );
+  },
+);
+
+androidTest(
+  "cancels capture on disconnect and discards a late result after reconnect",
+  async () => {
+    const threadId = ThreadId.make("revoked-recording");
+    const recording = Promise.withResolvers<{ uri: string; name: string }>();
+    state.list.data.recipients = [{ id: "desktop-credential", label: "电脑", online: true }];
+    state.capture.mockReturnValue(recording.promise);
+    await openPanel(threadId);
+    await act(async () => button("录屏").click());
+    await act(async () => state.recordingStarted?.({ requestId: "cache-file" }));
+    expect(button("停止录屏")).toBeDefined();
+    const rerender = () =>
+      act(async () =>
+        root.render(<FileHandoffPanel environmentId={environmentId} threadId={threadId} />),
+      );
+    state.connected = false;
+    await rerender();
+    expect(state.cancelCapture).toHaveBeenCalledWith("cache-file");
+    state.connected = true;
+    await rerender();
+    await act(async () => recording.resolve({ uri: "file:///cache/stale.mp4", name: "录屏.mp4" }));
+    expect(state.deleteFile).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("录屏.mp4");
+    expect(state.send).not.toHaveBeenCalled();
+  },
+);
 
 it.skipIf(androidBuild)("keeps the Android handoff panel out of the iOS build", async () => {
   await act(async () =>

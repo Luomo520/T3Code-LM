@@ -1598,7 +1598,7 @@ function PopupReasoningControl(props: {
   readonly defaultValue: string | null;
   readonly onSetDefault?: (value: string | null) => Promise<string | null>;
   readonly defaultEditError?: string;
-  readonly highlightEnabled: boolean;
+  readonly highlightMoving: boolean;
   readonly onChange: (value: string) => void;
   readonly onDraggingChange: (dragging: boolean) => void;
 }) {
@@ -1640,7 +1640,7 @@ function PopupReasoningControl(props: {
         defaultValue={props.defaultValue}
         defaultEditorExpanded={editorExpanded}
         defaultSaving={saving}
-        highlightEnabled={props.highlightEnabled && !editorExpanded}
+        highlightMoving={props.highlightMoving && !editorExpanded}
         defaultEditUnavailable={props.defaultEditError}
         {...(props.onSetDefault && props.choices.length > 0 && !props.defaultEditError
           ? {
@@ -1679,7 +1679,7 @@ function PopupReasoningControl(props: {
 
 function ThreadSettingsPopupOptions(props: {
   readonly onDraggingChange: (dragging: boolean) => void;
-  readonly highlightEnabled: boolean;
+  readonly highlightMoving: boolean;
 }) {
   const colors = useModelPopupColors();
   const session = useThreadSettingsSession();
@@ -1795,7 +1795,7 @@ function ThreadSettingsPopupOptions(props: {
               modelLabel={modelLabel}
               disabled={primary && session.promptTraits.ultrathinkInBodyText}
               defaultValue={editableDefault ? savedDefault : null}
-              highlightEnabled={props.highlightEnabled}
+              highlightMoving={props.highlightMoving}
               {...(setDefault && editableDefault ? { onSetDefault: setDefault } : {})}
               {...(editableDefault && defaultEditError ? { defaultEditError } : {})}
               onChange={applyChoice}
@@ -1906,7 +1906,7 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
   const [runtimeMenuAnchor, setRuntimeMenuAnchor] = useState<PopupFrame | null>(null);
   const runtimeButton = useRef<ViewInstance>(null);
   const [windowFocused, setWindowFocused] = useState(true);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- stops the rail when Android loses window focus without going into the background
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 系统截图等浮层抢占窗口焦点时暂停光带，保留静态渐变供截图。
   useEffect(() => {
     const focus = AppState.addEventListener("focus", () => setWindowFocused(true));
     const blur = AppState.addEventListener("blur", () => setWindowFocused(false));
@@ -2125,7 +2125,7 @@ function ThreadSettingsPopup(props: ThreadSettingsPickerPresentation) {
               showsVerticalScrollIndicator
             >
               <ThreadSettingsPopupOptions
-                highlightEnabled={focused && active && windowFocused && !runtimeMenuAnchor}
+                highlightMoving={focused && active && windowFocused && !runtimeMenuAnchor}
                 onDraggingChange={setSliderDragging}
               />
             </ScrollView>

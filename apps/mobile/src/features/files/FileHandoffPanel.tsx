@@ -1,13 +1,18 @@
+import { useAtomValue } from "@effect/atom-react";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import {
   createFileHandoffAtoms,
   fileHandoffErrorMessage,
+  formatFileMoveResult,
+  hasVerifiedFileMoveReceipt,
+  type PendingFileMove,
   receiveDirectFile,
   sendHandoffFile,
   unwrapFileHandoff,
   waitForRelayedHandoff,
 } from "@t3tools/client-runtime/state/fileHandoff";
 import {
+  AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   type AuthSessionId,
   type EnvironmentId,
@@ -35,12 +40,15 @@ import {
   showDownloadedFiles,
   type FileDownload,
 } from "../../lib/systemFileDownload";
-import { useAppActive } from "../../lib/appState";
+import { isAppActive, useAppActive } from "../../lib/appState";
 import { uuidv4 } from "../../lib/uuid";
 import { useEnvironmentQuery } from "../../state/query";
 import { useEnvironmentScope, usePreparedConnection } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { environmentConnectedAtom } from "../../state/use-remote-environment-registry";
 import { useAndroidHandoffPeer } from "./useAndroidHandoffPeer";
+import { localFileMove } from "./localFileMove";
+import { localScreenCapture, type LocalCaptureKind } from "./localScreenCapture";
 import { ReceivedApkInstallAction } from "./ReceivedApkInstallAction";
 
 const atoms = createFileHandoffAtoms(connectionAtomRuntime);
@@ -89,9 +97,18 @@ type Download = {
 
 const downloadsByThread = new Map<string, Download>();
 
-type Selection = { readonly file: File; readonly id: string; readonly name: string };
+type Selection = {
+  readonly file: File;
+  readonly id: string;
+  readonly name: string;
+  readonly moveToken?: string;
+};
 
 function deleteSelection(selection: Selection | null) {
+  if (selection?.moveToken) {
+    void localFileMove?.discard(selection.moveToken).catch(() => {});
+    return;
+  }
   try {
     if (selection?.file.exists) selection.file.delete();
   } catch {
@@ -101,6 +118,7 @@ function deleteSelection(selection: Selection | null) {
 
 function FileHandoffContents({ environmentId, threadId, visible }: Context & { visible: boolean }) {
   const appActive = useAppActive();
+  const canSend = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const connection = usePreparedConnection(environmentId);
   const list = useEnvironmentQuery(
     atoms.list({ environmentId, input: { _tag: "list", threadId } }),
@@ -109,6 +127,9 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
   const receive = useAtomCommand(atoms.receive, quiet);
   const [recipient, setRecipient] = useState<{ id: AuthSessionId; label: string } | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [pendingMove, setPendingMove] = useState<PendingFileMove | null>(null);
+  const moveRef = useRef<PendingFileMove | null>(null);
+  const [moveStatus, setMoveStatus] = useState<string | null>(null);
   const [locked, setLocked] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -130,6 +151,11 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
   const busyDownload = receivingId !== null;
   const [choosingRecipient, setChoosingRecipient] = useState(false);
   const upload = useRef<AbortController | null>(null);
+  const selectionPending = useRef(false);
+  const captureRequest = useRef<string | null>(null);
+  const [capturePhase, setCapturePhase] = useState<LocalCaptureKind | "recording-active" | null>(
+    null,
+  );
   const directDownload = useRef<AbortController | null>(null);
   const directPeer = useAndroidHandoffPeer();
   const supportsDirect = supportsDirectHandoffSave();
@@ -139,13 +165,40 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
   const picked = useRef<Selection | null>(null);
   const snapshot = list.data?._tag === "list" ? list.data : null;
   const refreshList = list.refresh;
+  const liveConnection = useAtomValue(environmentConnectedAtom(environmentId));
+  const connected = liveConnection && connection._tag === "Some";
+  const canUsePanel = visible && connected;
+
+  const captureAvailable = canUsePanel && canSend;
+  const sendAvailability = useRef<{ readonly active: boolean }>({ active: captureAvailable });
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 关闭面板或环境断开时立即取消未完成的投屏。
+  useEffect(() => {
+    sendAvailability.current = { active: captureAvailable };
+    if (!captureAvailable) return;
+    const native = localScreenCapture;
+    const listener = native?.addListener("onRecordingStarted", ({ requestId }) => {
+      if (captureRequest.current === requestId) setCapturePhase("recording-active");
+    });
+    return () => {
+      sendAvailability.current = { active: false };
+      listener?.remove();
+      if (captureRequest.current)
+        void native?.cancelCapture(captureRequest.current).catch(() => {});
+    };
+  }, [captureAvailable]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 离开前台或失去环境权限后，停止读取和上传本机选中的文件。
+  useEffect(() => {
+    if (!appActive || !connected || !canSend) upload.current?.abort();
+  }, [appActive, canSend, connected]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 前台接收面板及时显示另一台设备发来的直连邀请。
   useEffect(() => {
-    if (!appActive || !visible) return;
+    if (!appActive || !visible || !connected) return;
     refreshList();
     const timer = setInterval(refreshList, 5_000);
     return () => clearInterval(timer);
-  }, [appActive, visible, refreshList]);
+  }, [appActive, visible, connected, refreshList]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 面板关闭时取消上传并释放文档选择器缓存。
   useEffect(
@@ -153,10 +206,41 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
       const controller = upload.current;
       controller?.abort();
       directDownload.current?.abort();
-      if (!controller) deleteSelection(picked.current);
+      deleteSelection(picked.current);
+      picked.current = null;
+      if (moveRef.current) void localFileMove?.discard(moveRef.current.token).catch(() => {});
+      moveRef.current = null;
     },
     [],
   );
+
+  function preserveMove(move: PendingFileMove, message: string) {
+    if (moveRef.current !== move) return;
+    moveRef.current = null;
+    setPendingMove(null);
+    setMoveStatus(message);
+    void localFileMove?.discard(move.token).catch(() => {});
+  }
+
+  const settleMove = useEffectEvent((move: PendingFileMove) => {
+    if (!localFileMove || moveRef.current !== move) return;
+    moveRef.current = null;
+    setMoveStatus("目标设备已确认保存，正在核对源文件。");
+    void localFileMove
+      .finish(move.token, move.sha256)
+      .catch(() => "retained" as const)
+      .then((result) => {
+        setMoveStatus(formatFileMoveResult(result));
+        setPendingMove(null);
+      });
+  });
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 根据接收设备完成保存的回执核对本机源文件。
+  useEffect(() => {
+    if (!pendingMove || !canUsePanel || !appActive || !canSend) return;
+    const item = snapshot?.transfers.find((entry) => entry.id === pendingMove.id);
+    if (hasVerifiedFileMoveReceipt(item, pendingMove)) settleMove(pendingMove);
+  }, [appActive, canSend, canUsePanel, pendingMove, snapshot]);
 
   async function confirmSaved(saved: Download) {
     if (sendingReceipt.current || acknowledged.current.has(saved.id)) return;
@@ -296,39 +380,111 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
           ? "等待连接"
           : "已下载 " + (downloadState?.bytesDownloaded.toLocaleString() ?? "0") + " 字节";
 
-  async function pickFile() {
-    if (upload.current) return;
+  function acceptSelection(
+    uri: string,
+    name: string,
+    authorization: { readonly active: boolean },
+    moveToken?: string,
+  ) {
+    const next = { file: new File(uri), id: uuidv4(), name, ...(moveToken ? { moveToken } : {}) };
+    if (!authorization.active || sendAvailability.current !== authorization) {
+      deleteSelection(next);
+      return;
+    }
+    deleteSelection(picked.current);
+    picked.current = next;
+    setSelection(next);
+    setLocked(false);
+    setError(null);
+  }
+
+  async function pickFile(mode: "copy" | "move") {
+    if (!captureAvailable || !isAppActive() || selectionPending.current || upload.current) return;
+    if (mode === "move" && (!localFileMove || pendingMove)) return;
+    const authorization = sendAvailability.current;
+    selectionPending.current = true;
     try {
+      if (mode === "move" && localFileMove) {
+        const result = await localFileMove.pick();
+        if (result) acceptSelection(result.uri, result.name, authorization, result.token);
+        return;
+      }
       const result = await getDocumentAsync({ multiple: false, copyToCacheDirectory: true });
-      if (result.canceled) return;
-      const asset = result.assets[0];
-      if (!asset) return;
-      const next = { file: new File(asset.uri), id: uuidv4(), name: asset.name };
-      deleteSelection(picked.current);
-      picked.current = next;
-      setSelection(next);
-      setLocked(false);
-      setError(null);
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        acceptSelection(asset.uri, asset.name, authorization);
+      }
     } catch (cause) {
       setError(fileHandoffErrorMessage(cause, "无法读取选中的文件。"));
+    } finally {
+      selectionPending.current = false;
+    }
+  }
+
+  async function capture(kind: LocalCaptureKind) {
+    if (
+      !localScreenCapture ||
+      !captureAvailable ||
+      !isAppActive() ||
+      selectionPending.current ||
+      upload.current
+    )
+      return;
+    const authorization = sendAvailability.current;
+    selectionPending.current = true;
+    const requestId = uuidv4();
+    captureRequest.current = requestId;
+    setCapturePhase(kind);
+    setError(null);
+    try {
+      const result = await localScreenCapture.capture(kind, requestId);
+      if (result) acceptSelection(result.uri, result.name, authorization);
+      else if (sendAvailability.current === authorization) {
+        setError(
+          kind === "screenshot"
+            ? "未取得截图。请在本机重新授权后重试。"
+            : "录屏已结束，未保留录像。",
+        );
+      }
+    } catch (cause) {
+      if (sendAvailability.current === authorization) {
+        setError(fileHandoffErrorMessage(cause, "无法开始捕获，请重试。"));
+      }
+    } finally {
+      captureRequest.current = null;
+      selectionPending.current = false;
+      setCapturePhase(null);
     }
   }
 
   async function send() {
-    if (!selection || !recipient || upload.current || connection._tag !== "Some") return;
+    if (
+      !selection ||
+      !recipient ||
+      !captureAvailable ||
+      !isAppActive() ||
+      selectionPending.current ||
+      upload.current ||
+      connection._tag !== "Some"
+    )
+      return;
     const controller = new AbortController();
     upload.current = controller;
     setProgress(0);
     setTransport(supportsDirect ? "direct" : "relay");
     setLocked(true);
     setError(null);
-    const { file, name, id } = selection;
+    const { file, name, id, moveToken } = selection;
     try {
+      if (localScreenCapture && !(await localScreenCapture.isUnlocked())) {
+        throw new Error("解锁手机后可以继续上传。");
+      }
+      controller.signal.throwIfAborted();
       const handle = file.open();
       try {
         const sizeBytes = handle.size;
         if (sizeBytes === null) throw new Error("无法读取文件大小，请重新选择。");
-        await sendHandoffFile({
+        const sha256 = await sendHandoffFile({
           environmentId,
           httpBaseUrl: connection.value.httpBaseUrl,
           start,
@@ -350,6 +506,8 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
               }
             : {}),
           slice: async (offset, length) => {
+            controller.signal.throwIfAborted();
+            if (!isAppActive()) throw new Error("回到会话后可继续上传。");
             handle.offset = offset;
             return length === 0 ? new Uint8Array() : handle.readBytes(length);
           },
@@ -364,10 +522,16 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
           onProgress: (offset) =>
             setProgress(sizeBytes > 0 ? Math.floor((100 * offset) / sizeBytes) : 100),
         });
+        if (moveToken) {
+          const pending = { token: moveToken, id, sha256, sizeBytes };
+          moveRef.current = pending;
+          setPendingMove(pending);
+          setMoveStatus("等待目标设备保存并校验文件。");
+        }
       } finally {
         handle.close();
       }
-      deleteSelection(selection);
+      if (!moveToken) deleteSelection(selection);
       picked.current = null;
       setSelection(null);
       setLocked(false);
@@ -390,6 +554,7 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
     setError(null);
     try {
       unwrapFileHandoff(await receive({ environmentId, input: { _tag: "cancel", threadId, id } }));
+      if (pendingMove?.id === id) preserveMove(pendingMove, "传输已取消，源文件已保留。");
       if (selection?.id === id) {
         deleteSelection(selection);
         picked.current = null;
@@ -411,6 +576,8 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
       directDownload.current ||
       downloadInProgress ||
       receiptPending ||
+      !canUsePanel ||
+      !isAppActive() ||
       connection._tag !== "Some"
     )
       return;
@@ -420,6 +587,10 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
     setReceivingId(id);
     setError(null);
     try {
+      if (localScreenCapture && !(await localScreenCapture.isUnlocked())) {
+        throw new Error("解锁手机后可以接收文件。");
+      }
+      controller.signal.throwIfAborted();
       const handoffKey = await fileHandoffDownloadKey(environmentId, threadId, item.id);
       const knownSha = item.sha256 ?? item.directSha256;
       const local = knownSha
@@ -535,17 +706,86 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
       {list.error && (
         <AppText accessibilityLiveRegion="polite">无法读取传输记录，请检查环境版本和连接。</AppText>
       )}
-      {snapshot && snapshot.recipients.length > 0 && (
+      {snapshot && localScreenCapture && snapshot.recipients.length > 0 && captureAvailable && (
+        <View className="flex-row flex-wrap gap-1">
+          {capturePhase === null && (
+            <>
+              <Button
+                size="compact"
+                disabled={progress !== null}
+                label="截图"
+                onPress={() => void capture("screenshot")}
+              />
+              <Button
+                size="compact"
+                disabled={progress !== null}
+                label="录屏"
+                onPress={() => void capture("recording")}
+              />
+            </>
+          )}
+          {capturePhase !== null && (
+            <Button
+              size="compact"
+              label={capturePhase === "recording-active" ? "停止录屏" : "取消请求"}
+              onPress={() => {
+                const requestId = captureRequest.current;
+                if (!requestId) return;
+                if (capturePhase === "recording-active") {
+                  void localScreenCapture?.stopRecording(requestId).catch(() => {});
+                } else {
+                  void localScreenCapture?.cancelCapture(requestId).catch(() => {});
+                }
+              }}
+            />
+          )}
+          {capturePhase !== null && (
+            <AppText
+              accessibilityLiveRegion="polite"
+              className="self-center text-xs text-foreground-muted"
+            >
+              {capturePhase === "recording-active"
+                ? "正在录屏，最长 30 秒"
+                : "正在等待系统屏幕捕获"}
+            </AppText>
+          )}
+        </View>
+      )}
+      {canSend && snapshot && snapshot.recipients.length > 0 && (
         <View className="flex-row flex-wrap gap-1">
           <Button
             size="compact"
-            disabled={progress !== null}
+            disabled={!connected || capturePhase !== null || progress !== null}
             label={selection?.name ?? "选择文件"}
-            onPress={() => void pickFile()}
+            onPress={() => void pickFile("copy")}
           />
+          {localFileMove && (
+            <Button
+              size="compact"
+              disabled={
+                !connected || capturePhase !== null || progress !== null || pendingMove !== null
+              }
+              label="选择要移动的文件"
+              onPress={() => void pickFile("move")}
+            />
+          )}
+          {selection && progress === null && (
+            <Button
+              size="compact"
+              tone="text"
+              label="清除选择"
+              disabled={capturePhase !== null}
+              onPress={() => {
+                deleteSelection(picked.current);
+                picked.current = null;
+                setSelection(null);
+                setLocked(false);
+              }}
+            />
+          )}
           <Button
             size="compact"
-            disabled={locked}
+            disabled={!connected || locked}
             label={recipient?.label ?? "选择接收设备"}
             onPress={() => setChoosingRecipient((value) => !value)}
           />
@@ -553,14 +793,23 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
             <Button
               size="compact"
               tone="primary"
-              disabled={!recipient || !selection}
-              label={locked ? "继续上传" : "发送"}
+              disabled={!connected || capturePhase !== null || !recipient || !selection}
+              label={locked ? "继续上传" : selection?.moveToken ? "移动" : "发送"}
               onPress={() => void send()}
             />
           ) : (
             <Button size="compact" label="暂停上传" onPress={() => upload.current?.abort()} />
           )}
         </View>
+      )}
+      {moveStatus && <AppText accessibilityLiveRegion="polite">{moveStatus}</AppText>}
+      {pendingMove && moveStatus === "等待目标设备保存并校验文件。" && (
+        <Button
+          size="compact"
+          tone="text"
+          label="保留源文件"
+          onPress={() => preserveMove(pendingMove, "已选择保留源文件。")}
+        />
       )}
       {choosingRecipient &&
         !locked &&
@@ -623,6 +872,7 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
               </AppText>
             )}
             {!item.outgoing &&
+            !item.urlDownload &&
             item.disposition === "saved" &&
             item.sha256 &&
             item.savedPath &&
@@ -659,6 +909,7 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
             <Button
               size="compact"
               disabled={
+                !connected ||
                 busyDownload ||
                 downloadInProgress ||
                 receiptPending ||
@@ -678,7 +929,9 @@ function FileHandoffContents({ environmentId, threadId, visible }: Context & { v
           )}
         </View>
       ))}
-      {snapshot?.recipients.length === 0 && <AppText>当前没有可发送的其他已配对设备。</AppText>}
+      {canSend && snapshot?.recipients.length === 0 && (
+        <AppText>当前没有可发送的其他已配对设备。</AppText>
+      )}
       {snapshot?.transfers.length === 0 && <AppText>此会话暂无发送或接收记录。</AppText>}
       <Button size="compact" disabled={list.isPending} label="刷新" onPress={list.refresh} />
     </ScrollView>

@@ -1,3 +1,4 @@
+import type { FileHandoffMoveResult } from "./fileHandoff.ts";
 import * as Schema from "effect/Schema";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
 
@@ -1081,6 +1082,17 @@ export interface DesktopSavedFileHandoff {
 export type DesktopSavedFileHandoffStatus = "available" | "missing" | "unknown";
 
 export interface DesktopBridge {
+  pickLocalFileMove?: () => Promise<{ token: string; name: string; sizeBytes: number } | null>;
+  readLocalFileMove?: (input: {
+    token: string;
+    offset: number;
+    length: number;
+  }) => Promise<Uint8Array<ArrayBuffer>>;
+  discardLocalFileMove?: (token: string) => Promise<void>;
+  finishLocalFileMove?: (input: {
+    token: string;
+    sha256: string;
+  }) => Promise<FileHandoffMoveResult>;
   locateSavedFileHandoff?: (
     input: DesktopSavedFileHandoff,
   ) => Promise<DesktopSavedFileHandoffStatus>;

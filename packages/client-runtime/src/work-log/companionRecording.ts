@@ -23,13 +23,37 @@ export interface CompanionRecordingFrame {
   readonly height: number;
 }
 
-function companionRecordingUrl(url: string, httpBaseUrl: string): string | null {
-  // 工具可能在本地或中继地址上签发链接。签名路径始终交给当前会话连接的服务端。
+export function isCompanionMp4(recording: CompanionRecording): boolean {
+  return recording.url?.endsWith(".mp4") === true;
+}
+
+export async function resolveCompanionMp4Url(
+  recording: CompanionRecording,
+  httpBaseUrl: string | null,
+  refresh: (() => Promise<string | null>) | undefined,
+): Promise<string | null> {
+  if (!httpBaseUrl) return null;
+  const renewed = recording.resource && refresh ? await refresh().catch(() => null) : null;
+  const renewedUrl = renewed && companionRecordingUrl(renewed, httpBaseUrl, "mp4");
+  if (renewedUrl) return renewedUrl;
+  return recording.url &&
+    recording.expiresAt !== null &&
+    recording.expiresAt > Effect.runSync(Clock.currentTimeMillis)
+    ? companionRecordingUrl(recording.url, httpBaseUrl, "mp4")
+    : null;
+}
+
+function companionRecordingUrl(
+  url: string,
+  httpBaseUrl: string,
+  extension: "avi" | "mp4" = "avi",
+): string | null {
+  // 只加载与当前会话连接绑定的服务端签名路径。
   const path =
-    /^(?:https?:\/\/[^/?#]+)?(\/api\/assets\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\/[a-f0-9-]{36}\.avi)$/u.exec(
+    /^(?:https?:\/\/[^/?#]+)?(\/api\/assets\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\/[a-f0-9-]{36}\.(?:avi|mp4))$/u.exec(
       url,
     )?.[1];
-  if (!path) return null;
+  if (!path?.endsWith(`.${extension}`)) return null;
   try {
     const base = new URL(httpBaseUrl);
     if (base.protocol !== "https:" && base.protocol !== "http:") return null;
@@ -173,19 +197,25 @@ export async function playCompanionRecording(input: {
   readonly httpBaseUrl: string | null;
   readonly signal: AbortSignal;
   readonly fetch: RecordingFetch;
+  readonly refresh?: (() => Promise<string | null>) | undefined;
   readonly onFrame: (frame: CompanionRecordingFrame) => void;
 }): Promise<CompanionRecordingFailure | null> {
   const { recording, httpBaseUrl, signal, onFrame } = input;
   const expired = () =>
     recording.expiresAt !== null && recording.expiresAt <= Effect.runSync(Clock.currentTimeMillis);
   if (signal.aborted) return null;
-  if (expired()) return "expired";
-  const url = recording.url && httpBaseUrl && companionRecordingUrl(recording.url, httpBaseUrl);
-  if (!url || recording.expiresAt === null) return "unavailable";
+  const refreshed =
+    recording.resource && input.refresh ? await input.refresh().catch(() => null) : null;
+  if (signal.aborted) return null;
+  const renewedUrl = refreshed && httpBaseUrl && companionRecordingUrl(refreshed, httpBaseUrl);
+  const oldUrl = recording.url && httpBaseUrl && companionRecordingUrl(recording.url, httpBaseUrl);
+  if (!renewedUrl && expired()) return "expired";
+  const url = renewedUrl || (recording.expiresAt !== null ? oldUrl : null);
+  if (!url) return "unavailable";
   try {
     const response = await input.fetch(url, { signal, credentials: "omit", redirect: "error" });
     const movie = await readRecording(response);
-    if (!movie) return expired() ? "expired" : "unavailable";
+    if (!movie) return !renewedUrl && expired() ? "expired" : "unavailable";
     const { width, height } = movie;
     for (const frame of movie.frames) {
       if (signal.aborted) break;
@@ -194,6 +224,6 @@ export async function playCompanionRecording(input: {
     }
     return null;
   } catch {
-    return signal.aborted ? null : expired() ? "expired" : "unavailable";
+    return signal.aborted ? null : !renewedUrl && expired() ? "expired" : "unavailable";
   }
 }

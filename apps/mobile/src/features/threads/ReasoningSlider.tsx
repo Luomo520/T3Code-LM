@@ -134,7 +134,7 @@ export function ReasoningSlider(props: {
   readonly defaultEditorExpanded?: boolean;
   readonly defaultSaving?: boolean;
   readonly defaultEditUnavailable?: string | undefined;
-  readonly highlightEnabled: boolean;
+  readonly highlightMoving: boolean;
   readonly onEditDefault?: () => void;
   readonly onChange: (value: string) => void;
   readonly onDraggingChange: (dragging: boolean) => void;
@@ -164,11 +164,8 @@ export function ReasoningSlider(props: {
   const highlight = reasoningRailHighlightMode(
     index,
     props.choices.length,
-    Platform.OS === "android" &&
-      width > REASONING_THUMB_DIAMETER &&
-      props.highlightEnabled &&
-      !props.disabled,
-    reducedMotion,
+    Platform.OS === "android" && width > REASONING_THUMB_DIAMETER && !props.disabled,
+    reducedMotion || !props.highlightMoving,
   );
   const selectIndex = (next: number) => {
     const choice = props.choices[next];
