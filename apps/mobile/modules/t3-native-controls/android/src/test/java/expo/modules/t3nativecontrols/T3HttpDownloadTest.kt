@@ -13,6 +13,7 @@ import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.URL
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 
@@ -125,6 +126,42 @@ class T3HttpDownloadTest {
       }
     }
     assertEquals(0L, output.length())
+  }
+
+  @Test
+  fun resumesVerifiedBytesWithANewDownloadTokenAfterReopeningThePartialFile() {
+    val data = ByteArray(512 * 1024 + 31) { (it xor (it / 127)).toByte() }
+    val sha256 = MessageDigest.getInstance("SHA-256").digest(data)
+      .joinToString("") { "%02x".format(it.toInt() and 255) }
+    val etag = "\"sha256-$sha256\""
+    val saved = 256 * 1024
+    val output = temporary.newFile()
+    output.writeBytes(data.copyOf(saved))
+    val requests = ConcurrentLinkedQueue<Pair<String, String?>>()
+    serve({ exchange ->
+      val range = exchange.requestHeaders.getFirst("Range")
+      requests.add(range to exchange.requestHeaders.getFirst("If-Range"))
+      if (exchange.requestURI.path == "/expired") {
+        exchange.sendResponseHeaders(404, -1)
+      } else {
+        exchange.responseHeaders.add("Content-Range", "bytes $saved-${data.lastIndex}/${data.size}")
+        exchange.responseHeaders.add("ETag", etag)
+        exchange.sendResponseHeaders(206, (data.size - saved).toLong())
+        exchange.responseBody.use { it.write(data, saved, data.size - saved) }
+      }
+    }) { url ->
+      RandomAccessFile(output, "rw").use { partial ->
+        assertThrows(DownloadFailure::class.java) {
+          download().transferVerified(URL(url, "expired"), partial.channel, data.size.toLong(), sha256)
+        }
+      }
+      assertEquals(saved.toLong(), output.length())
+      RandomAccessFile(output, "rw").use { partial ->
+        download().transferVerified(URL(url, "fresh"), partial.channel, data.size.toLong(), sha256)
+      }
+    }
+    assertEquals(List(2) { "bytes=$saved-" to etag }, requests.toList())
+    assertArrayEquals(data, output.readBytes())
   }
 
   private fun download(progress: (Long, Long?) -> Unit = { _, _ -> }) = T3HttpDownload(

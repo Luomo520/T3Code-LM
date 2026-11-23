@@ -7,11 +7,26 @@ import * as NodePath from "node:path";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+  type Project as ProjectRecord,
+} from "@t3tools/contracts";
 import { vi } from "vite-plus/test";
 import * as FileExchange from "./FileExchange.ts";
 import { exchangeWorkspaceKey, isWindowsExchangeName, readTargets } from "./config.ts";
 import { SftpSession } from "./SftpSession.ts";
 import { openWindowsExchangeDirectory } from "./WindowsExchangeDirectory.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as Project from "../project/ProjectService.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import * as McpToolAccess from "../mcp/McpToolAccess.ts";
+import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
+import * as FileExchangeHandlers from "../mcp/toolkits/fileExchange/handlers.ts";
+import { FileExchangeToolkit } from "../mcp/toolkits/fileExchange/tools.ts";
 
 const sftpServer = ["/usr/lib/openssh/sftp-server", "/usr/libexec/openssh/sftp-server"].find(
   (entry) => NodeFS.existsSync(entry),
@@ -253,56 +268,89 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux" || sftpServer ==
     );
 
     for (const direction of ["send", "receive"] as const) {
-      it.live(`resumes a large ${direction} from its confirmed offset after SFTP disconnects`, () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const offsets =
-              direction === "send"
-                ? vi.spyOn(SftpSession.prototype, "writeChunks")
-                : vi.spyOn(SftpSession.prototype, "readChunks");
-            yield* Effect.addFinalizer(() => Effect.sync(() => offsets.mockRestore()));
-            let sessions = 0;
-            const { local, remote, workspaceRoot, layer } = yield* fixture((child) => {
-              if (++sessions !== 1) return;
-              let responseBytes = 0;
-              const threshold = direction === "send" ? 2_400 : 2 * 1024 * 1024;
-              child.stdout.on("data", (chunk: Buffer) => {
-                responseBytes += chunk.length;
-                if (responseBytes > threshold) child.kill("SIGKILL");
+      it.live(
+        `resumes a large ${direction} from its confirmed offset through the MCP tool after SFTP disconnects`,
+        () =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const offsets =
+                direction === "send"
+                  ? vi.spyOn(SftpSession.prototype, "writeChunks")
+                  : vi.spyOn(SftpSession.prototype, "readChunks");
+              yield* Effect.addFinalizer(() => Effect.sync(() => offsets.mockRestore()));
+              let sessions = 0;
+              const { local, remote, workspaceRoot, layer } = yield* fixture((child) => {
+                if (++sessions !== 1) return;
+                let responseBytes = 0;
+                const threshold = direction === "send" ? 2_400 : 2 * 1024 * 1024;
+                child.stdout.on("data", (chunk: Buffer) => {
+                  responseBytes += chunk.length;
+                  if (responseBytes > threshold) child.kill("SIGKILL");
+                });
               });
-            });
-            const bytes = NodeCrypto.randomBytes(9 * 1024 * 1024 + 3);
-            const expectedSha256 = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
-            const fileName = "resume.bin";
-            const source = NodePath.join(direction === "send" ? local : remote, fileName);
-            const destination = NodePath.join(direction === "send" ? remote : local, fileName);
-            yield* Effect.promise(() => NodeFSP.writeFile(source, bytes));
+              const bytes = NodeCrypto.randomBytes(9 * 1024 * 1024 + 3);
+              const expectedSha256 = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+              const fileName = "resume.bin";
+              const source = NodePath.join(direction === "send" ? local : remote, fileName);
+              const destination = NodePath.join(direction === "send" ? remote : local, fileName);
+              yield* Effect.promise(() => NodeFSP.writeFile(source, bytes));
 
-            const receipt = yield* Effect.gen(function* () {
-              const service = yield* FileExchange.FileExchange;
-              return yield* service.transfer({
-                deviceId: "fixture-device",
-                workspaceRoot,
-                expectedSha256,
-                direction,
-                localName: fileName,
-              });
-            }).pipe(Effect.provide(layer));
+              const threadId = ThreadId.make("thread:sftp-restart");
+              const caller = { ...liveThreadShell(threadId), worktreePath: workspaceRoot };
+              const tools = McpToolAccess.HandlersLayer.layer(FileExchangeHandlers.layer).pipe(
+                Layer.provideMerge(
+                  Layer.mergeAll(
+                    layer,
+                    Layer.succeed(McpInvocationContext.McpInvocationContext, {
+                      environmentId: EnvironmentId.make("environment:sftp-restart"),
+                      requestNamespace: "provider:sftp-restart",
+                      thread: {
+                        threadId,
+                        providerSessionId: "provider:sftp-restart",
+                        providerInstanceId: ProviderInstanceId.make("codex"),
+                      },
+                      client: undefined,
+                      capabilities: new Set(["orchestration" as const]),
+                      issuedAt: 0,
+                    }),
+                    Layer.mock(ThreadManagement.ThreadManagementService)({
+                      getThreadShell: () => Effect.succeed(caller),
+                    }),
+                    Layer.mock(Project.ProjectService)({
+                      getById: () =>
+                        Effect.succeedSome({
+                          id: caller.projectId,
+                          workspaceRoot,
+                        } as ProjectRecord),
+                    }),
+                  ),
+                ),
+              );
+              const receipt = yield* Effect.gen(function* () {
+                const toolkit = yield* FileExchangeToolkit;
+                const responses = yield* toolkit
+                  .handle(
+                    direction === "send" ? "t3_file_exchange_send" : "t3_file_exchange_receive",
+                    { deviceId: "fixture-device", expectedSha256, localName: fileName },
+                  )
+                  .pipe(Stream.unwrap, Stream.runCollect);
+                return responses.at(-1)?.result;
+              }).pipe(Effect.provide(tools));
 
-            const confirmedOffsets = offsets.mock.calls.map((args) =>
-              direction === "send" ? Number(args[1]) : Number(args[2]),
-            );
-            expect(sessions).toBe(2);
-            expect(confirmedOffsets[0]).toBe(0);
-            expect(confirmedOffsets[1]).toBeGreaterThan(0);
-            expect(receipt).toMatchObject({ sizeBytes: bytes.length, sha256: expectedSha256 });
-            expect((yield* Effect.promise(() => NodeFSP.readFile(destination))).equals(bytes)).toBe(
-              true,
-            );
-            expect(yield* Effect.promise(() => NodeFSP.readdir(local))).toEqual([fileName]);
-            expect(yield* Effect.promise(() => NodeFSP.readdir(remote))).toEqual([fileName]);
-          }),
-        ),
+              const confirmedOffsets = offsets.mock.calls.map((args) =>
+                direction === "send" ? Number(args[1]) : Number(args[2]),
+              );
+              expect(sessions).toBe(2);
+              expect(confirmedOffsets[0]).toBe(0);
+              expect(confirmedOffsets[1]).toBeGreaterThan(0);
+              expect(receipt).toMatchObject({ sizeBytes: bytes.length, sha256: expectedSha256 });
+              expect(
+                (yield* Effect.promise(() => NodeFSP.readFile(destination))).equals(bytes),
+              ).toBe(true);
+              expect(yield* Effect.promise(() => NodeFSP.readdir(local))).toEqual([fileName]);
+              expect(yield* Effect.promise(() => NodeFSP.readdir(remote))).toEqual([fileName]);
+            }),
+          ),
       );
     }
 
