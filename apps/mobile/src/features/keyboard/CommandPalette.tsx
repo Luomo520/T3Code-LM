@@ -1,5 +1,6 @@
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
@@ -11,6 +12,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import {
   AuthFilesystemReadScope,
+  type EnvironmentId,
   isListedThreadLineage,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
@@ -54,8 +56,9 @@ import {
 } from "../../state/entities";
 import { useDebouncedValue, useThreadSearch } from "../../state/queries";
 import { projectEnvironment } from "../../state/projects";
-import { useEnvironmentQuery } from "../../state/query";
-import { useEnvironmentScope } from "../../state/session";
+import { useHomeListOptions } from "../home/home-list-options";
+import { paletteTargets, resolvePaletteEnvironment } from "./paletteEnvironment";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { deliveryFileRoute } from "../projects/ProjectDeliveries";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { threadEnvironment } from "../../state/threads";
@@ -228,6 +231,7 @@ export interface CommandPaletteSearchPosition {
   readonly query: string;
   readonly selectedKey: string;
   readonly scrollOffset: number;
+  readonly environmentId: EnvironmentId | null;
 }
 
 /** Mounted only while open, so the app root does not subscribe to the full thread catalog. */
@@ -269,7 +273,9 @@ export function CommandPalette(props: {
   const searchEnvironmentIds = useMemo(
     () =>
       environments
-        .filter((environment) => environment.connectionState === "connected")
+        .filter(
+          (environment) => environment.isEnabled && environment.connectionState === "connected",
+        )
         .map((environment) => environment.environmentId),
     [environments],
   );
@@ -287,29 +293,55 @@ export function CommandPalette(props: {
   const newTaskFlow = useNewTaskFlow();
   const draftEnvironmentId =
     useActiveNewTask() === null ? null : (newTaskFlow.selectedProject?.environmentId ?? null);
-  const currentEnvironmentId =
-    activeThreadRef?.environmentId ?? draftEnvironmentId ?? searchEnvironmentIds[0] ?? null;
-  const currentSearchEnvironmentIds =
-    currentEnvironmentId === null
-      ? []
-      : searchEnvironmentIds.filter((id) => id === currentEnvironmentId);
-  const canReadDeliveries = useEnvironmentScope(currentEnvironmentId, AuthFilesystemReadScope);
+  const availableIds = useMemo(
+    () => new Set(environments.map((env) => env.environmentId)),
+    [environments],
+  );
+  const { options } = useHomeListOptions(availableIds);
+  const currentEnvironmentId = resolvePaletteEnvironment({
+    restored: props.initialSearch?.environmentId,
+    thread: activeThreadRef?.environmentId,
+    draft: draftEnvironmentId,
+    home: options.selectedEnvironmentId,
+  });
+  const currentSearchEnvironmentIds = useMemo(
+    () => paletteTargets(searchEnvironmentIds, currentEnvironmentId),
+    [searchEnvironmentIds, currentEnvironmentId],
+  );
+  const readable = useEnvironmentsWithScope(environments, AuthFilesystemReadScope);
   const deliveryQuery = query.startsWith(">") ? "" : query.trim().slice(0, 256).trim();
   const debouncedDeliveryQuery = useDebouncedValue(deliveryQuery, 200);
-  const deliverySearch = useEnvironmentQuery(
-    currentEnvironmentId !== null &&
-      currentSearchEnvironmentIds.length > 0 &&
-      serverConfigs.get(currentEnvironmentId)?.environment.capabilities.projectDeliveries ===
-        true &&
-      canReadDeliveries &&
-      deliveryQuery &&
-      deliveryQuery === debouncedDeliveryQuery
-      ? projectEnvironment.listDeliveries({
-          environmentId: currentEnvironmentId,
-          input: { query: debouncedDeliveryQuery },
-        })
-      : null,
+  const deliveryAtom = useMemo(
+    () =>
+      Atom.make((get) => {
+        if (!deliveryQuery || deliveryQuery !== debouncedDeliveryQuery)
+          return { files: [], isPending: Boolean(deliveryQuery), error: false };
+        let isPending = false;
+        let error = false;
+        const files = currentSearchEnvironmentIds.flatMap((environmentId) => {
+          if (
+            !readable.has(environmentId) ||
+            serverConfigs.get(environmentId)?.environment.capabilities.projectDeliveries !== true
+          )
+            return [];
+          const result = get(
+            projectEnvironment.listDeliveries({ environmentId, input: { query: deliveryQuery } }),
+          );
+          isPending ||= result.waiting;
+          error ||= result._tag === "Failure";
+          return result._tag === "Failure"
+            ? []
+            : (AsyncResult.getOrElse(result, () => null)?.files ?? []).map((file) => ({
+                environmentId,
+                file,
+              }));
+        });
+        return { files, isPending, error };
+      }),
+    [currentSearchEnvironmentIds, readable, serverConfigs, deliveryQuery, debouncedDeliveryQuery],
   );
+  const deliverySearch = useAtomValue(deliveryAtom);
+  const deliveries = deliverySearch.files;
   const search = useThreadSearch(
     currentSearchEnvironmentIds,
     query.startsWith(">") ? "" : query,
@@ -549,28 +581,28 @@ export function CommandPalette(props: {
     [messageOrder.keys, messageOrder.shown],
   );
   const results = useMemo(() => {
-    const scopedItems =
-      query.trim() && currentEnvironmentId !== null
-        ? items.filter(
-            (item) => item.kind === "action" || item.environmentId === currentEnvironmentId,
-          )
-        : items;
+    const scopedItems = query.trim()
+      ? items.filter(
+          (item) =>
+            item.kind === "action" ||
+            (item.environmentId !== undefined &&
+              currentSearchEnvironmentIds.includes(item.environmentId)),
+        )
+      : items;
     const ranked = filterCommandPaletteItems(scopedItems, query, messageMatchKeys, now);
-    if (currentEnvironmentId !== null && deliverySearch.data) {
-      for (const file of deliverySearch.data.files) {
-        ranked.push({
-          key: `delivery:${file.projectId}:${file.relativePath}`,
-          kind: "delivery",
-          title: file.name,
-          detail: `交付文件 · ${file.projectTitle}`,
-          searchTerms: [],
-          run: () =>
-            navigation.navigate(
-              "ProjectDeliveryFile",
-              deliveryFileRoute(currentEnvironmentId, file),
-            ),
-        });
-      }
+    for (const { environmentId, file } of deliveries) {
+      ranked.push({
+        key: `delivery:${scopedProjectKey(environmentId, file.projectId)}:${file.relativePath}`,
+        kind: "delivery",
+        title: file.name,
+        detail:
+          currentSearchEnvironmentIds.length > 1
+            ? `交付文件 · ${file.projectTitle} · ${savedConnectionsById[environmentId]?.environmentLabel ?? environmentId}`
+            : `交付文件 · ${file.projectTitle}`,
+        searchTerms: [],
+        run: () =>
+          navigation.navigate("ProjectDeliveryFile", deliveryFileRoute(environmentId, file)),
+      });
     }
     // Recent threads leave out the open one, which would always lead them.
     const activeKey = activeThread
@@ -579,8 +611,9 @@ export function CommandPalette(props: {
     return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
   }, [
     activeThread,
-    currentEnvironmentId,
-    deliverySearch.data,
+    currentSearchEnvironmentIds,
+    deliveries,
+    savedConnectionsById,
     items,
     messageMatchKeys,
     navigation,
@@ -679,7 +712,12 @@ export function CommandPalette(props: {
 
   function pickResult(item: CommandPaletteResult) {
     const returnSearch = item.fromMessages
-      ? { query, selectedKey: item.key, scrollOffset: listRef.current?.getState().scroll ?? 0 }
+      ? {
+          query,
+          environmentId: currentEnvironmentId,
+          selectedKey: item.key,
+          scrollOffset: listRef.current?.getState().scroll ?? 0,
+        }
       : null;
     close(() => runResult(item, returnSearch));
   }

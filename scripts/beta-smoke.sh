@@ -13,3 +13,13 @@ vp=./node_modules/.bin/vp
   src/components/sidebar/updateEverything.logic.test.ts \
   src/lib/contextWindow.test.ts
 "$vp" test run --project browser src/components/chat/ExpandedImageDialog.browser.test.tsx
+# 手机未接入时也可验证首页跨后端搜索，以及服务端的正文索引。
+(
+  cd ../mobile
+  T3_MOBILE_TEST_PLATFORM=android ../../node_modules/.bin/vp test run \
+    src/features/keyboard/paletteEnvironment.test.ts \
+    src/features/keyboard/commandPaletteItems.test.ts \
+    src/features/home/home-list-options.test.tsx
+)
+(cd ../../packages/client-runtime && ../../node_modules/.bin/vp test run src/state/threadSearch.test.ts)
+(cd ../server && "$vp" test run src/orchestration-v2/ThreadSearch.test.ts)
