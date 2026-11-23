@@ -33,49 +33,93 @@ const result = Schema.Struct({
   installation: Schema.optionalKey(FileHandoffInstallation),
 });
 
+const saveResult = Schema.Union([
+  result,
+  Schema.Struct({
+    status: Schema.Literal("choose_target"),
+    reason: Schema.String,
+    devices: Schema.Array(Schema.Struct({ label: Schema.String, online: Schema.Boolean })),
+  }),
+]);
+
+const saveDependencies = [
+  McpInvocationContext,
+  ThreadManagementService,
+  EnvironmentAuth,
+  SessionStore,
+  ServerConfig,
+  ServerSettingsService,
+  Digest.Digest,
+  ProjectService,
+  WorkspacePaths,
+  WorkspaceEntries,
+  FileSystem.FileSystem,
+  Path.Path,
+] as const;
+
 const save = Tool.make("t3_thread_file_save", {
   description:
-    "To manage an existing delivery in this thread, use action cancel or redirect only for an explicit user request. Omit id for the last relevant delivery. Claimed means the recipient started receiving it; report its actual state. Send a file only when the user explicitly asks to save it or send it to a device. For previews, show it in the thread. Use delivery for a file in this project's release inventory. Use workspaceOutput for a project file whose exact name or path the user gives, or a file created or edited in this turn, with the exact path recorded by the edit or printed on its own output line by the command that created it. To reuse a file linked in an earlier assistant reply, add its messageId. Existing attachments and completed companion tasks are also supported. The server uses the unique device named as destination in the user request or the authenticated sender for this device. After a device-choice response, pass the selected exact device label. On choose_target, ask an in-thread single-choice question with id t3-file-save-target and the exact labels, or ask for a save request naming the device. Use t3_thread_file_save_status to verify the receipt.",
+    'For ordinary project files, prefer t3_thread_save_workspace_file. Send or save a file to a device only when the user explicitly asks. To start a new transfer for a normal project file, use exactly this shape: {"source":{"_tag":"workspaceOutput","path":"report.txt"},"target":"Office PC"}. Use the actual file path from the conversation and copy the exact device name from the user, including non-English names. Leave action and id out of new transfers. Use delivery only for files in the project release inventory. Add source.messageId to use a file linked in an earlier assistant reply. Attachments and completed companion tasks are also supported. If the user asks to view the file, show it in the conversation. Verify the receipt using t3_thread_file_save_status before reporting it saved. The server can select the unique named device or the authenticated requester for this device. On choose_target, ask using question id t3-file-save-target and the exact labels, or ask for a save request naming the device. Use action and an existing id only when asked to cancel or redirect a transfer. Claimed means the receiver started receiving.',
   parameters: Schema.Struct({
     source: Schema.optionalKey(
       Schema.Union([
-        Schema.TaggedStruct("delivery", { path: filePath }),
+        Schema.TaggedStruct("delivery", { path: filePath }).annotate({
+          description: "A file already recorded in the project release inventory.",
+        }),
         Schema.TaggedStruct("workspaceOutput", {
           path: filePath,
           messageId: Schema.optionalKey(MessageId),
+        }).annotate({
+          description:
+            "A regular project file named by the user, created or edited this turn, or linked in an earlier reply.",
         }),
         Schema.TaggedStruct("attachment", { messageId: MessageId, attachmentId: ChatAttachmentId }),
         Schema.TaggedStruct("companionScreenshot", { taskId: identifier }),
         Schema.TaggedStruct("companionFile", { taskId: identifier }),
-      ]),
+      ]).annotate({ description: "File source for a new transfer." }),
     ),
-    action: Schema.optionalKey(Schema.Literals(["cancel", "redirect"])),
-    id: Schema.optionalKey(identifier),
-    target: Schema.optionalKey(identifier),
+    action: Schema.optionalKey(
+      Schema.Literals(["cancel", "redirect"]).annotate({
+        description: "Only for changing an existing transfer. Omit for a new transfer.",
+      }),
+    ),
+    id: Schema.optionalKey(
+      identifier.pipe(
+        Schema.annotateEncoded({ description: "Existing transfer ID. Omit for a new transfer." }),
+      ),
+    ),
+    target: Schema.optionalKey(
+      identifier.pipe(
+        Schema.annotateEncoded({
+          description:
+            "Exact device label selected or quoted from the user. Preserve its original spelling and language.",
+        }),
+      ),
+    ),
   }),
-  success: Schema.Union([
-    result,
-    Schema.Struct({
-      status: Schema.Literal("choose_target"),
-      reason: Schema.String,
-      devices: Schema.Array(Schema.Struct({ label: Schema.String, online: Schema.Boolean })),
-    }),
-  ]),
+  success: saveResult,
   failure: OrchestratorMcpFailure,
-  dependencies: [
-    McpInvocationContext,
-    ThreadManagementService,
-    EnvironmentAuth,
-    SessionStore,
-    ServerConfig,
-    ServerSettingsService,
-    Digest.Digest,
-    ProjectService,
-    WorkspacePaths,
-    WorkspaceEntries,
-    FileSystem.FileSystem,
-    Path.Path,
-  ],
+  dependencies: [...saveDependencies],
+})
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
+const saveWorkspaceFile = Tool.make("t3_thread_save_workspace_file", {
+  description:
+    'Send a regular file in the current project to a device only when the user explicitly asks to save or send it. For viewing or previewing a file, answer in the conversation. Example for a new transfer: {"path":"report.txt","target":"Office PC"}. Use the exact real file path or filename from the conversation, including a previous user message when the user refers back, and copy the device name without translation. Omit target when the request names this device. On choose_target, use question id t3-file-save-target with the exact listed names, or ask the user to name a device. The tool briefly checks the receiving device. Report saved only if returned status is saved. If the result is awaiting_save, use t3_thread_file_save_status to check again or report that it is awaiting save.',
+  parameters: Schema.Struct({
+    path: filePath.pipe(
+      Schema.annotateEncoded({
+        description: "Exact workspace path or filename from the conversation.",
+      }),
+    ),
+    target: Schema.optionalKey(
+      identifier.pipe(Schema.annotateEncoded({ description: "Exact receiving device name." })),
+    ),
+  }),
+  success: saveResult,
+  failure: OrchestratorMcpFailure,
+  dependencies: [...saveDependencies],
 })
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
@@ -94,4 +138,4 @@ const status = Tool.make("t3_thread_file_save_status", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Idempotent, true);
 
-export const ThreadFileSaveToolkit = Toolkit.make(save, status);
+export const ThreadFileSaveToolkit = Toolkit.make(saveWorkspaceFile, save, status);

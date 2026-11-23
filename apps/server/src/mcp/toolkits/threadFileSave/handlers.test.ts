@@ -150,7 +150,13 @@ const decodeEnvelope = Schema.decodeUnknownEffect(Schema.Struct({ result: Schema
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeTools = Schema.decodeUnknownEffect(
   Schema.Struct({
-    tools: Schema.Array(Schema.Struct({ name: Schema.String })),
+    tools: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        description: Schema.optionalKey(Schema.String),
+        inputSchema: Schema.Unknown,
+      }),
+    ),
   }),
 );
 const decodeCall = Schema.decodeUnknownEffect(McpSchema.CallToolResult);
@@ -258,7 +264,25 @@ it.live(
             Effect.map((response) => response.result),
           );
       const discovery = yield* rpc("tools/list", {}).pipe(Effect.flatMap(decodeTools));
-      expect(discovery.tools.map(({ name }) => name)).toContain("t3_thread_file_save");
+      const advertisedSave = discovery.tools.find(({ name }) => name === "t3_thread_file_save");
+      expect(advertisedSave?.description).toContain("Leave action and id out of new transfers.");
+      expect(advertisedSave?.inputSchema).toMatchObject({
+        properties: {
+          action: { description: expect.stringContaining("Omit for a new transfer.") },
+          id: { description: expect.stringContaining("Existing transfer ID.") },
+          source: { description: "File source for a new transfer." },
+        },
+      });
+      const workspaceSave = discovery.tools.find(
+        ({ name }) => name === "t3_thread_save_workspace_file",
+      );
+      expect(workspaceSave?.inputSchema).toMatchObject({
+        required: ["path"],
+        properties: {
+          path: { type: "string" },
+          target: { type: "string" },
+        },
+      });
       const call = (name: string, args: Record<string, unknown>) =>
         rpc("tools/call", { name, arguments: args }).pipe(Effect.flatMap(decodeCall));
       let sequence = 0;
@@ -421,6 +445,9 @@ it.live(
       const delivery = { _tag: "delivery", path: "交付/report.txt" };
       yield* turn("只给我看看交付报告，不要下载");
       expect((yield* save(delivery)).isError).toBe(true);
+      expect(
+        (yield* call("t3_thread_save_workspace_file", { path: "交付/report.txt" })).isError,
+      ).toBe(true);
       expect(yield* readFileHandoff({ _tag: "list", threadId }, phoneSession)).toMatchObject({
         transfers: [],
       });
@@ -594,11 +621,57 @@ it.live(
         (yield* save({ _tag: "workspaceOutput", path: "验证传输.txt" })).structuredContent,
       ).toMatchObject({ status: "choose_target" });
 
+      const saveWorkspace = () => call("t3_thread_save_workspace_file", { path: "验证传输.txt" });
+      expect((yield* saveWorkspace()).structuredContent).toMatchObject({ status: "choose_target" });
       const workspaceSource = { _tag: "workspaceOutput", path: "验证传输.txt" };
+
+      yield* turn("把 验证传输.txt 发到书房电脑");
+      yield* sessions.markConnected(computerSession.sessionId);
+      const pendingWorkspace = yield* decodeReceipt((yield* saveWorkspace()).structuredContent);
+      expect(pendingWorkspace).toMatchObject({
+        recipientLabel: "书房电脑",
+        status: "awaiting_save",
+      });
+      const linkWorkspace = yield* receiveLink(pendingWorkspace.id, computerSession);
+      const workspaceBytes = yield* http.get(linkWorkspace.relativeUrl);
+      expect(yield* workspaceBytes.text).toBe(bytes("验证传输.txt"));
+      yield* readFileHandoff(
+        {
+          _tag: "confirmSaved",
+          threadId,
+          id: pendingWorkspace.id,
+          sha256: linkWorkspace.sha256,
+          sizeBytes: linkWorkspace.sizeBytes,
+        },
+        computerSession,
+      );
+      expect((yield* saveWorkspace()).structuredContent).toMatchObject({
+        id: pendingWorkspace.id,
+        status: "saved",
+      });
+
+      yield* turn("把 验证传输.txt 保存到书房电脑");
+      yield* sessions.markDisconnected(computerSession.sessionId);
+      const offline = yield* decodeReceipt((yield* saveWorkspace()).structuredContent);
+      expect(offline).toMatchObject({ recipientLabel: "书房电脑", status: "awaiting_save" });
+      const offlineLink = yield* receiveLink(offline.id, computerSession);
+      yield* readFileHandoff(
+        {
+          _tag: "confirmSaved",
+          threadId,
+          id: offline.id,
+          sha256: offlineLink.sha256,
+          sizeBytes: offlineLink.sizeBytes,
+        },
+        computerSession,
+      );
+
       yield* turn("把 验证传输.txt 发到这台手机");
       const { id: redirectedId } = yield* decodeReceipt(
         (yield* save(workspaceSource)).structuredContent,
       );
+      const simple = yield* call("t3_thread_save_workspace_file", { path: "验证传输.txt" });
+      expect((yield* decodeReceipt(simple.structuredContent)).id).toBe(redirectedId);
       const oldLink = yield* receiveLink(redirectedId, phoneSession);
       const oldReceipt = {
         _tag: "confirmSaved" as const,
