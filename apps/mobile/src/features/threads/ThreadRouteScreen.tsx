@@ -1,3 +1,4 @@
+import { View } from "react-native";
 import * as Dialog from "../../components/ui/Dialog";
 import { useRememberThreadProject } from "./useRememberThreadProject";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -102,6 +103,7 @@ import {
   useAdaptiveWorkspaceLayout,
   useWorkspacePaneState,
 } from "../layout/AdaptiveWorkspaceLayout";
+import { FileHandoffPanel } from "../files/FileHandoffPanel";
 import { ThreadFileNavigatorPane } from "../files/thread-file-navigator-pane";
 import { InspectorSheetContext } from "../layout/workspace-inspector-sheet";
 import type { InspectorContent } from "../layout/inspector-panes";
@@ -605,22 +607,31 @@ function ThreadRouteContent(
     />
   );
   const renderFilesInspector = () =>
-    selectedThread !== null && selectedThreadCwd !== null ? (
-      <InspectorSheetContext.Consumer>
-        {(closeInspectorSheet) => (
-          <ThreadFileNavigatorPane
-            cwd={selectedThreadCwd}
-            environmentId={selectedThread.environmentId}
-            projectName={selectedThreadProject?.title ?? "Files"}
-            selectedPath={null}
-            onSelectFile={(path) =>
-              closeInspectorSheet
-                ? closeInspectorSheet(() => handleSelectInspectorFile(path))
-                : handleSelectInspectorFile(path)
-            }
-          />
+    selectedThread ? (
+      <View className="flex-1">
+        <FileHandoffPanel
+          key={scopedThreadKey(selectedThread.environmentId, selectedThread.id)}
+          environmentId={selectedThread.environmentId}
+          threadId={selectedThread.id}
+        />
+        {selectedThreadCwd !== null && (
+          <InspectorSheetContext.Consumer>
+            {(closeInspectorSheet) => (
+              <ThreadFileNavigatorPane
+                cwd={selectedThreadCwd}
+                environmentId={selectedThread.environmentId}
+                projectName={selectedThreadProject?.title ?? "文件"}
+                selectedPath={null}
+                onSelectFile={(path) =>
+                  closeInspectorSheet
+                    ? closeInspectorSheet(() => handleSelectInspectorFile(path))
+                    : handleSelectInspectorFile(path)
+                }
+              />
+            )}
+          </InspectorSheetContext.Consumer>
         )}
-      </InspectorSheetContext.Consumer>
+      </View>
     ) : null;
   const renderPreviewInspector = () =>
     previewTarget ? (
