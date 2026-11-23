@@ -132,7 +132,7 @@ const saveWorkspaceFile = Tool.make("t3_thread_save_workspace_file", {
 
 const status = Tool.make("t3_thread_file_save_status", {
   description:
-    "Check the real receiving-device receipt using the existing transfer ID. After staging, call with waitMs up to 15000. Report success only after saved. If it reports urlFailure, say that the target device can retry and give the reason. If still awaiting_save without urlFailure, tell the user the device has yet to confirm or save the file. An APK marked installRequested awaits local confirmation after saving. Report installation only after a verified installation receipt.",
+    "Check the real receiving-device receipt using the existing transfer ID. After staging, call with waitMs up to 15000. Report success only after saved. If it reports urlFailure, say that the target device can retry and give the reason. If still awaiting_save without urlFailure, tell the user the device has yet to confirm or save the file. For an APK marked installRequested, waitMs also waits for the installation receipt after saving. A saved APK without an installation receipt is still awaiting confirmation. Report installation only after a verified installation receipt.",
   parameters: Schema.Struct({
     id: identifier,
     waitMs: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 15_000 }))),

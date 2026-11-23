@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   hasExplicitThreadFileSaveIntent,
+  threadFileApkInstallRequest,
   threadFileDestination,
   threadFileManagementIntent,
   threadFileRedirectDestination,
@@ -39,6 +40,31 @@ describe("会话文件保存请求", () => {
     "Just show it. Don't download the screenshot.",
     "Tell me whether you can preview the file.",
   ])("只查看时不触发保存 %s", (text) => expect(hasExplicitThreadFileSaveIntent(text)).toBe(false));
+});
+
+describe("从来源设备取 APK 并在目标手机安装", () => {
+  it.each([
+    "从书房电脑把测试.apk发到这台手机并安装",
+    "请从书房电脑把测试.apk发到这台手机并安装，装完告诉我结果。",
+    "把书房电脑上的测试.apk发到这台手机并安装，安装后在原会话告诉我结果。",
+  ])("识别来源在前的原话和回执要求 %s", (text) => {
+    expect(threadFileDestination(threadFileApkInstallRequest(text) ?? "")).toEqual({
+      kind: "current",
+      device: "mobile",
+    });
+  });
+
+  it.each([
+    "从书房电脑把测试.apk发到这台手机",
+    "从书房电脑把测试.apk发到这台手机，不要安装",
+    "从书房电脑把测试.apk发到这台手机并安装吗？",
+    "看看能否从书房电脑把测试.apk发到这台手机并安装",
+    "不要从书房电脑把测试.apk发到这台手机并安装",
+    "从书房电脑不要把测试.apk发到这台手机并安装",
+    "从书房电脑把测试.apk发到这台手机并安装，如果兼容",
+  ])("不从查看、条件或仅传文件的话中推断安装 %s", (text) => {
+    expect(threadFileApkInstallRequest(text)).toBeUndefined();
+  });
 });
 
 describe("取消和改发已有会话传输", () => {

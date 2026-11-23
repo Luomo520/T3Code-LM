@@ -39,7 +39,7 @@ import * as McpOAuth from "../../../auth/McpOAuth.ts";
 import { layer as secretStoreLayer } from "../../../auth/ServerSecretStore.ts";
 import { SessionStore } from "../../../auth/SessionStore.ts";
 import { archiveCapture } from "../../../companion/captureArchive.ts";
-import { createCompanionStore } from "../../../companion/store.ts";
+import { createCompanionStore, getCompanionStore } from "../../../companion/store.ts";
 import { ServerConfig } from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { readFileHandoff } from "../../../fileExchange/FileHandoff.ts";
@@ -735,6 +735,67 @@ it.live(
         },
       ]);
       expect(Buffer.from(yield* fs.readFile(originalPath))).toEqual(originalPng);
+
+      // 设备原件走受控端取件入口；手机先确认落盘，稍后才回报系统安装结果。
+      const devices = yield* Effect.acquireRelease(
+        Effect.sync(() => getCompanionStore(config.stateDir)),
+        (store) => Effect.sync(() => store.close()),
+      );
+      const pc = devices.enroll(devices.pair().code, "书房电脑", {});
+      const sourceJob = devices.enqueue(threadId, pc.deviceId, "send-file", "apk-source");
+      expect(devices.poll(pc.token, "书房电脑", {}).job?.id).toBe(sourceJob.id);
+      const fixtureApk = process.env.T3_HANDOFF_QA_APK;
+      const payload = fixtureApk
+        ? Buffer.from(yield* fs.readFile(fixtureApk))
+        : Buffer.from("测试 APK 的传输夹具");
+      const digestHex = yield* digest.digestHex(Digest.sha256, payload);
+      devices.complete(pc.token, {
+        id: sourceJob.id,
+        status: "done",
+        message: "已提供原件",
+        file: { name: "测试.apk", data: payload.toString("base64"), sha256: digestHex },
+      });
+      yield* turn("从书房电脑把测试.apk发到这台手机并安装，装完告诉我结果。");
+      const fromPc = { _tag: "companionFile", taskId: sourceJob.id };
+      const transfer = yield* decodeReceipt((yield* save(fromPc)).structuredContent);
+      expect(transfer).toMatchObject({ installRequested: true, status: "awaiting_save" });
+      const downloadLink = yield* receiveLink(transfer.id, reconnectedPhone);
+      const downloaded = yield* http.get(downloadLink.relativeUrl);
+      expect(downloaded.status).toBe(200);
+      expect(Buffer.from(yield* downloaded.arrayBuffer)).toEqual(payload);
+      yield* readFileHandoff(
+        {
+          _tag: "confirmSaved",
+          threadId,
+          id: transfer.id,
+          sha256: digestHex,
+          sizeBytes: payload.length,
+          savedPath: "Download/t3code/测试.apk",
+        },
+        reconnectedPhone,
+      );
+      // 让等待请求先读到 saved，验证迟到的安装回执能在同一个调用中返回。
+      const laterReceipt = yield* call("t3_thread_file_save_status", {
+        id: transfer.id,
+        waitMs: 1500,
+      }).pipe(Effect.forkChild);
+      yield* Effect.sleep(120);
+      yield* readFileHandoff(
+        {
+          _tag: "reportInstall",
+          threadId,
+          id: transfer.id,
+          sha256: digestHex,
+          installation: installed,
+        },
+        reconnectedPhone,
+      );
+      expect((yield* Fiber.join(laterReceipt)).structuredContent).toMatchObject({
+        id: transfer.id,
+        status: "saved",
+        installation: installed,
+      });
+      expect((yield* decodeReceipt((yield* save(fromPc)).structuredContent)).id).toBe(transfer.id);
 
       const archivedPath = yield* archiveCapture(threadId, capture.id, capturedPath, "png");
       yield* fs.remove(capturedPath);

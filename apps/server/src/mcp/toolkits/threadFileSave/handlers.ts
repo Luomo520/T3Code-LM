@@ -71,13 +71,21 @@ const waitForReceipt = Effect.fn("ThreadFileSave.waitForReceipt")(function* (
   threadId: ThreadId,
   id: string,
   waitMs: number,
+  waitForInstall = false,
 ) {
   const read = readThreadFileHandoffStatus(threadId, id).pipe(
     Effect.mapError((error) => invalid(error.message)),
   );
   const deadline = (yield* Clock.currentTimeMillis) + waitMs;
   let receipt = yield* read;
-  while (receipt.status === "awaiting_save" && !receipt.urlFailure) {
+  // 保存和系统安装分别回报。明确查询安装结果时沿用同一个截止时间。
+  while (
+    (receipt.status === "awaiting_save" && !receipt.urlFailure) ||
+    (waitForInstall &&
+      receipt.status === "saved" &&
+      receipt.installRequested &&
+      !receipt.installation)
+  ) {
     const remaining = deadline - (yield* Clock.currentTimeMillis);
     if (remaining <= 0) break;
     yield* Effect.sleep(Math.min(remaining, 250));
@@ -409,7 +417,7 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
   t3_thread_file_save_status: McpToolAccess.readsAsCaller(({ id, waitMs = 0 }) =>
     Effect.gen(function* () {
       const { thread } = yield* localThreadCaller();
-      return yield* waitForReceipt(thread.threadId, id, waitMs);
+      return yield* waitForReceipt(thread.threadId, id, waitMs, true);
     }),
   ),
 });

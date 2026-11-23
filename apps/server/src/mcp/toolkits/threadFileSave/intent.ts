@@ -56,15 +56,25 @@ export function threadFileApkInstallRequest(message: string): string | undefined
     /\b(?:do not|don't|never|without)\s+install\b|(?:不要|别|无需|不需要|禁止)\s*安装/iu.test(text)
   )
     return undefined;
+  // 只去掉明确要求回报结果的末句，保留条件、否定和设备名称。
   const transfer = text
+    .replace(
+      /[,，]\s*(?:装完|安装后|安装完成后)\s*(?:在原会话)?(?:告诉我|回复我)(?:安装)?结果[。.!！]*$/u,
+      "",
+    )
     .match(
       /^(.*?)\s*(?:[,，]?\s*(?:并且?|然后|接着|再)\s*安装(?:它|这个\s*APK|该\s*APK)?|\s+(?:and(?: then)?|then)\s+install(?:\s+(?:it|the APK|this APK))?)\s*(?:吧|[,，]?\s*(?:谢谢|please|thanks))?[。.!！]*$/iu,
     )?.[1]
     ?.trim();
-  const command = transfer?.replace(
-    /^((?:(?:请|请你|帮我|给我|替我|先|现在)\s*)*)(?:发送?|传送?)\s*(?!(?:到|给|至))(.{1,80}?)\s*(?:到|给|至)\s*(.+)$/u,
-    "$1把$2发到$3",
-  );
+  const command = transfer
+    ?.replace(
+      /^((?:(?:请|请你|帮我|替我)\s*)*)从([\p{L}\p{N} _-]{0,28}(?:电脑|主机|PC))\s*把(?=[^，。！？,!?]{1,80}(?:发到|发送到|传到))/u,
+      "$1把$2的",
+    )
+    .replace(
+      /^((?:(?:请|请你|帮我|给我|替我|先|现在)\s*)*)(?:发送?|传送?)\s*(?!(?:到|给|至))(.{1,80}?)\s*(?:到|给|至)\s*(.+)$/u,
+      "$1把$2发到$3",
+    );
   return command && hasExplicitThreadFileSaveIntent(command) ? command : undefined;
 }
 
