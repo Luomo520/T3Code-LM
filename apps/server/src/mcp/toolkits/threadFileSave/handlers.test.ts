@@ -177,6 +177,8 @@ it.live(
         "交付/report.txt",
         "linked.txt",
         "new.txt",
+        "sample.txt",
+        "sample.txt.bak",
         "验证传输.txt",
         "重复.txt",
         "子目录/重复.txt",
@@ -500,6 +502,36 @@ it.live(
       yield* turn("给我看看 验证传输.txt");
       yield* turn("把刚才那份发到书房电脑");
       yield* receive("验证传输.txt", { _tag: "workspaceOutput", path: "验证传输.txt" }, "书房电脑");
+      yield* turn("Please show me sample.txt.bak.");
+      yield* turn("Save that file to this phone.");
+      const saveSample = () =>
+        call("t3_thread_save_workspace_file", { path: "sample.txt", target: "this phone" });
+      expect((yield* saveSample()).isError).toBe(true);
+
+      yield* turn("Please show me sample.txt.");
+      expect((yield* saveSample()).isError).toBe(true);
+      yield* turn("Save that file to this phone.");
+      const sampleResult = yield* saveSample();
+      expect(sampleResult.isError).toBeFalsy();
+      const sample = yield* decodeReceipt(sampleResult.structuredContent);
+      expect(sample).toMatchObject({ recipientLabel: "手机", status: "awaiting_save" });
+      const sampleLink = yield* receiveLink(sample.id, phoneSession);
+      const sampleDownload = yield* http.get(sampleLink.relativeUrl);
+      expect(sampleDownload.status).toBe(200);
+      expect(yield* sampleDownload.text).toBe(bytes("sample.txt"));
+      const sampleBytes = new TextEncoder().encode(bytes("sample.txt"));
+      yield* readFileHandoff(
+        {
+          _tag: "confirmSaved",
+          threadId,
+          id: sample.id,
+          sha256: yield* digest.digestHex(Digest.sha256, sampleBytes),
+          sizeBytes: sampleBytes.length,
+          savedPath: "Downloads/sample.txt",
+        },
+        phoneSession,
+      );
+
       yield* turn("把重复.txt发到这台手机");
       expect((yield* save({ _tag: "workspaceOutput", path: "重复.txt" })).isError).toBe(true);
       yield* turn("把子目录/重复.txt发到这台手机");

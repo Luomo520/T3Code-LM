@@ -28,7 +28,10 @@ function mentionsFile(text: string, value: string): boolean {
   const normalized = text.normalize("NFKC").replaceAll("\\", "/");
   const name = value.normalize("NFKC").replaceAll("\\", "/");
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<![a-z0-9_.-])${escaped}(?![a-z0-9_.-])`, "u").test(normalized);
+  // 句末句点可以紧跟文件名，扩展名中的句点仍属于文件名。
+  return new RegExp(`(?<![a-z0-9_.-])${escaped}(?=\\.(?:\\s|$)|[^a-z0-9_.-]|$)`, "u").test(
+    normalized,
+  );
 }
 
 const denied = () =>
@@ -71,7 +74,7 @@ export const resolveWorkspaceOutput = Effect.fn("ThreadFileSave.resolveWorkspace
   if (source._tag === "workspaceOutput") {
     const basename = path.basename(relativePath);
     const refersBack =
-      /刚才|刚刚|前面|上一(?:条|份|个)|那(?:份|个|张)|\b(?:previous|above|that one)\b/iu.test(
+      /刚才|刚刚|前面|上一(?:条|份|个)|那(?:份|个|张)|\b(?:previous|above|that (?:one|file))\b/iu.test(
         request.text,
       );
     let requestText = request.text;
