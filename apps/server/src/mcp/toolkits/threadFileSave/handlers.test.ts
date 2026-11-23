@@ -38,6 +38,7 @@ import * as EnvironmentAuth from "../../../auth/EnvironmentAuth.ts";
 import * as McpOAuth from "../../../auth/McpOAuth.ts";
 import { layer as secretStoreLayer } from "../../../auth/ServerSecretStore.ts";
 import { SessionStore } from "../../../auth/SessionStore.ts";
+import { archiveCapture } from "../../../companion/captureArchive.ts";
 import { createCompanionStore } from "../../../companion/store.ts";
 import { ServerConfig } from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
@@ -180,6 +181,7 @@ it.live(
         "sample.txt",
         "sample.txt.bak",
         "验证传输.txt",
+        "验证安装.apk",
         "重复.txt",
         "子目录/重复.txt",
       ];
@@ -197,7 +199,7 @@ it.live(
         subject: "owner",
         method: "bearer-access-token",
         scopes,
-        client: { deviceType: "mobile", label: "手机" },
+        client: { deviceType: "mobile", label: "手机", os: "Android" },
       });
       const desktop = yield* sessions.issue({
         subject: "owner",
@@ -514,7 +516,7 @@ it.live(
       const sampleResult = yield* saveSample();
       expect(sampleResult.isError).toBeFalsy();
       const sample = yield* decodeReceipt(sampleResult.structuredContent);
-      expect(sample).toMatchObject({ recipientLabel: "手机", status: "awaiting_save" });
+      expect(sample).toMatchObject({ recipientLabel: "手机 · Android", status: "awaiting_save" });
       const sampleLink = yield* receiveLink(sample.id, phoneSession);
       const sampleDownload = yield* http.get(sampleLink.relativeUrl);
       expect(sampleDownload.status).toBe(200);
@@ -536,6 +538,92 @@ it.live(
       expect((yield* save({ _tag: "workspaceOutput", path: "重复.txt" })).isError).toBe(true);
       yield* turn("把子目录/重复.txt发到这台手机");
       yield* receive("子目录/重复.txt", { _tag: "workspaceOutput", path: "子目录/重复.txt" });
+
+      const apkSource = { _tag: "workspaceOutput", path: "验证安装.apk" };
+      yield* turn("把验证安装.apk发到这台手机");
+      const ordinaryApk = yield* decodeReceipt((yield* save(apkSource)).structuredContent);
+      expect(ordinaryApk).not.toHaveProperty("installRequested");
+      const ordinaryApkLink = yield* receiveLink(ordinaryApk.id, phoneSession);
+      yield* readFileHandoff(
+        {
+          _tag: "confirmSaved",
+          threadId,
+          id: ordinaryApk.id,
+          sha256: ordinaryApkLink.sha256,
+          sizeBytes: ordinaryApkLink.sizeBytes,
+          savedPath: "Download/t3code/验证安装.apk",
+        },
+        phoneSession,
+      );
+
+      yield* turn("发验证安装.apk到这台手机并安装");
+      const apk = yield* decodeReceipt((yield* save(apkSource)).structuredContent);
+      expect(apk).toMatchObject({ status: "awaiting_save", installRequested: true });
+      const apkLink = yield* receiveLink(apk.id, phoneSession);
+      const report = (
+        installation:
+          | { status: "cancelled" | "failed" }
+          | { status: "verified"; packageName: string; version: string; versionCode: string },
+      ) => ({
+        _tag: "reportInstall" as const,
+        threadId,
+        id: apk.id,
+        sha256: apkLink.sha256,
+        installation,
+      });
+      expect(
+        yield* Effect.result(readFileHandoff(report({ status: "failed" }), phoneSession)),
+      ).toMatchObject({ _tag: "Failure" });
+      yield* sessions.markDisconnected(phoneSession.sessionId);
+      yield* sessions.markConnected(phoneSession.sessionId);
+      const reconnectedPhone = yield* sessions.verify(mobile.token);
+      yield* readFileHandoff(
+        {
+          _tag: "confirmSaved",
+          threadId,
+          id: apk.id,
+          sha256: apkLink.sha256,
+          sizeBytes: apkLink.sizeBytes,
+          savedPath: "Download/t3code/验证安装.apk",
+        },
+        reconnectedPhone,
+      );
+      expect(yield* readFileHandoff({ _tag: "list", threadId }, reconnectedPhone)).toMatchObject({
+        transfers: expect.arrayContaining([
+          expect.objectContaining({
+            id: apk.id,
+            disposition: "saved",
+            outgoing: false,
+            installRequested: true,
+          }),
+        ]),
+      });
+      expect(
+        yield* Effect.result(readFileHandoff(report({ status: "failed" }), computerSession)),
+      ).toMatchObject({ _tag: "Failure" });
+      const checkApk = () => call("t3_thread_file_save_status", { id: apk.id });
+      for (const status of ["failed", "cancelled"] as const) {
+        yield* readFileHandoff(report({ status }), reconnectedPhone);
+        expect((yield* checkApk()).structuredContent).toMatchObject({
+          id: apk.id,
+          status: "saved",
+          installation: { status },
+        });
+      }
+      const installed = {
+        status: "verified",
+        packageName: "com.example.fixture",
+        version: "1.0",
+        versionCode: "1",
+      } as const;
+      yield* readFileHandoff(report(installed), reconnectedPhone);
+      yield* readFileHandoff(report(installed), reconnectedPhone);
+      expect((yield* checkApk()).structuredContent).toMatchObject({
+        id: apk.id,
+        status: "saved",
+        installation: installed,
+      });
+      expect((yield* decodeReceipt((yield* save(apkSource)).structuredContent)).id).toBe(apk.id);
 
       // 用合成图片完成一次本地伴侣任务，再将其作为原会话附件保存。
       const companion = yield* Effect.acquireRelease(
@@ -647,6 +735,24 @@ it.live(
         },
       ]);
       expect(Buffer.from(yield* fs.readFile(originalPath))).toEqual(originalPng);
+
+      const archivedPath = yield* archiveCapture(threadId, capture.id, capturedPath, "png");
+      yield* fs.remove(capturedPath);
+      yield* turn("把刚才那张存到这台电脑", computerAlias, "desktop");
+      const archivedResult = yield* save({ _tag: "companionScreenshot", taskId: capture.id });
+      expect(archivedResult).toMatchObject({
+        structuredContent: { status: "awaiting_save", recipientLabel: "书房电脑" },
+      });
+      const archivedDelivery = yield* decodeReceipt(archivedResult.structuredContent);
+      expect(archivedDelivery).toMatchObject({
+        recipientLabel: "书房电脑",
+        status: "awaiting_save",
+      });
+      const archiveLink = yield* receiveLink(archivedDelivery.id, computerSession);
+      const archiveResponse = yield* http.get(archiveLink.relativeUrl);
+      expect(Buffer.from(yield* archiveResponse.arrayBuffer)).toEqual(originalPng);
+      expect(Buffer.from(yield* fs.readFile(archivedPath))).toEqual(originalPng);
+      yield* readFileHandoff({ ...screenshotReceipt, id: archivedDelivery.id }, computerSession);
 
       yield* turn("把 验证传输.txt 发到书房电脑或者手机");
       expect(

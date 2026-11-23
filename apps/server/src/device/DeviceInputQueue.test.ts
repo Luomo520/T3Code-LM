@@ -115,3 +115,44 @@ it("revokes active remote input for the local App and resumes the remaining queu
   );
   expect(queue.allows(key, left, waiting.lease!, 9)).toBe(true);
 });
+
+it("requires a new readiness check after local control interrupts a pending activation", () => {
+  const queue = makeDeviceInputQueue();
+  const first = queue.update(key, left, request("one", "join"), 0);
+  const second = queue.update(key, right, request("two", "join"), 1);
+  const activation = request("one", "activate", first.lease);
+  const checked = queue.beginActivation(key, left, activation, 2);
+  expect(checked?.(2)).toBe(true);
+  expect(queue.beginActivation(key, right, request("two", "activate", second.lease), 2)).toBeNull();
+  const local = queue.update(key, right, request("three", "join"), 3, true);
+  expect(checked?.(3)).toBe(false);
+  queue.update(key, right, request("three", "release", local.lease), 4, true);
+  expect(checked?.(4)).toBe(false);
+  expect(queue.update(key, left, request("one", "status", first.lease), 5).state).toBe("ready");
+  expect(queue.beginActivation(key, left, activation, 6)?.(6)).toBe(true);
+  expect(queue.update(key, right, request("two", "status", second.lease), 7).ahead).toBe(1);
+});
+
+it("discards delayed automatic actions and stale joins after local control ends", () => {
+  const queue = makeDeviceInputQueue();
+  const automated = queue.reserveDockAction(key, 0)!;
+  const local = queue.update(key, right, request("three", "join"), 1, true);
+  queue.update(key, right, request("three", "release", local.lease), 2, true);
+  expect(automated.canStart()).toBe(false);
+  automated.release();
+
+  const fresh = queue.reserveDockAction(key, 3)!;
+  automated.release();
+  expect(fresh.canStart()).toBe(true);
+  fresh.release();
+
+  const remote = queue.update(key, left, request("one", "join"), 4);
+  expect(queue.update(key, left, request("one", "join", remote.lease), 12_004)).toMatchObject({
+    state: "idle",
+  });
+  expect(queue.update(key, right, request("two", "join"), 12_005)).toMatchObject({
+    state: "ready",
+    ahead: 0,
+  });
+  expect(queue.allows(key, left, remote.lease!, 12_005)).toBe(false);
+});

@@ -11,6 +11,9 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import {
   EnvironmentId,
+  MessageId,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2Run,
   ProviderInstanceId,
   ThreadId,
   type Project as ProjectRecord,
@@ -24,7 +27,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as Project from "../project/ProjectService.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpToolAccess from "../mcp/McpToolAccess.ts";
-import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
+import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as FileExchangeHandlers from "../mcp/toolkits/fileExchange/handlers.ts";
 import { FileExchangeToolkit } from "../mcp/toolkits/fileExchange/tools.ts";
 
@@ -267,92 +270,118 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux" || sftpServer ==
         ),
     );
 
-    for (const direction of ["send", "receive"] as const) {
-      it.live(
-        `resumes a large ${direction} from its confirmed offset through the MCP tool after SFTP disconnects`,
-        () =>
-          Effect.scoped(
-            Effect.gen(function* () {
-              const offsets =
-                direction === "send"
-                  ? vi.spyOn(SftpSession.prototype, "writeChunks")
-                  : vi.spyOn(SftpSession.prototype, "readChunks");
-              yield* Effect.addFinalizer(() => Effect.sync(() => offsets.mockRestore()));
-              let sessions = 0;
-              const { local, remote, workspaceRoot, layer } = yield* fixture((child) => {
-                if (++sessions !== 1) return;
-                let responseBytes = 0;
-                const threshold = direction === "send" ? 2_400 : 2 * 1024 * 1024;
-                child.stdout.on("data", (chunk: Buffer) => {
-                  responseBytes += chunk.length;
-                  if (responseBytes > threshold) child.kill("SIGKILL");
-                });
+    it.live.each(["send", "receive"] as const)(
+      "resumes a large %s from its confirmed offset through the MCP tool after SFTP disconnects",
+      (direction) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const offsets =
+              direction === "send"
+                ? vi.spyOn(SftpSession.prototype, "writeChunks")
+                : vi.spyOn(SftpSession.prototype, "readChunks");
+            yield* Effect.addFinalizer(() => Effect.sync(() => offsets.mockRestore()));
+            let sessions = 0;
+            const { local, remote, workspaceRoot, layer } = yield* fixture((child) => {
+              if (++sessions !== 1) return;
+              let responseBytes = 0;
+              const threshold = direction === "send" ? 2_400 : 2 * 1024 * 1024;
+              child.stdout.on("data", (chunk: Buffer) => {
+                responseBytes += chunk.length;
+                if (responseBytes > threshold) child.kill("SIGKILL");
               });
-              const bytes = NodeCrypto.randomBytes(9 * 1024 * 1024 + 3);
-              const expectedSha256 = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
-              const fileName = "resume.bin";
-              const source = NodePath.join(direction === "send" ? local : remote, fileName);
-              const destination = NodePath.join(direction === "send" ? remote : local, fileName);
-              yield* Effect.promise(() => NodeFSP.writeFile(source, bytes));
+            });
+            const bytes = NodeCrypto.randomBytes(9 * 1024 * 1024 + 3);
+            const expectedSha256 = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+            const fileName = "resume.bin";
+            const source = NodePath.join(direction === "send" ? local : remote, fileName);
+            const destination = NodePath.join(direction === "send" ? remote : local, fileName);
+            yield* Effect.promise(() => NodeFSP.writeFile(source, bytes));
 
-              const threadId = ThreadId.make("thread:sftp-restart");
-              const caller = { ...liveThreadShell(threadId), worktreePath: workspaceRoot };
-              const tools = McpToolAccess.HandlersLayer.layer(FileExchangeHandlers.layer).pipe(
-                Layer.provideMerge(
-                  Layer.mergeAll(
-                    layer,
-                    Layer.succeed(McpInvocationContext.McpInvocationContext, {
-                      environmentId: EnvironmentId.make("environment:sftp-restart"),
-                      requestNamespace: "provider:sftp-restart",
-                      thread: {
-                        threadId,
-                        providerSessionId: "provider:sftp-restart",
-                        providerInstanceId: ProviderInstanceId.make("codex"),
-                      },
-                      client: undefined,
-                      capabilities: new Set(["orchestration" as const]),
-                      issuedAt: 0,
-                    }),
-                    Layer.mock(ThreadManagement.ThreadManagementService)({
-                      getThreadShell: () => Effect.succeed(caller),
-                    }),
-                    Layer.mock(Project.ProjectService)({
-                      getById: () =>
-                        Effect.succeedSome({
-                          id: caller.projectId,
-                          workspaceRoot,
-                        } as ProjectRecord),
-                    }),
-                  ),
+            const threadId = ThreadId.make("thread:sftp-restart");
+            const caller = { ...liveThreadShell(threadId), worktreePath: workspaceRoot };
+            const messageId = MessageId.make("message:sftp-restart");
+            const request: OrchestrationV2ConversationMessage = {
+              id: messageId,
+              threadId,
+              text:
+                direction === "send"
+                  ? `Send ${fileName} to fixture-device.`
+                  : `Receive ${fileName} from fixture-device.`,
+              role: "user",
+              createdBy: "user",
+              creationSource: "web",
+              clientOrigin: { clientAlias: "authenticated-device", surface: "desktop" },
+              runId: caller.activeRunId,
+              nodeId: null,
+              streaming: false,
+              attachments: [],
+              createdAt: caller.createdAt,
+              updatedAt: caller.updatedAt,
+            };
+            const run = {
+              id: caller.activeRunId!,
+              providerInstanceId: caller.providerInstanceId,
+              status: "running",
+              userMessageId: messageId,
+            } as OrchestrationV2Run;
+            const tools = McpToolAccess.HandlersLayer.layer(FileExchangeHandlers.layer).pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  layer,
+                  Layer.succeed(McpInvocationContext.McpInvocationContext, {
+                    environmentId: EnvironmentId.make("environment:sftp-restart"),
+                    requestNamespace: "provider:sftp-restart",
+                    thread: {
+                      threadId,
+                      providerSessionId: "provider:sftp-restart",
+                      providerInstanceId: ProviderInstanceId.make("codex"),
+                    },
+                    client: undefined,
+                    capabilities: new Set(["orchestration" as const]),
+                    issuedAt: 0,
+                  }),
+                  Layer.mock(ThreadManagement.ThreadManagementService)({
+                    getThreadShell: () => Effect.succeed(caller),
+                    getThreadRecords: () =>
+                      Effect.succeed({ ...idleThreadProjection(caller), runs: [run] }),
+                    getMessagesById: () => Effect.succeed(new Map([[messageId, request]])),
+                  }),
+                  Layer.mock(Project.ProjectService)({
+                    getById: () =>
+                      Effect.succeedSome({
+                        id: caller.projectId,
+                        workspaceRoot,
+                      } as ProjectRecord),
+                  }),
                 ),
-              );
-              const receipt = yield* Effect.gen(function* () {
-                const toolkit = yield* FileExchangeToolkit;
-                const responses = yield* toolkit
-                  .handle(
-                    direction === "send" ? "t3_file_exchange_send" : "t3_file_exchange_receive",
-                    { deviceId: "fixture-device", expectedSha256, localName: fileName },
-                  )
-                  .pipe(Stream.unwrap, Stream.runCollect);
-                return responses.at(-1)?.result;
-              }).pipe(Effect.provide(tools));
+              ),
+            );
+            const receipt = yield* Effect.gen(function* () {
+              const toolkit = yield* FileExchangeToolkit;
+              const responses = yield* toolkit
+                .handle(
+                  direction === "send" ? "t3_file_exchange_send" : "t3_file_exchange_receive",
+                  { deviceId: "fixture-device", expectedSha256, localName: fileName },
+                )
+                .pipe(Stream.unwrap, Stream.runCollect);
+              return responses.at(-1)?.result;
+            }).pipe(Effect.provide(tools));
 
-              const confirmedOffsets = offsets.mock.calls.map((args) =>
-                direction === "send" ? Number(args[1]) : Number(args[2]),
-              );
-              expect(sessions).toBe(2);
-              expect(confirmedOffsets[0]).toBe(0);
-              expect(confirmedOffsets[1]).toBeGreaterThan(0);
-              expect(receipt).toMatchObject({ sizeBytes: bytes.length, sha256: expectedSha256 });
-              expect(
-                (yield* Effect.promise(() => NodeFSP.readFile(destination))).equals(bytes),
-              ).toBe(true);
-              expect(yield* Effect.promise(() => NodeFSP.readdir(local))).toEqual([fileName]);
-              expect(yield* Effect.promise(() => NodeFSP.readdir(remote))).toEqual([fileName]);
-            }),
-          ),
-      );
-    }
+            const confirmedOffsets = offsets.mock.calls.map((args) =>
+              direction === "send" ? Number(args[1]) : Number(args[2]),
+            );
+            expect(sessions).toBe(2);
+            expect(confirmedOffsets[0]).toBe(0);
+            expect(confirmedOffsets[1]).toBeGreaterThan(0);
+            expect(receipt).toMatchObject({ sizeBytes: bytes.length, sha256: expectedSha256 });
+            expect((yield* Effect.promise(() => NodeFSP.readFile(destination))).equals(bytes)).toBe(
+              true,
+            );
+            expect(yield* Effect.promise(() => NodeFSP.readdir(local))).toEqual([fileName]);
+            expect(yield* Effect.promise(() => NodeFSP.readdir(remote))).toEqual([fileName]);
+          }),
+        ),
+    );
 
     it.live("moves a verified file in both directions and leaves it on destination failure", () =>
       Effect.scoped(

@@ -16,19 +16,25 @@ import {
   type FileHandoffInboxTransfer,
   type FileHandoffRequest,
   type FileHandoffStart,
+  type FileHandoffUrlDownload,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import * as AssetSigner from "../assets/AssetSigner.ts";
+import { externalDownloadMaxBytes } from "../assets/downloadNetworkPolicy.ts";
 import type { OpenMediaFile } from "../assets/MediaFile.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { forkParked } from "../serverActivation.ts";
 import {
   activeDirectHandoff,
   allowsDirectHandoff,
@@ -43,6 +49,7 @@ import {
   indexedFileHandoffs,
   removeFromFileHandoffInbox,
 } from "./FileHandoffInbox.ts";
+import { fetchRemoteFile, remoteFileName, remoteFileUrl } from "./RemoteFileDownload.ts";
 
 const MAX_INBOX_RESULTS = 100;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -65,9 +72,12 @@ interface HandoffRecord {
   readonly sha256: string | null;
   readonly disposition?: "saved" | "cancelled";
   readonly serverStaged?: true;
+  readonly sourceUrl?: string;
+  readonly urlFailure?: string;
   readonly autoReceive?: true;
   readonly directNegotiated?: true;
   readonly savedPath?: string;
+  readonly installRequested?: true;
   readonly installation?: FileHandoffInstallation;
   readonly requesterAlias?: string;
   readonly sourceOrdinal?: number;
@@ -214,10 +224,7 @@ const authorizedClients = Effect.gen(function* () {
     .pipe(Effect.mapError(() => failure("当前无法读取已配对设备。")));
 });
 
-let nextSweepAt = 0;
 async function sweepExpired(root: string, now: number) {
-  if (now < nextSweepAt) return;
-  nextSweepAt = now + 15 * 60 * 1000;
   const keys = await NodeFSP.readdir(root).catch((cause) => {
     if (isMissing(cause)) return [];
     throw cause;
@@ -234,13 +241,31 @@ async function sweepExpired(root: string, now: number) {
         if (record.serverStaged && record.autoReceive) {
           await removeFromFileHandoffInbox(root, record.recipient, key, record.id);
         }
-        if (record.expiresAt <= now) await NodeFSP.rm(marker, { force: true });
+        if (record.expiresAt <= now) {
+          await NodeFSP.rm(marker, { force: true });
+          closeDirectHandoff(marker);
+        }
       } finally {
         activeWrites.delete(marker);
       }
     }
   }
 }
+
+export const sweepFileHandoffs = Effect.fn("FileHandoff.sweep")(function* () {
+  const root = yield* configuration;
+  const now = yield* Clock.currentTimeMillis;
+  yield* storage(() => sweepExpired(root, now));
+});
+
+export const layerCleanup = Layer.effectDiscard(
+  forkParked(
+    sweepFileHandoffs().pipe(
+      Effect.catch((cause) => Effect.logWarning("Failed to clean up file handoffs.", { cause })),
+      Effect.repeat(Schedule.spaced("15 minutes")),
+    ),
+  ),
+);
 
 export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
   input: FileHandoffStart,
@@ -276,7 +301,6 @@ export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
     activeWrites.add(marker);
     try {
       await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
-      await sweepExpired(root, now);
       const existing = await readRecord(directory, input.id);
       if (existing) {
         if (
@@ -340,6 +364,7 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
   readonly sourceFile?: OpenMediaFile;
   readonly autoReceive?: true;
   readonly expectedSourceSha256?: string;
+  readonly installRequested?: true;
 }) {
   const name = Array.from(input.name.replace(/[\\/\x00-\x1f\x7f]/gu, "_").trim())
     .slice(0, 240)
@@ -358,6 +383,14 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
   ) {
     return yield* failure("接收设备的授权已失效，请重新选择。");
   }
+  if (
+    input.installRequested &&
+    (!name.toLowerCase().endsWith(".apk") ||
+      recipient.client.browser !== undefined ||
+      recipient.client.os?.toLowerCase() !== "android")
+  ) {
+    return yield* failure("只有发送到 Android 客户端的 APK 可以请求安装确认。");
+  }
   const settings = yield* (yield* ServerSettingsService).getSettings.pipe(
     Effect.mapError(() => failure("无法读取附件大小限制。")),
   );
@@ -372,7 +405,6 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
     const staging = NodePath.join(directory, `${input.id}.stage`);
     try {
       await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
-      await sweepExpired(root, now);
       const existing = await readRecord(directory, input.id);
       if (existing) {
         if (
@@ -460,6 +492,7 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
         sha256,
         serverStaged: true,
         ...(input.autoReceive === true ? { autoReceive: true } : {}),
+        ...(input.installRequested === true ? { installRequested: true } : {}),
       };
       // 收件箱查阅时核对原记录，因此重启前仅写入的索引条目不会变成待收文件。
       if (record.autoReceive) {
@@ -479,14 +512,170 @@ export const stageThreadFileHandoff = Effect.fn("FileHandoff.stageThreadFile")(f
   });
 });
 
+export const stageThreadUrlDownload = Effect.fn("FileHandoff.stageThreadUrlDownload")(
+  function* (input: {
+    readonly threadId: ThreadId;
+    readonly id: string;
+    readonly requester: AuthSessionId;
+    readonly requesterAlias: string;
+    readonly sourceOrdinal: number;
+    readonly recipient: AuthSessionId;
+    readonly sourceUrl: string;
+  }) {
+    if (!UUID_PATTERN.test(input.id)) return yield* failure("文件传输编号无效。");
+    const url = yield* Effect.try({
+      try: () => remoteFileUrl(input.sourceUrl),
+      catch: (error) => (isHandoffError(error) ? error : failure("下载网址格式无效。")),
+    });
+    const sessions = yield* authorizedClients;
+    const sender = sessions.find((session) => session.sessionId === input.requester);
+    const recipient = sessions.find((session) => session.sessionId === input.recipient);
+    if (
+      !sender ||
+      !recipient ||
+      !eligible(sender, AuthOrchestrationOperateScope) ||
+      !eligible(recipient)
+    )
+      return yield* failure("接收设备的授权已失效，请重新选择。");
+
+    const now = yield* Clock.currentTimeMillis;
+    const root = yield* configuration;
+    const directory = transferDirectory(root, input.threadId);
+    return yield* storage(async () => {
+      const marker = recordPath(directory, input.id);
+      if (activeWrites.has(marker)) throw failure("该文件正在准备，请稍后查询。");
+      activeWrites.add(marker);
+      try {
+        await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
+        const existing = await readRecord(directory, input.id);
+        if (existing) {
+          if (existing.sourceUrl !== url.href || existing.requesterAlias !== input.requesterAlias)
+            throw failure("文件传输资料发生变化。");
+          if (!existing.disposition && existing.expiresAt > now) {
+            await indexFileHandoff(root, existing.recipient, NodePath.basename(directory), {
+              threadId: input.threadId,
+              id: existing.id,
+              expiresAt: existing.expiresAt,
+            });
+          }
+          return threadFileHandoffStatus(existing);
+        }
+        const records = await readRecords(directory);
+        if (
+          records.filter((entry) => entry.expiresAt > now && !entry.disposition).length >=
+          MAX_TRANSFERS_PER_THREAD
+        ) {
+          throw failure("此会话的文件传输记录已满。");
+        }
+        const record: HandoffRecord = {
+          id: input.id,
+          sender: sender.sessionId,
+          recipient: recipient.sessionId,
+          senderLabel: label(sender),
+          recipientLabel: label(recipient),
+          requesterAlias: input.requesterAlias,
+          sourceOrdinal: input.sourceOrdinal,
+          sourceUrl: url.href,
+          name: remoteFileName(url),
+          sizeBytes: 0,
+          expectedSha256: "",
+          expiresAt: now + RETENTION_MS,
+          sha256: null,
+          serverStaged: true,
+          autoReceive: true,
+          deliveryRevision: NodeCrypto.randomUUID(),
+        };
+        await indexFileHandoff(root, record.recipient, NodePath.basename(directory), {
+          threadId: input.threadId,
+          id: record.id,
+          expiresAt: record.expiresAt,
+        });
+        await writeRecord(directory, record);
+        return threadFileHandoffStatus(record);
+      } finally {
+        activeWrites.delete(marker);
+      }
+    });
+  },
+);
+
+const approveUrlDownload = Effect.fn("FileHandoff.approveUrlDownload")(function* (
+  directory: string,
+  id: string,
+  sessionId: AuthSessionId,
+  now: number,
+) {
+  const settings = yield* (yield* ServerSettingsService).getSettings.pipe(
+    Effect.mapError(() => failure("无法读取文件大小限制。")),
+  );
+  const externalLimit = yield* Config.String("T3CODE_EXTERNAL_DOWNLOAD_MAX_MIB").pipe(
+    Config.withDefault(""),
+    Effect.orElseSucceed(() => ""),
+  );
+  const maxBytes = Math.min(
+    settings.attachmentMaxFileSizeMiB * 1024 * 1024,
+    Number(externalDownloadMaxBytes(externalLimit)),
+  );
+  return yield* Effect.tryPromise({
+    try: async (signal) => {
+      const marker = recordPath(directory, id);
+      if (activeWrites.has(marker)) throw failure("文件正在下载，请稍后重试。");
+      activeWrites.add(marker);
+      const staging = NodePath.join(directory, `${id}.stage`);
+      try {
+        const record = await readRecord(directory, id);
+        if (
+          !record?.sourceUrl ||
+          record.recipient !== sessionId ||
+          record.disposition ||
+          record.expiresAt <= now
+        ) {
+          throw failure("该下载请求已过期或不属于当前设备。");
+        }
+        if (record.sha256) return record;
+        await NodeFSP.rm(staging, { force: true });
+        try {
+          const file = await fetchRemoteFile(record.sourceUrl, staging, maxBytes, signal);
+          signal.throwIfAborted();
+          const { urlFailure: _previousFailure, ...pending } = record;
+          const next: HandoffRecord = { ...pending, ...file, expectedSha256: file.sha256 };
+          await NodeFSP.rename(staging, contentsPath(directory, id));
+          await writeRecord(directory, next);
+          return next;
+        } catch (cause) {
+          const error = isHandoffError(cause)
+            ? cause
+            : failure("无法下载来源文件，请检查网址后重试。");
+          if (!signal.aborted) {
+            await NodeFSP.rm(contentsPath(directory, id), { force: true });
+            await writeRecord(directory, { ...record, urlFailure: error.message });
+          }
+          throw error;
+        }
+      } finally {
+        try {
+          await NodeFSP.rm(staging, { force: true });
+        } finally {
+          activeWrites.delete(marker);
+        }
+      }
+    },
+    catch: (error) =>
+      isHandoffError(error) ? error : failure("无法下载来源文件，请检查网址后重试。"),
+  });
+});
+
 function threadFileHandoffStatus(record: HandoffRecord) {
   return {
     id: record.id,
     name: record.name,
     recipientLabel: record.recipientLabel,
     status: record.disposition ?? ("awaiting_save" as const),
+    ...(record.sourceUrl === undefined ? {} : { urlDownload: true as const }),
+    ...(!record.disposition && record.urlFailure ? { urlFailure: record.urlFailure } : {}),
     ...(record.claimed && !record.disposition ? { claimed: true as const } : {}),
     ...(record.savedPath === undefined ? {} : { savedPath: record.savedPath }),
+    ...(record.installRequested ? { installRequested: true as const } : {}),
     ...(record.installation === undefined ? {} : { installation: record.installation }),
   };
 }
@@ -606,9 +795,11 @@ export const manageThreadFileHandoff = Effect.fn("FileHandoff.manageThreadFile")
         await writeRecord(directory, unchanged);
         return threadFileHandoffStatus(unchanged);
       }
+      // 改发只授权传输文件，安装意图属于原命令指定的接收设备。
+      const { installRequested: _installRequested, ...redirectedRecord } = record;
       const next: HandoffRecord = recipient
         ? {
-            ...record,
+            ...redirectedRecord,
             management,
             recipient: recipient.sessionId,
             recipientLabel: label(recipient),
@@ -647,9 +838,10 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
     if (!session.scopes.includes(AuthOrchestrationReadScope)) {
       return yield* failure("当前设备没有读取收件箱的权限。");
     }
-    const transfers = yield* storage(async () => {
+    const inbox = yield* storage(async () => {
       const candidates = await indexedFileHandoffs(root, session.sessionId, now);
       const matches: FileHandoffInboxTransfer[] = [];
+      const urlDownloads: FileHandoffUrlDownload[] = [];
       for (const { threadId, id } of candidates) {
         const record = await readRecord(transferDirectory(root, threadId), id);
         if (
@@ -657,10 +849,27 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
           !record.autoReceive ||
           record.disposition ||
           record.recipient !== session.sessionId ||
-          record.expiresAt <= now ||
-          record.sha256 === null
+          record.expiresAt <= now
         )
           continue;
+        if (record.sourceUrl) {
+          if (urlDownloads.length < MAX_INBOX_RESULTS) {
+            urlDownloads.push({
+              threadId,
+              id,
+              name: record.name,
+              sourceUrl: record.sourceUrl,
+              ...(record.urlFailure ? { failure: record.urlFailure } : {}),
+              senderLabel: record.senderLabel,
+              expiresAt: record.expiresAt,
+              ...(record.sha256
+                ? { ready: { sizeBytes: record.sizeBytes, sha256: record.sha256 } }
+                : {}),
+            });
+          }
+          continue;
+        }
+        if (record.sha256 === null || matches.length >= MAX_INBOX_RESULTS) continue;
         matches.push({
           threadId,
           id,
@@ -671,20 +880,19 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
           sha256: record.sha256,
           autoReceive: true,
         });
-        if (matches.length >= MAX_INBOX_RESULTS) break;
       }
-      return matches;
+      return {
+        transfers: matches,
+        ...(urlDownloads.length ? { urlDownloads } : {}),
+      };
     });
-    return { _tag: "inbox", transfers } satisfies FileHandoffReply;
+    return { _tag: "inbox", ...inbox } satisfies FileHandoffReply;
   }
 
   const sessions = yield* authorizedClients;
   const directory = transferDirectory(root, input.threadId);
   if (input._tag === "list") {
-    const records = yield* storage(async () => {
-      await sweepExpired(root, now);
-      return readRecords(directory);
-    });
+    const records = yield* storage(() => readRecords(directory));
     return {
       _tag: "list",
       transfers: records
@@ -695,6 +903,7 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
               (entry.recipient === session.sessionId &&
                 entry.disposition !== "cancelled" &&
                 (entry.sha256 !== null ||
+                  entry.sourceUrl !== undefined ||
                   activeDirectHandoff(recordPath(directory, entry.id), now) !== undefined))),
         )
         .sort((left, right) => right.expiresAt - left.expiresAt)
@@ -711,9 +920,12 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
             disposition,
             expectedSha256,
             serverStaged,
+            sourceUrl,
+            urlFailure,
             autoReceive,
             recipient,
             savedPath,
+            installRequested,
             installation,
           }) => ({
             id,
@@ -725,10 +937,13 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
             expiresAt,
             outgoing:
               sender === session.sessionId && (!serverStaged || recipient !== session.sessionId),
-            ...(serverStaged && autoReceive && recipient === session.sessionId
+            ...(sourceUrl === undefined ? {} : { urlDownload: true as const }),
+            ...(!disposition && urlFailure ? { urlFailure } : {}),
+            ...(serverStaged && autoReceive && !sourceUrl && recipient === session.sessionId
               ? { autoReceive: true as const }
               : {}),
             ...(savedPath === undefined ? {} : { savedPath }),
+            ...(installRequested ? { installRequested } : {}),
             ...(installation === undefined ? {} : { installation }),
             ...(disposition === undefined ? {} : { disposition }),
             ...(!sha256 && activeDirectHandoff(recordPath(directory, id), now)
@@ -797,10 +1012,12 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
           record.expiresAt <= now ||
           !receiver ||
           !eligible(receiver) ||
+          record.sourceUrl !== undefined ||
           record.recipient !== session.sessionId ||
           record.disposition !== "saved" ||
           record.sha256 !== input.sha256 ||
-          !record.name.toLowerCase().endsWith(".apk")
+          !record.name.toLowerCase().endsWith(".apk") ||
+          (input.installation.status === "failed" && !record.installRequested)
         ) {
           throw failure("只有保存并校验此 APK 的接收设备可以上报安装结果。");
         }
@@ -835,12 +1052,19 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
         const record = await readRecord(directory, input.id);
         if (!record || record.expiresAt <= now) throw failure("该文件传输已过期。");
         if (input._tag === "cancel") {
-          if (record.serverStaged && record.claimed) {
+          if (record.serverStaged && record.claimed && !record.sourceUrl) {
             throw failure("接收设备已开始领取，等待实际保存回执。");
           }
           if (
-            !session.scopes.includes(AuthOrchestrationOperateScope) ||
-            record.sender !== session.sessionId
+            !(
+              session.scopes.includes(AuthOrchestrationOperateScope) &&
+              record.sender === session.sessionId
+            ) &&
+            !(
+              record.sourceUrl &&
+              record.recipient === session.sessionId &&
+              session.scopes.includes(AuthOrchestrationReadScope)
+            )
           ) {
             throw failure("只有发送设备可以取消传输。");
           }
@@ -885,7 +1109,12 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
     return { _tag: "finished", disposition } satisfies FileHandoffReply;
   }
 
-  const record = yield* storage(() => readRecord(directory, input.id));
+  const receiver = sessions.find((device) => device.sessionId === session.sessionId);
+  if (!receiver || !eligible(receiver)) return yield* failure("接收设备的授权已失效，请重新选择。");
+  const record =
+    input._tag === "approveUrl"
+      ? yield* approveUrlDownload(directory, input.id, session.sessionId, now)
+      : yield* storage(() => readRecord(directory, input.id));
   if (
     !record ||
     record.recipient !== session.sessionId ||

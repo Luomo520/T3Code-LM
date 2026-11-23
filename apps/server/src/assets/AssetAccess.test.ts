@@ -36,6 +36,7 @@ import { vi } from "vite-plus/test";
 import * as AssetSigner from "./AssetSigner.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
+import { archiveCapture } from "../companion/captureArchive.ts";
 import { makeFakeWslHost } from "../testUtils/fakeWsl.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
@@ -136,6 +137,46 @@ const layerTest = Layer.mergeAll(
 ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 describe("AssetAccess", () => {
+  it.effect.each(["avi", "mp4"] as const)(
+    "renews a thread %s recording after the original link and transient copy expire",
+    (extension) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { stateDir } = yield* ServerConfig.ServerConfig;
+        const folder = path.join(stateDir, "windows-companion", "screenshots");
+        const taskId = "a0000000-0000-4000-a000-000000000000";
+        const threadId = ThreadId.make("recording-owner");
+        const original = path.join(folder, `${taskId}.${extension}`);
+        yield* fs.makeDirectory(folder, { recursive: true });
+        yield* fs.writeFileString(original, "original recording bytes");
+        const archive = yield* archiveCapture(threadId, taskId, original, extension);
+        expect(yield* archiveCapture(threadId, taskId, original, extension)).toBe(archive);
+        const resource = { _tag: "companion-recording", threadId, taskId } as const;
+        const initial = yield* issueAssetUrl({ resource });
+        yield* fs.remove(original);
+        yield* TestClock.adjust("25 hours");
+        const renewed = yield* issueAssetUrl({ resource });
+        expect(renewed.expiresAt).toBeGreaterThan(initial.expiresAt);
+        expect(renewed.relativeUrl).not.toBe(initial.relativeUrl);
+        const resolveUrl = (url: string) => {
+          const [token = "", fileName = ""] = url.slice(ASSET_ROUTE_PREFIX.length + 1).split("/");
+          return resolveAsset(token, fileName).pipe(Effect.scoped);
+        };
+        expect(yield* resolveUrl(initial.relativeUrl)).toBeNull();
+        expect(yield* resolveUrl(renewed.relativeUrl)).toMatchObject({
+          kind: "file",
+          path: archive,
+        });
+        expect(yield* fs.readFileString(archive)).toBe("original recording bytes");
+        expect(
+          yield* issueAssetUrl({
+            resource: { ...resource, threadId: ThreadId.make("other-thread") },
+          }).pipe(Effect.flip),
+        ).toMatchObject({ _tag: "AssetWorkspaceAssetNotFoundError" });
+      }).pipe(Effect.provide(layerTest)),
+  );
+
   it.live(
     "checks the whole download before serving HEAD or partial bytes through the real route",
     () =>

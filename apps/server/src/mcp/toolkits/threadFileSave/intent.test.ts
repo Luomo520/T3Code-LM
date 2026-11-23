@@ -4,6 +4,7 @@ import {
   threadFileDestination,
   threadFileManagementIntent,
   threadFileRedirectDestination,
+  threadFileUrlRequest,
 } from "./intent.ts";
 
 describe("会话文件保存请求", () => {
@@ -80,5 +81,31 @@ describe("原话中的目的设备", () => {
     ["从书房电脑查看这份文件", { kind: "unclear" }],
   ])("从 %s 确认接收设备", (message, expected) => {
     expect(threadFileDestination(message)).toEqual(expected);
+  });
+});
+
+describe("会话指定设备下载网址", () => {
+  const url = "https://files.example.org/report.pdf?language=zh";
+  it.each([
+    `请把 ${url} 下载到书房电脑`,
+    `请下载 ${url} 到书房电脑`,
+    `Download ${url} to 书房电脑`,
+  ])("读取明确请求 %s", (text) => {
+    expect(threadFileDestination(threadFileUrlRequest(text, url) ?? "")).toEqual({
+      kind: "named",
+      label: "书房电脑",
+    });
+  });
+
+  it.each([
+    `请确认 ${url} 能否下载到书房电脑`,
+    `请不要把 ${url} 下载到书房电脑`,
+    `上次我说“把 ${url} 下载到书房电脑”`,
+    `把 ${url} 和 https://other.example.org/test.txt 下载到书房电脑`,
+    `把 https://files.example.org/report.pdf 下载到书房电脑`,
+    `把 ${url}&extra=x 下载到书房电脑`,
+    "把网址下载到书房电脑",
+  ])("拒绝含糊或不同来源 %s", (text) => {
+    expect(threadFileUrlRequest(text, url)).toBeUndefined();
   });
 });

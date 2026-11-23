@@ -259,6 +259,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   cancelProviderAuthCallback: (url: string) =>
     ipcRenderer.invoke(IpcChannels.CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
+  pickLocalFileMove: () => ipcRenderer.invoke("desktop:pick-local-file-move", undefined),
+  readLocalFileMove: (input) => ipcRenderer.invoke("desktop:read-local-file-move", input),
+  discardLocalFileMove: (token) => ipcRenderer.invoke("desktop:discard-local-file-move", token),
+  finishLocalFileMove: (input) => ipcRenderer.invoke("desktop:finish-local-file-move", input),
   locateSavedFileHandoff: (input) => ipcRenderer.invoke("desktop:locate-saved-file-handoff", input),
   downloadHandoffFile: (input) => ipcRenderer.invoke("desktop:download-handoff-file", input),
   downloadFile: (input: { url: string; fileName: string }) =>

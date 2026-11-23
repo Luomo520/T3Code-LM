@@ -1,13 +1,21 @@
-import { EnvironmentId, ThreadId, type FileHandoffTransfer } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type FileHandoffTransfer,
+  type FileHandoffUrlDownload,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
+import "~/index.css";
 
 import { render, stubGlobal } from "../../../test/render";
-import { ThreadFileReception, ThreadFileSaveStatus } from "./ThreadFileReception";
+import { readFileReceipt, receiveAgentFile } from "./fileHandoffReception";
+import { FileHandoffInbox, ThreadFileReception, ThreadFileSaveStatus } from "./ThreadFileReception";
 
 const mocks = vi.hoisted(() => ({
   list: [] as FileHandoffTransfer[],
+  urlDownloads: [] as FileHandoffUrlDownload[],
   request: vi.fn(),
   download: vi.fn(),
 }));
@@ -21,10 +29,16 @@ vi.mock(import("~/state/session"), async (original) => ({
 }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({
-    data: { _tag: "list", transfers: mocks.list },
+    data: mocks.urlDownloads.length
+      ? { _tag: "inbox", transfers: [], urlDownloads: mocks.urlDownloads }
+      : { _tag: "list", transfers: mocks.list },
+    dataUpdatedAt: 1,
     refresh: vi.fn(),
     isPending: false,
   }),
+}));
+vi.mock("~/state/environments", () => ({
+  useConnectedEnvironmentIds: () => [EnvironmentId.make("file-receipt-environment")],
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => mocks.request }));
 vi.mock("~/lib/fileDownload", () => ({
@@ -165,4 +179,84 @@ it("shows a cancelled installation and its later verified retry in the original 
     .element(screen.getByText(/dev\.t3\.fixture 1\.0（9223372036854775807）/))
     .toBeVisible();
   await expect.element(screen.getByText(/已取消安装/)).not.toBeInTheDocument();
+});
+
+it("retries an automatic desktop receipt after reconnect without downloading twice", async () => {
+  const download = vi.fn(async () => ({ savedPath: "Downloads/recovered.zip" }));
+  using _bridge = stubGlobal("desktopBridge", { downloadHandoffFile: download });
+  const file = { ...transfer, id: "a0000000-0000-4000-a000-000000000109" };
+  const request = vi.fn(async (input) => {
+    if (input._tag === "receive") {
+      return {
+        _tag: "receive" as const,
+        relativeUrl: "/api/assets/file-handoff/signed",
+        name: file.name,
+        sizeBytes: file.sizeBytes,
+        sha256: file.sha256,
+      };
+    }
+    if (request.mock.calls.length === 2) throw new Error("Disconnected");
+    return { _tag: "finished" as const, disposition: "saved" as const };
+  });
+  const delivery = {
+    ...thread,
+    file,
+    request,
+    httpBaseUrl: "https://thread.test",
+    automatic: true,
+  };
+  const now = 1795500000000;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    await receiveAgentFile(delivery);
+    expect(readFileReceipt(delivery)).toMatchObject({ state: "receipt" });
+    await receiveAgentFile(delivery);
+    expect(request).toHaveBeenCalledTimes(2);
+    clock.mockReturnValue(now + 15_001);
+    await receiveAgentFile(delivery);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(readFileReceipt(delivery)).toMatchObject({
+      state: "saved",
+      savedPath: "Downloads/recovered.zip",
+    });
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it("shows the URL before requesting it and allows its recipient to decline", async () => {
+  using _bridge = stubGlobal("desktopBridge", undefined);
+  const id = "a0000000-0000-4000-a000-000000000119";
+  const sourceUrl = "https://files.example.org/report.txt?language=zh";
+  mocks.urlDownloads = [
+    {
+      threadId: thread.threadId,
+      id,
+      name: "report.txt",
+      sourceUrl,
+      senderLabel: "Studio",
+      expiresAt: 1795500000000,
+    },
+  ];
+  mocks.request.mockClear();
+  mocks.request.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { _tag: "finished", disposition: "cancelled" },
+  });
+  try {
+    await using _screen = await render(<FileHandoffInbox />, { router: false });
+    const dialog = page.getByRole("dialog", { name: "下载到这台设备" });
+    await expect.element(dialog.getByText(sourceUrl)).toBeVisible();
+    await expect.element(dialog.getByText("Studio 请求下载 report.txt")).toBeVisible();
+    expect(mocks.request).not.toHaveBeenCalled();
+    await userEvent.click(dialog.getByRole("button", { name: "取消请求" }));
+    await expect.element(dialog).not.toBeInTheDocument();
+    expect(mocks.request).toHaveBeenCalledExactlyOnceWith({
+      environmentId: thread.environmentId,
+      input: { _tag: "cancel", threadId: thread.threadId, id },
+    });
+  } finally {
+    mocks.urlDownloads = [];
+  }
 });

@@ -3,6 +3,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { issueCompanionFileDownload } from "../../../assets/AssetAccess.ts";
 import { CompanionError, getCompanionStore } from "../../../companion/store.ts";
+import {
+  getAndroidCaptureStore,
+  isAndroidCaptureDevice,
+} from "../../../companion/androidCaptureStore.ts";
+import { archiveCapture } from "../../../companion/captureArchive.ts";
 import { readCompanionTransferFile } from "../../../companion/transferFile.ts";
 import { ServerConfig } from "../../../config.ts";
 import { ServerSettingsService } from "../../../serverSettings.ts";
@@ -43,18 +48,21 @@ const companionCaller = Effect.fn("mcp.companionCaller")(function* (write = fals
   return { threadId: thread.threadId, stateDir };
 });
 
+const perform = <A>(operation: () => A) =>
+  Effect.try({
+    try: operation,
+    catch: (error) =>
+      error instanceof CompanionError
+        ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
+        : unavailable(),
+  });
+
 const operate = <A>(operation: () => A) =>
   Effect.flatMap(ServerSettingsService, (settings) =>
     settings
       .withSettingsSnapshot((current) =>
         current.windowsCompanionEnabled
-          ? Effect.try({
-              try: operation,
-              catch: (error) =>
-                error instanceof CompanionError
-                  ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
-                  : unavailable(),
-            })
+          ? perform(operation)
           : Effect.fail(
               new OrchestratorMcpFailure({
                 code: "capability_denied",
@@ -66,23 +74,25 @@ const operate = <A>(operation: () => A) =>
   );
 
 type CompanionTask = ReturnType<ReturnType<typeof getCompanionStore>["enqueue"]>;
-const taskSummary = ({
-  id,
-  action,
-  status,
-  updatedAt,
-  message,
-  deviceName,
-  stopRequested,
-}: CompanionTask) => ({
-  id,
-  action,
-  status,
-  updatedAt,
-  message,
-  deviceName,
-  ...(stopRequested ? { stopRequested } : {}),
+type AndroidTask = ReturnType<ReturnType<typeof getAndroidCaptureStore>["enqueue"]>;
+const taskSummary = (task: CompanionTask | AndroidTask) => ({
+  id: task.id,
+  action: task.action,
+  status: task.status,
+  updatedAt: task.updatedAt,
+  message: task.message,
+  deviceName: task.deviceName,
+  ...("stopRequested" in task && task.stopRequested ? { stopRequested: task.stopRequested } : {}),
 });
+
+function androidTask(stateDir: string, threadId: string, id: string) {
+  try {
+    return getAndroidCaptureStore(stateDir).result(threadId, id);
+  } catch (error) {
+    if (error instanceof CompanionError && error.status === 404) return null;
+    throw error;
+  }
+}
 
 const screenshotUnavailable = () =>
   new OrchestratorMcpFailure({
@@ -94,11 +104,22 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
   t3_companion_list: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const { stateDir } = yield* companionCaller();
-      const paired = yield* operate(() => getCompanionStore(stateDir).list());
+      const settings = yield* ServerSettingsService;
+      const windowsEnabled = yield* settings.getSettings.pipe(Effect.mapError(unavailable));
+      const android = yield* perform(() => getAndroidCaptureStore(stateDir).list());
+      const windows = windowsEnabled.windowsCompanionEnabled
+        ? yield* operate(() => getCompanionStore(stateDir).list())
+        : [];
       return {
-        devices: paired
-          .filter((device) => input.deviceId === undefined || device.deviceId === input.deviceId)
-          .map(({ deviceId, name, online }) => ({ deviceId, name, online })),
+        devices: [
+          ...android,
+          ...windows.map(({ deviceId, name, online }) => ({
+            deviceId,
+            name,
+            online,
+            platform: "windows" as const,
+          })),
+        ].filter((device) => input.deviceId === undefined || device.deviceId === input.deviceId),
       };
     }),
   ),
@@ -117,6 +138,29 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
         return yield* fail(
           "Capture options apply only to their corresponding screenshot or recording action.",
         );
+      }
+      if (isAndroidCaptureDevice(input.deviceId)) {
+        if (
+          (input.action !== "screenshot" && input.action !== "record-screen") ||
+          input.captureKind !== undefined ||
+          input.text !== undefined ||
+          input.attachmentId !== undefined
+        ) {
+          return yield* fail(
+            "Android supports only a locally confirmed screenshot or recording. The phone user chooses the capture surface.",
+          );
+        }
+        const action = input.action;
+        const task = yield* perform(() =>
+          getAndroidCaptureStore(stateDir).enqueue(
+            threadId,
+            input.deviceId,
+            action,
+            input.clientRequestId,
+            input.durationSeconds ?? 10,
+          ),
+        );
+        return taskSummary(task);
       }
       if (input.action === "screenshot" || input.action === "record-screen") {
         params = {
@@ -163,7 +207,10 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
   t3_companion_cancel: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const { threadId, stateDir } = yield* companionCaller(true);
-      const task = yield* operate(() => getCompanionStore(stateDir).cancel(threadId, input.id));
+      const known = yield* perform(() => androidTask(stateDir, threadId, input.id));
+      const task = known
+        ? yield* perform(() => getAndroidCaptureStore(stateDir).cancel(threadId, input.id))
+        : yield* operate(() => getCompanionStore(stateDir).cancel(threadId, input.id));
       return taskSummary(task);
     }),
   ),
@@ -173,10 +220,21 @@ export const layerResult = McpToolAccess.toLayer(CompanionResultToolkit, {
   t3_companion_result: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const { threadId, stateDir } = yield* companionCaller();
-      const task = yield* operate(() => getCompanionStore(stateDir).result(threadId, input.id));
+      const fromAndroid = yield* perform(() => androidTask(stateDir, threadId, input.id));
+      const task =
+        fromAndroid ??
+        (yield* operate(() => getCompanionStore(stateDir).result(threadId, input.id)));
       const summary = taskSummary(task);
-      if (task.savedFile !== undefined) return { ...summary, savedFile: task.savedFile };
-      if (task.transferredFile !== undefined) {
+      const capture = "capture" in task ? task.capture : undefined;
+      if ("savedFile" in task && task.savedFile !== undefined)
+        return {
+          ...summary,
+          savedFile: task.savedFile,
+          ...(task.windowsInstallation === undefined
+            ? {}
+            : { windowsInstallation: task.windowsInstallation }),
+        };
+      if ("transferredFile" in task && task.transferredFile !== undefined) {
         const source = task.transferredFile;
         const { origin } = yield* McpInvocationContext.McpInvocationContext;
         const download = yield* issueCompanionFileDownload(threadId, source.path, source.name).pipe(
@@ -207,7 +265,11 @@ export const layerResult = McpToolAccess.toLayer(CompanionResultToolkit, {
         task.recordingPath !== undefined
       ) {
         const { origin } = yield* McpInvocationContext.McpInvocationContext;
-        const download = yield* issueCompanionFileDownload(threadId, task.recordingPath).pipe(
+        const source = fromAndroid
+          ? Effect.succeed(task.recordingPath)
+          : archiveCapture(threadId, task.id, task.recordingPath, "avi");
+        const download = yield* source.pipe(
+          Effect.flatMap((source) => issueCompanionFileDownload(threadId, source)),
           Effect.mapError(
             () =>
               new OrchestratorMcpFailure({
@@ -218,7 +280,10 @@ export const layerResult = McpToolAccess.toLayer(CompanionResultToolkit, {
         );
         return {
           ...summary,
-          captureScope: task.captureScope ?? "primary-display",
+          captureScope: fromAndroid
+            ? ("android-screen" as const)
+            : (("captureScope" in task ? task.captureScope : undefined) ?? "primary-display"),
+          ...(capture === undefined ? {} : { capture }),
           recording: {
             url:
               origin === undefined
@@ -241,10 +306,30 @@ export const layerResult = McpToolAccess.toLayer(CompanionResultToolkit, {
       if (bytes.length > COMPANION_MAX_IMAGE_BYTES || width === 0 || height === 0) {
         return yield* screenshotUnavailable();
       }
+      if (!fromAndroid) {
+        yield* archiveCapture(threadId, task.id, task.imagePath, "png").pipe(
+          Effect.mapError(screenshotUnavailable),
+        );
+      }
+      const captureScope = fromAndroid
+        ? "android-screen"
+        : (("captureScope" in task ? task.captureScope : undefined) ?? "primary-display");
+      const label = capture
+        ? captureScope === "window" && capture.label !== "所选窗口"
+          ? `窗口 ${capture.label}`
+          : capture.label
+        : captureScope === "android-screen"
+          ? "Android 所选画面"
+          : captureScope === "window"
+            ? "所选窗口"
+            : captureScope === "display"
+              ? "所选显示器"
+              : "主显示器";
       return {
         ...summary,
-        captureScope: task.captureScope ?? "primary-display",
-        summary: `${task.deviceName} · ${task.captureScope === "window" ? "所选窗口" : task.captureScope === "display" ? "所选显示器" : "主显示器"} · 上报时间 ${task.updatedAt}`,
+        captureScope,
+        ...(capture === undefined ? {} : { capture }),
+        summary: `${task.deviceName} · ${label} · ${capture ? `拍摄时间 ${capture.capturedAt}` : `上报时间 ${task.updatedAt}`}`,
         screenshot: {
           mimeType: "image/png" as const,
           data: Buffer.from(bytes).toString("base64"),

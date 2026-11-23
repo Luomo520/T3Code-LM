@@ -1189,23 +1189,27 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     )
       return yield* unavailableInput();
 
+    const key = deviceInputKey(input.hostId, input.deviceId);
+    const requestedAt = yield* Clock.currentTimeMillis;
     if (input.action === "activate") {
+      const pending = deviceInputQueue.beginActivation(key, sessionId, input, requestedAt);
+      if (!pending)
+        return deviceInputQueue.update(key, sessionId, { ...input, action: "status" }, requestedAt);
       const ready = yield* currentReadiness(input.hostId);
       if (!ready) return yield* unavailableInput();
       const status = yield* readAndroidPhysicalDeviceStatus(ready.run, input.deviceId);
+      const checkedAt = yield* Clock.currentTimeMillis;
+      if (!pending(checkedAt))
+        return deviceInputQueue.update(key, sessionId, { ...input, action: "status" }, checkedAt);
       if (status.connection !== "connected" || status.screen !== "unlocked") {
         return yield* new DeviceHostUnavailableError({
           hostId: input.hostId,
           reason: "无法确认设备处于连接且解锁状态，请在手机上检查后重试。",
         });
       }
+      return deviceInputQueue.update(key, sessionId, input, checkedAt);
     }
-    return deviceInputQueue.update(
-      deviceInputKey(input.hostId, input.deviceId),
-      sessionId,
-      input,
-      yield* Clock.currentTimeMillis,
-    );
+    return deviceInputQueue.update(key, sessionId, input, requestedAt);
   });
 
   const usbBinding: DeviceService["Service"]["usbBinding"] = Effect.fn("DeviceService.usbBinding")(

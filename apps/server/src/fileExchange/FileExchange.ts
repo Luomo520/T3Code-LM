@@ -1,12 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off - 传输需要原生无链接打开、目录句柄和双向进程管道。
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
-import * as Option from "effect/Option";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import {
   exchangeWorkspaceKey,
   isExchangeName,
@@ -28,6 +28,7 @@ import {
 } from "./LocalExchangeDirectory.ts";
 import { openWindowsExchangeDirectory } from "./WindowsExchangeDirectory.ts";
 import { sshConnectionArgs } from "./sshConnection.ts";
+import { makeSshTargetQueue } from "./SshTargetQueue.ts";
 import { sftpChunkBytes, SftpConnectionError, SftpSession } from "./SftpSession.ts";
 
 const transferTimeoutMs = 30 * 60_000;
@@ -479,10 +480,17 @@ async function transfer(
 const make = Effect.fn("FileExchange.make")(function* (
   getTargets: () => ReadonlyArray<ExchangeTarget>,
   startSession: StartSession,
-  platform: NodeJS.Platform = process.platform,
 ) {
+  const platform = yield* HostProcess.Platform;
   const workspaceKey = (path: string) => exchangeWorkspaceKey(path, platform);
-  const concurrentConnections = yield* Semaphore.make(2);
+  const queue = yield* Effect.sync(makeSshTargetQueue);
+  const diagnostics = new Map<
+    string,
+    {
+      readonly result: Awaited<ReturnType<typeof inspectLinuxDevice>>;
+      readonly checkedAt: string;
+    }
+  >();
   const getTarget = (input: Pick<ExchangeInput, "deviceId" | "workspaceRoot">) =>
     getTargets().find(
       (candidate) =>
@@ -493,32 +501,71 @@ const make = Effect.fn("FileExchange.make")(function* (
     execute: (signal: AbortSignal) => Promise<A>,
     failureMessage: string,
   ) =>
-    concurrentConnections
-      .withPermitsIfAvailable(1)(
-        Effect.tryPromise({
-          try: execute,
-          catch: (error) =>
-            Schema.is(FileExchangeError)(error)
-              ? error
-              : new FileExchangeError({ message: failureMessage }),
-        }),
-      )
-      .pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () =>
-              Effect.fail(
-                new FileExchangeError({
-                  message:
-                    "The Linux device service is busy. Retry when another operation has finished.",
-                }),
+    Effect.suspend(() => {
+      let pending: Promise<A> | undefined;
+      return Effect.tryPromise({
+        try: (signal) => (pending = execute(signal)),
+        catch: (error) =>
+          isExchangeError(error) ? error : new FileExchangeError({ message: failureMessage }),
+      }).pipe(
+        // 中断后等待子进程和临时文件清理，再允许同一设备接受下一项。
+        Effect.onInterrupt(() =>
+          pending === undefined
+            ? Effect.void
+            : Effect.promise(() =>
+                pending!.then(
+                  () => undefined,
+                  () => undefined,
+                ),
               ),
-            onSome: Effect.succeed,
-          }),
         ),
       );
+    });
+  const isExchangeError = Schema.is(FileExchangeError);
+  const queueFull = new FileExchangeError({
+    message: "This Linux device has 16 waiting operations.",
+  });
   return {
-    transfer: Effect.fn("FileExchange.transfer")(function* (input: ExchangeInput) {
+    listDevices: Effect.sync(() => {
+      const list = new Map<
+        string,
+        {
+          readonly deviceId: string;
+          readonly sftpAliases: Set<string>;
+          readonly diagnosticAliases: Set<string>;
+        }
+      >();
+      for (const target of getTargets()) {
+        const known = list.get(target.deviceId) ?? {
+          deviceId: target.deviceId,
+          sftpAliases: new Set<string>(),
+          diagnosticAliases: new Set<string>(),
+        };
+        known.sftpAliases.add(target.sshAlias);
+        if (target.diagnosticsSshAlias !== undefined)
+          known.diagnosticAliases.add(target.diagnosticsSshAlias);
+        list.set(target.deviceId, known);
+      }
+      return [...list.values()].map(({ deviceId, sftpAliases, diagnosticAliases }) => {
+        const latest = [...diagnosticAliases]
+          .flatMap((alias) => {
+            const reading = diagnostics.get(alias);
+            return reading === undefined ? [] : [reading];
+          })
+          .sort((left, right) => right.checkedAt.localeCompare(left.checkedAt))[0];
+        return {
+          deviceId,
+          sftpAliases: [...sftpAliases],
+          diagnosticAliases: [...diagnosticAliases],
+          ...queue.status(deviceId),
+          ...(latest === undefined ? {} : { lastDiagnostic: latest }),
+        };
+      });
+    }),
+    transfer: Effect.fn("FileExchange.transfer")(function* <E = never, R = never>(
+      input: ExchangeInput,
+      beforeRun: Effect.Effect<void, E, R> = Effect.void,
+    ) {
       if (
         !(platform === "win32"
           ? isWindowsExchangeName(input.localName)
@@ -541,32 +588,59 @@ const make = Effect.fn("FileExchange.make")(function* (
             "This Linux SFTP device has no exchange directory configured for the calling workspace.",
         });
       }
-      return yield* withConnection(
-        (signal) =>
-          transfer(
-            target,
-            input,
-            startSession,
-            AbortSignal.any([signal, AbortSignal.timeout(transferTimeoutMs)]),
-            platform,
+      return yield* queue.run(
+        target.deviceId,
+        input.direction === "send" ? "sftp-send" : "sftp-receive",
+        beforeRun.pipe(
+          Effect.andThen(
+            withConnection(
+              (signal) =>
+                transfer(
+                  target,
+                  input,
+                  startSession,
+                  AbortSignal.any([signal, AbortSignal.timeout(transferTimeoutMs)]),
+                  platform,
+                ),
+              "File exchange failed. Check that both exchange directories and the SFTP connection are available, and check the destination before retrying.",
+            ),
           ),
-        "File exchange failed. Check that both exchange directories and the SFTP connection are available, and check the destination before retrying.",
+        ),
+        queueFull,
       );
     }),
-    inspect: Effect.fn("FileExchange.inspect")(function* (
+    inspect: Effect.fn("FileExchange.inspect")(function* <E = never, R = never>(
       input: Pick<ExchangeInput, "deviceId" | "workspaceRoot"> & {
         readonly check: LinuxDeviceCheck;
       },
+      beforeRun: Effect.Effect<void, E, R> = Effect.void,
     ) {
-      const alias = getTarget(input)?.diagnosticsSshAlias;
-      if (alias === undefined) {
+      const target = getTarget(input);
+      const alias = target?.diagnosticsSshAlias;
+      if (target === undefined || alias === undefined) {
         return yield* new FileExchangeError({
           message: "This Linux device has no SSH diagnostics configured for the calling workspace.",
         });
       }
-      return yield* withConnection(
-        (signal) => inspectLinuxDevice(alias, input.check, signal),
-        "The Linux device status could not be read. Check the configured diagnostic SSH connection.",
+      return yield* queue.run(
+        target.deviceId,
+        "ssh-diagnostics",
+        beforeRun.pipe(
+          Effect.andThen(
+            withConnection(
+              (signal) => inspectLinuxDevice(alias, input.check, signal),
+              "The Linux device status could not be read. Check the configured diagnostic SSH connection.",
+            ),
+          ),
+          Effect.tap((result) =>
+            DateTime.now.pipe(
+              Effect.map((time) =>
+                diagnostics.set(alias, { result, checkedAt: DateTime.formatIso(time) }),
+              ),
+            ),
+          ),
+        ),
+        queueFull,
       );
     }),
   };

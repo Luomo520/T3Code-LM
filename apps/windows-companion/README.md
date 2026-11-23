@@ -12,6 +12,7 @@
 6. 选择「设备自检」可检查配对连接、刷新并查看实际读到的硬件和网卡资料。设备名称可在受控端或 T3Code-LM 的设备详情修改，按原配对设备同步。
 7. 会话可请求受控端选择本机文件并发回，或在 Windows 保存原会话已附加的文件。受控端显示文件选择或保存窗口，单次最多 5 MiB。接收成功后，原会话记录本机保存路径和 SHA-256。收到受控端发来的文件可在原会话下载。
 8. 会话可读取或填写由当前受控端新开的记事本。填写前，本机显示确切的待写文字并要求确认。编辑区失去前台、无法识别或不支持写入时，操作结束并报告原因。
+   若已安装的 Windows-MCP 在本机提供 HTTP 服务，受控端会通过 `http://127.0.0.1:8000/mcp` 查询 `ControlStatus`。Windows-MCP 报告本机正在操作时，受控端等待本机空闲，最长约 12 秒，原请求到期或前台改变时提前结束。服务未安装、停用或初次查询失败时，受控端仍使用已批准的记事本窗口及 Windows UI Automation 读取或填写。窗口内容只通过原会话的读取和填写结果返回。
 9. 从受控端选择「解除配对」后退出，再从 Windows 的「已安装的应用」卸载。设备也可以在 T3Code-LM 的设备控制界面撤销。
 
 ## 构建
@@ -22,6 +23,6 @@
 .\build.ps1 -MakeNsis 'C:\Path\To\makensis.exe'
 ```
 
-成品位于 `build/T3Code-LM-Companion-0.2.4-1-Windows-x64-Setup.exe`。WinForms 提供原生窗口与通知区域，.NET Framework 提供 HTTPS 和 DPAPI，Win32 提供截图，NSIS 提供按用户安装和卸载。安装程序采用应用版本 0.2.4-1，Windows 文件版本为 0.2.4.1。
+成品位于 `build/T3Code-LM-Companion-0.2.5-1-Windows-x64-Setup.exe`。WinForms 提供原生窗口与通知区域，.NET Framework 提供 HTTPS 和 DPAPI，Win32 提供截图，NSIS 提供按用户安装和卸载。安装程序采用应用版本 0.2.5-1，Windows 文件版本为 0.2.5.1。
 
-`CompanionWindow.cs` 负责界面、配对和本机确认。 `CaptureChoice.cs` 和 `CaptureTarget.cs` 负责本机目标选择、校验和拍摄。 `Transport.cs` 负责服务器协议和配对记录。 `WindowsDesktop.cs` 负责受控窗口。 `Recording.cs` 负责写入本机 MJPEG AVI。
+`CompanionWindow.cs` 负责界面、配对和本机确认。 `CaptureChoice.cs` 和 `CaptureTarget.cs` 负责本机目标选择、校验和拍摄。 `Transport.cs` 负责服务器协议和配对记录。 `WindowsDesktop.cs` 负责受控窗口，`WindowsMcp.cs` 查询本机接管状态。 `Recording.cs` 负责写入本机 MJPEG AVI。

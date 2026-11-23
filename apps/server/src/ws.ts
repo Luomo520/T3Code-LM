@@ -3118,6 +3118,14 @@ export const layerWsRpc = (
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {
             const path = yield* Path.Path;
+            if (input.resource._tag === "companion-recording") {
+              yield* threadManagement.getThreadRecords(input.resource.threadId, []).pipe(
+                Effect.mapError(
+                  () => new AssetWorkspaceContextNotFoundError({ resource: input.resource }),
+                ),
+              );
+              return yield* issueAssetUrl({ resource: input.resource });
+            }
             if (
               input.resource._tag === "attachment" ||
               input.resource._tag === "native-app-icon" ||

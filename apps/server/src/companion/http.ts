@@ -1,5 +1,8 @@
 import {
+  AndroidCaptureInput,
   AuthAccessWriteScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   COMPANION_MAX_IMAGE_BASE64_LENGTH,
   CompanionCheckInput,
   CompanionEnrollInput,
@@ -23,6 +26,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { failEnvironmentInternal, requireEnvironmentScope } from "../auth/http.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { getAndroidCaptureStore } from "./androidCaptureStore.ts";
 import { CompanionError, getCompanionStore } from "./store.ts";
 import { readCompanionTransferFile } from "./transferFile.ts";
 
@@ -172,6 +176,42 @@ export const layer = HttpApiBuilder.group(
     });
 
     return handlers
+      .handleRaw("androidCapture", ({ request }) =>
+        respond(
+          Effect.gen(function* () {
+            const principal = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+            if (
+              principal.method === "browser-session-cookie" ||
+              request.headers.origin !== undefined ||
+              request.headers["sec-fetch-site"] !== undefined
+            ) {
+              return yield* Effect.fail(
+                new CompanionError(403, "Android capture requires a paired native client."),
+              );
+            }
+            const input = yield* readJson(request, MAX_RESULT_BODY_BYTES, AndroidCaptureInput);
+            const deviceId = `android:${principal.sessionId}`;
+            return yield* operate(() => {
+              const captures = getAndroidCaptureStore(stateDir);
+              switch (input._tag) {
+                case "listen":
+                  return captures.listen(deviceId, input.name);
+                case "approve":
+                  return captures.approve(deviceId, input.id);
+                case "status":
+                  return captures.status(deviceId, input.id);
+                case "reject":
+                  captures.reject(deviceId, input.id, input.reason);
+                  break;
+                case "complete":
+                  captures.complete(deviceId, input.id, input.media);
+                  break;
+              }
+              return { _tag: "accepted" as const };
+            });
+          }),
+        ),
+      )
       .handle("pair", () =>
         respond(
           Effect.gen(function* () {
@@ -183,8 +223,10 @@ export const layer = HttpApiBuilder.group(
       .handle("list", () =>
         respond(
           Effect.gen(function* () {
-            yield* requireAdministrator;
-            const devices = yield* operate(() => store().list());
+            const principal = yield* requireAdministrator;
+            const devices = yield* operate(() =>
+              store().list(principal.scopes.has(AuthOrchestrationReadScope)),
+            );
             return { devices };
           }),
         ),
@@ -229,13 +271,10 @@ export const layer = HttpApiBuilder.group(
             yield* requireNativeClient(request);
             yield* requireEnabled;
             const token = yield* authenticateDevice(request);
-            const { name, info, watchRecordingId } = yield* readJson(
-              request,
-              MAX_DEVICE_BODY_BYTES,
-              CompanionPollInput,
-            );
+            const { name, info, watchRecordingId, watchTaskId, recordingReceiptV1 } =
+              yield* readJson(request, MAX_DEVICE_BODY_BYTES, CompanionPollInput);
             return yield* operateWhenEnabled(() =>
-              store().poll(token, name, info, watchRecordingId),
+              store().poll(token, name, info, watchRecordingId, watchTaskId, recordingReceiptV1),
             );
           }),
         ),

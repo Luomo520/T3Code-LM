@@ -5,6 +5,7 @@ import {
   COMPANION_MAX_IMAGE_BYTES,
   type CompanionDevice,
   type CompanionResultInput,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -18,7 +19,12 @@ const PAIRING_TTL = 5 * MINUTE;
 const QUEUED_TTL = 5 * MINUTE;
 const CAPTURE_QUEUED_TTL = 30_000;
 const RUNNING_TTL = 2 * MINUTE;
+const RECORDING_RECEIPT_TTL = DAY;
+const RECORDING_RECEIPT_WAITING =
+  "Windows 录屏回执未及时收到。已保存的录像可在设备重新连接后回传。";
 const ONLINE_TTL = 15_000;
+const CLOSE_WAITING = "已请求正常关闭，正在等待应用退出。如有保存提示，请在 Windows 上处理。";
+const CLOSE_UNCONFIRMED = "已发送正常关闭请求，旧版 Windows 受控端无法确认应用是否退出。";
 const HISTORY_TTL = 2 * DAY;
 const IMAGE_TTL = DAY;
 const MAX_DEVICES = 32;
@@ -66,6 +72,7 @@ interface Task {
   readonly imagePath?: string;
   readonly recordingPath?: string;
   readonly captureScope?: NonNullable<Completion["captureScope"]>;
+  readonly capture?: NonNullable<Completion["capture"]>;
   readonly stopRequested?: true;
   readonly transferredFile?: {
     readonly path: string;
@@ -73,6 +80,7 @@ interface Task {
     readonly sha256: string;
   };
   readonly savedFile?: NonNullable<Completion["savedFile"]>;
+  readonly windowsInstallation?: NonNullable<Completion["windowsInstallation"]>["result"];
 }
 
 interface TaskRow {
@@ -88,8 +96,11 @@ interface TaskRow {
   readonly image_name: string | null;
   readonly result_hash: string | null;
   readonly transfer_receipt: string | null;
+  readonly windows_installation: string | null;
   readonly stop_requested_at: number | null;
+  readonly recording_recover_until: number | null;
   readonly capture_scope: NonNullable<Completion["captureScope"]> | null;
+  readonly capture_metadata: string | null;
 }
 
 interface DeviceRow {
@@ -160,7 +171,7 @@ function decodeRecording(source: string): Buffer {
   return bytes;
 }
 
-function decodePng(source: string): Buffer {
+export function decodePng(source: string): Buffer {
   if (source.length > COMPANION_MAX_IMAGE_BASE64_LENGTH) {
     throw new CompanionError(413, "Screenshot exceeds 5 MiB.");
   }
@@ -286,8 +297,11 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       image_name TEXT,
       result_hash TEXT,
       transfer_receipt TEXT,
+      windows_installation TEXT,
       stop_requested_at INTEGER,
+      recording_recover_until INTEGER,
       capture_scope TEXT,
+      capture_metadata TEXT,
       UNIQUE(thread_id, request_id)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS tasks_by_device ON tasks(device_id, sequence);
@@ -309,10 +323,18 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
 
   function cleanup(time: number): void {
     db.prepare(`
-      UPDATE tasks SET status = 'failed', message = 'The Windows request expired.', updated_at = ?
+      UPDATE tasks SET status = 'failed', message = CASE WHEN action = 'close-window' AND message = ?
+        THEN '等待应用退出超时，尚未确认退出。请在 Windows 上查看应用及其保存提示。'
+        WHEN action = 'record-screen' AND status = 'running' AND recording_recover_until > ?
+        THEN ?
+        ELSE 'The Windows request expired.' END, updated_at = ?
       WHERE (status IN ('queued', 'running') AND expires_at <= ?)
         OR (status = 'queued' AND action IN ('screenshot', 'record-screen') AND updated_at <= ?)
-    `).run(time, time, time - CAPTURE_QUEUED_TTL);
+    `).run(CLOSE_WAITING, time, RECORDING_RECEIPT_WAITING, time, time, time - CAPTURE_QUEUED_TTL);
+    db.prepare(`
+      UPDATE tasks SET message = 'Windows 录屏的回传期限已过。', recording_recover_until = NULL
+      WHERE recording_recover_until <= ? AND status = 'failed' AND message = ?
+    `).run(time, RECORDING_RECEIPT_WAITING);
     if (time < nextCleanup) return;
     db.prepare("DELETE FROM codes WHERE expires_at <= ?").run(time);
     db.prepare(
@@ -345,15 +367,28 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       db.exec("ALTER TABLE devices ADD COLUMN details_updated_at INTEGER");
     }
     const taskColumns = db.prepare("PRAGMA table_info(tasks)").all();
+    if (!taskColumns.some((column) => column.name === "windows_installation")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN windows_installation TEXT");
+    }
     if (!taskColumns.some((column) => column.name === "transfer_receipt")) {
       db.exec("ALTER TABLE tasks ADD COLUMN transfer_receipt TEXT");
     }
     if (!taskColumns.some((column) => column.name === "stop_requested_at")) {
       db.exec("ALTER TABLE tasks ADD COLUMN stop_requested_at INTEGER");
     }
+    if (!taskColumns.some((column) => column.name === "recording_recover_until")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN recording_recover_until INTEGER");
+    }
     if (!taskColumns.some((column) => column.name === "capture_scope")) {
       db.exec("ALTER TABLE tasks ADD COLUMN capture_scope TEXT");
     }
+    if (!taskColumns.some((column) => column.name === "capture_metadata")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN capture_metadata TEXT");
+    }
+    // 旧受控端只确认已发送关闭请求，保留历史回执供同一请求重试。
+    db.prepare(
+      "UPDATE tasks SET status = 'failed', message = ? WHERE action = 'close-window' AND status = 'done' AND message = ?",
+    ).run(CLOSE_UNCONFIRMED, "已发送正常关闭请求。请在 Windows 上处理应用的保存提示。");
   });
 
   function maintenance(time: number): void {
@@ -391,6 +426,9 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       message: task.message,
       deviceName: task.device_name,
       ...(task.capture_scope === null ? {} : { captureScope: task.capture_scope }),
+      ...(task.capture_metadata === null
+        ? {}
+        : { capture: JSON.parse(task.capture_metadata) as NonNullable<Completion["capture"]> }),
       ...(task.status === "running" && task.stop_requested_at !== null
         ? { stopRequested: true }
         : {}),
@@ -412,6 +450,13 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       ...(task.action === "receive-file" && receipt?.path
         ? { savedFile: { path: receipt.path, sha256: receipt.sha256 } }
         : {}),
+      ...(task.windows_installation === null
+        ? {}
+        : {
+            windowsInstallation: JSON.parse(task.windows_installation) as NonNullable<
+              Task["windowsInstallation"]
+            >,
+          }),
     };
   }
 
@@ -428,9 +473,11 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       throw new CompanionError(404, "Windows companion not found.");
     }
     db.prepare(`
-      UPDATE tasks SET status = 'canceled', message = 'The Windows companion was unpaired.', updated_at = ?
-      WHERE device_id = ? AND status IN ('queued', 'running')
-    `).run(now(), deviceId);
+      UPDATE tasks SET status = 'canceled', message = 'The Windows companion was unpaired.',
+        updated_at = ?, recording_recover_until = NULL
+      WHERE device_id = ? AND (status IN ('queued', 'running') OR
+        (status = 'failed' AND message = ? AND recording_recover_until > ?))
+    `).run(now(), deviceId, RECORDING_RECEIPT_WAITING, now());
   }
 
   function count(table: "devices" | "codes" | "tasks"): number {
@@ -499,10 +546,42 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       _name: string,
       info: Strings,
       watchRecordingId?: string,
-    ): { readonly name: string; readonly job: Job | null; readonly stopRequested?: boolean } {
+      watchTaskId?: string,
+      recordingReceiptV1 = false,
+    ): {
+      readonly name: string;
+      readonly job: Job | null;
+      readonly jobActive?: boolean;
+      readonly recordingReceiptState?: "ready" | "reported" | "closed";
+      readonly stopRequested?: boolean;
+    } {
       const device = getDevice(token);
       const time = now();
       maintenance(time);
+      if (watchTaskId !== undefined) {
+        // 执行前复核只读取当前设备已领取的任务，不改变队列或延长时效。
+        const row = db
+          .prepare(`
+            SELECT * FROM tasks WHERE id = ? AND device_id = ?
+          `)
+          .get(watchTaskId, device.id) as TaskRow | undefined;
+        const active = row?.status === "running";
+        const receiptState =
+          row?.action !== "record-screen"
+            ? "closed"
+            : row.result_hash !== null
+              ? "reported"
+              : active || row.message === RECORDING_RECEIPT_WAITING
+                ? "ready"
+                : "closed";
+        return {
+          name: device.name,
+          job: null,
+          jobActive: active,
+          stopRequested: active && row.stop_requested_at !== null,
+          ...(recordingReceiptV1 ? { recordingReceiptState: receiptState } : {}),
+        };
+      }
       if (watchRecordingId !== undefined) {
         const row = db
           .prepare(`
@@ -543,16 +622,25 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         }
         // 已领取但未收到回执的任务在超时后结案，避免重做桌面操作。
         db.prepare(`
-          UPDATE tasks SET status = 'running', message = 'Waiting for the Windows device.',
-          updated_at = ?, expires_at = ?, device_name = ? WHERE id = ?
-        `).run(time, time + RUNNING_TTL, device.name, task.id);
+          UPDATE tasks SET status = 'running', message = 'Claimed by Windows. Waiting for local confirmation or a result.',
+          updated_at = ?, expires_at = ?, device_name = ?, recording_recover_until = ? WHERE id = ?
+        `).run(
+          time,
+          time + RUNNING_TTL,
+          device.name,
+          task.action === "record-screen" && recordingReceiptV1
+            ? time + RECORDING_RECEIPT_TTL
+            : null,
+          task.id,
+        );
         return {
           name: device.name,
           job: {
             id: task.id,
             action: task.action,
             threadId: task.thread_id,
-            params,
+            params:
+              task.action === "close-window" ? { ...params, closeProgressV1: "true" } : params,
           },
         };
       });
@@ -590,7 +678,7 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
 
     complete(token: string, input: Completion): void {
       getDevice(token);
-      if (input.status !== "done" && input.status !== "failed") {
+      if (input.status !== "done" && input.status !== "failed" && input.status !== "running") {
         throw new CompanionError(400, "Invalid Windows companion task status.");
       }
       if (input.message.length > 4096) {
@@ -607,12 +695,115 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
             .prepare("SELECT * FROM tasks WHERE device_id = ? AND id = ?")
             .get(device.id, input.id) as TaskRow | undefined;
           if (task === undefined) throw new CompanionError(404, "Windows request not found.");
+          if (input.windowsInstallation !== undefined) {
+            const { sha256, result } = input.windowsInstallation;
+            const params = JSON.parse(task.params) as Strings;
+            const saved = taskView(task).savedFile;
+            if (
+              task.action !== "receive-file" ||
+              task.status !== "done" ||
+              input.status !== "done" ||
+              saved?.sha256 !== sha256 ||
+              !saved.path.toLowerCase().endsWith(".msi") ||
+              !params.fileName?.toLowerCase().endsWith(".msi") ||
+              input.savedFile !== undefined ||
+              input.file !== undefined ||
+              input.recordingBase64 !== undefined ||
+              input.imageBase64 !== undefined ||
+              input.captureScope !== undefined ||
+              input.capture !== undefined ||
+              input.closeState !== undefined
+            ) {
+              throw new CompanionError(
+                409,
+                "The MSI installation does not match a completed file receipt.",
+              );
+            }
+            const previous = taskView(task).windowsInstallation;
+            if (previous !== undefined && previous.attempt > result.attempt) return;
+            if (previous?.attempt === result.attempt && previous.status !== "opened") {
+              if (JSON.stringify(previous) === JSON.stringify(result)) return;
+              throw new CompanionError(
+                409,
+                "This installation attempt already has a final result.",
+              );
+            }
+            if (previous?.attempt === result.attempt && result.status === "opened") return;
+            if (
+              result.attempt !== (previous?.attempt ?? 0) + 1 &&
+              result.attempt !== previous?.attempt
+            ) {
+              throw new CompanionError(
+                409,
+                "An installation result is missing a previous attempt.",
+              );
+            }
+            if (previous?.status === "opened" && result.attempt !== previous.attempt) {
+              throw new CompanionError(409, "The previous installation attempt is still open.");
+            }
+            const messages = {
+              opened: "文件已保存。Windows 安装器已启动，请在本机继续。",
+              canceled: "文件已保存。Windows 用户取消了安装。",
+              unverified: "文件已保存。Windows 上的安装结果尚未核实。",
+              verified: "文件已保存。Windows 已核实安装产品及实际版本。",
+            } as const;
+            db.prepare(
+              "UPDATE tasks SET windows_installation = ?, message = ?, updated_at = ? WHERE id = ?",
+            ).run(JSON.stringify(result), messages[result.status], time, task.id);
+            return;
+          }
+          if (input.status === "running") {
+            if (
+              task.action !== "close-window" ||
+              input.closeState !== "waiting-for-exit" ||
+              input.captureScope !== undefined ||
+              input.capture !== undefined ||
+              input.file !== undefined ||
+              input.savedFile !== undefined ||
+              input.imageBase64 !== undefined ||
+              input.recordingBase64 !== undefined
+            ) {
+              throw new CompanionError(
+                400,
+                "Only a close-window task may report waiting for exit.",
+              );
+            }
+            if (task.status !== "running") {
+              throw new CompanionError(409, "Windows request is no longer running.");
+            }
+            // 同一进度可以重试，原任务超时和最终回执独立处理。
+            db.prepare(
+              "UPDATE tasks SET message = ?, updated_at = ? WHERE id = ? AND message <> ?",
+            ).run(CLOSE_WAITING, time, task.id, CLOSE_WAITING);
+            return;
+          }
           if (
-            input.captureScope !== undefined &&
+            input.closeState !== undefined &&
+            (task.action !== "close-window" ||
+              input.status !== "done" ||
+              input.closeState !== "exited")
+          ) {
+            throw new CompanionError(400, "Only a completed close-window task may confirm exit.");
+          }
+          if (
+            (input.captureScope !== undefined || input.capture !== undefined) &&
             (input.status !== "done" ||
               (task.action !== "screenshot" && task.action !== "record-screen"))
           ) {
-            throw new CompanionError(400, "Only a completed capture may report its capture scope.");
+            throw new CompanionError(400, "Only a completed capture may report capture metadata.");
+          }
+          let capture: Completion["capture"];
+          if (input.capture !== undefined) {
+            const capturedAt = Date.parse(input.capture.capturedAt);
+            const captureLabel = label(input.capture.label, 120);
+            if (
+              !Number.isFinite(capturedAt) ||
+              timestamp(capturedAt) !== input.capture.capturedAt ||
+              /[\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(captureLabel)
+            ) {
+              throw new CompanionError(400, "Invalid Windows capture metadata.");
+            }
+            capture = { capturedAt: input.capture.capturedAt, label: captureLabel };
           }
           const captureKind = (JSON.parse(task.params) as Strings).captureKind;
           if (
@@ -671,7 +862,14 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
               "The file confirmation does not match the requested transfer.",
             );
           }
-          if (task.status !== "running" && task.result_hash === null) {
+          // 录屏超时会释放队列，仅该设备已领取的原任务可在期限内补回执。
+          const recoveringRecording =
+            task.action === "record-screen" &&
+            task.status === "failed" &&
+            task.message === RECORDING_RECEIPT_WAITING &&
+            task.recording_recover_until !== null &&
+            task.recording_recover_until > time;
+          if (task.status !== "running" && !recoveringRecording && task.result_hash === null) {
             throw new CompanionError(409, "Windows request is no longer running.");
           }
           const recording =
@@ -705,10 +903,12 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
               media === undefined ? null : hash(media),
               ...(receipt === null ? [] : [receipt]),
               ...(input.captureScope === undefined ? [] : [input.captureScope]),
+              ...(input.closeState === undefined ? [] : [input.closeState]),
+              ...(capture === undefined ? [] : [capture]),
             ]),
           );
           if (task.result_hash === resultHash) return;
-          if (task.status !== "running") {
+          if (task.status !== "running" && !recoveringRecording) {
             throw new CompanionError(409, "Windows request already has a different result.");
           }
 
@@ -727,15 +927,20 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
             }
             shouldSweep = true;
           }
+          const unconfirmedClose =
+            task.action === "close-window" &&
+            input.status === "done" &&
+            input.closeState !== "exited";
           db.prepare(`
-            UPDATE tasks SET status = ?, message = ?, image_name = ?, result_hash = ?, transfer_receipt = ?, capture_scope = ?, updated_at = ? WHERE id = ?
+            UPDATE tasks SET status = ?, message = ?, image_name = ?, result_hash = ?, transfer_receipt = ?, capture_scope = ?, capture_metadata = ?, recording_recover_until = NULL, updated_at = ? WHERE id = ?
           `).run(
-            input.status,
-            input.message,
+            unconfirmedClose ? "failed" : input.status,
+            unconfirmedClose ? CLOSE_UNCONFIRMED : input.message,
             imageName,
             resultHash,
             receipt === null ? null : JSON.stringify(receipt),
             input.captureScope ?? null,
+            capture === undefined ? null : JSON.stringify(capture),
             time,
             task.id,
           );
@@ -755,7 +960,7 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       if (shouldSweep) transaction(removeUnreferencedImages);
     },
 
-    list(): readonly CompanionDevice[] {
+    list(includeThreadReferences = false): readonly CompanionDevice[] {
       const time = now();
       maintenance(time);
       const devices = db
@@ -764,7 +969,7 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         )
         .all() as unknown as DeviceRow[];
       const history = db.prepare(`
-        SELECT id, action, status, updated_at,
+        SELECT id, thread_id, action, status, updated_at,
           CASE WHEN action = 'receive-file' AND status = 'done'
             THEN json_extract(transfer_receipt, '$.path') END AS saved_path
         FROM tasks WHERE device_id = ?
@@ -780,10 +985,11 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         recentTasks: (
           history.all(device.id) as unknown as (Pick<
             TaskRow,
-            "id" | "action" | "status" | "updated_at"
+            "id" | "thread_id" | "action" | "status" | "updated_at"
           > & { saved_path: string | null })[]
         ).map((task) => ({
           id: task.id,
+          ...(includeThreadReferences ? { threadId: ThreadId.make(task.thread_id) } : {}),
           action: task.action,
           status: task.status,
           updatedAt: timestamp(task.updated_at),
@@ -883,6 +1089,13 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       maintenance(time);
       return transaction(() => {
         const task = scopedTask(threadId, id);
+        if (task.status === "failed" && task.message === RECORDING_RECEIPT_WAITING) {
+          db.prepare(`
+            UPDATE tasks SET status = 'canceled', message = 'The Windows request was canceled.',
+              updated_at = ?, recording_recover_until = NULL WHERE id = ?
+          `).run(time, id);
+          return taskView(scopedTask(threadId, id));
+        }
         if (!isActive(task.status)) return taskView(task);
         if (task.status === "running") {
           if (task.action !== "record-screen") {

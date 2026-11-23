@@ -3,11 +3,14 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Automation;
 
 internal sealed class WindowsDesktop : IDisposable
 {
     private Process ownedWindow;
+    private IntPtr openedWindowHandle;
     private bool ownsNotepad;
     private readonly string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
@@ -40,7 +43,7 @@ internal sealed class WindowsDesktop : IDisposable
         finally { CloseDesktop(handle); }
     }
 
-    internal string Open(string action)
+    internal async Task<string> Open(string action, CancellationToken cancel)
     {
         RequireDesktop();
         if (ownedWindow != null && !ownedWindow.HasExited)
@@ -58,7 +61,46 @@ internal sealed class WindowsDesktop : IDisposable
         Dispose();
         ownedWindow = next;
         ownsNotepad = action == "open-notepad";
-        return action == "open-notepad" ? "已请求打开记事本。" : "已请求打开 T3Code-LM。";
+        string name = ownsNotepad ? "记事本" : "T3Code-LM";
+        // 启动器可能转交给已运行的桌面实例。仅持有新进程，避免后续关闭用户原有窗口。
+        var elapsed = Stopwatch.StartNew();
+        while (elapsed.Elapsed < TimeSpan.FromSeconds(12))
+        {
+            cancel.ThrowIfCancellationRequested();
+            RequireDesktop();
+            next.Refresh();
+            if (!next.HasExited)
+            {
+                IntPtr window = next.MainWindowHandle;
+                if (IsProcessWindow(window, next))
+                {
+                    openedWindowHandle = window;
+                    return "已打开" + name + "窗口。";
+                }
+            }
+            if (next.HasExited && IsForegroundApplication(path))
+                return name + "的现有窗口已显示。";
+            await Task.Delay(150, cancel);
+        }
+        throw new InvalidOperationException("已请求启动" + name + "，尚未确认窗口已显示。");
+    }
+
+    private static bool IsForegroundApplication(string expectedPath)
+    {
+        uint id;
+        IntPtr window = GetForegroundWindow();
+        if (window == IntPtr.Zero || GetWindowThreadProcessId(window, out id) == 0) return false;
+        try
+        {
+            using (var foreground = Process.GetProcessById((int)id))
+            {
+                var module = foreground.MainModule;
+                return module != null && String.Equals(module.FileName, expectedPath, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        catch (ArgumentException) { return false; }
+        catch (InvalidOperationException) { return false; }
+        catch (System.ComponentModel.Win32Exception) { return false; }
     }
 
     private string FindT3()
@@ -76,21 +118,30 @@ internal sealed class WindowsDesktop : IDisposable
         return null;
     }
 
-    internal string NotepadText(string replacement)
+    internal async Task<string> NotepadText(string replacement, IntPtr approvingWindow, Action verifyRequest,
+        CancellationToken cancel)
     {
         RequireDesktop();
-        if (!ownsNotepad || ownedWindow == null || ownedWindow.HasExited)
+        Process process = ownedWindow;
+        if (!ownsNotepad || process == null || process.HasExited)
             throw new InvalidOperationException("请先通过受控端新开记事本。");
-        ownedWindow.Refresh();
-        IntPtr window = ownedWindow.MainWindowHandle;
-        uint process;
-        if (window == IntPtr.Zero || GetWindowThreadProcessId(window, out process) == 0 ||
-            process != (uint)ownedWindow.Id)
+        IntPtr window = openedWindowHandle;
+        if (!IsProcessWindow(window, process))
             throw new InvalidOperationException("找不到受控端新打开的记事本。");
+        await WindowsMcp.RequireIdleAsync(() =>
+        {
+            verifyRequest();
+            RequireDesktop();
+            if (ownedWindow != process || process.HasExited || !IsProcessWindow(window, process))
+                throw new InvalidOperationException("本次批准的记事本窗口已关闭或更换。");
+            IntPtr foreground = GetForegroundWindow();
+            if (foreground != approvingWindow && foreground != window)
+                throw new InvalidOperationException("前台已切换到其他窗口，本次操作已停止。");
+        }, cancel);
         if (GetForegroundWindow() != window)
         {
             SetForegroundWindow(window);
-            RequireForegroundWindow(window);
+            RequireForegroundWindow(window, process);
         }
         var root = AutomationElement.FromHandle(window);
         var fields = root.FindAll(TreeScope.Descendants, new OrCondition(
@@ -99,7 +150,7 @@ internal sealed class WindowsDesktop : IDisposable
         AutomationElement editor = null;
         foreach (AutomationElement field in fields)
         {
-            if (field.Current.ProcessId != ownedWindow.Id || field.Current.IsOffscreen ||
+            if (field.Current.ProcessId != process.Id || field.Current.IsOffscreen ||
                 !field.Current.IsEnabled) continue;
             object candidate;
             if (!field.TryGetCurrentPattern(TextPattern.Pattern, out candidate) &&
@@ -113,10 +164,10 @@ internal sealed class WindowsDesktop : IDisposable
             object pattern;
             if (!editor.TryGetCurrentPattern(ValuePattern.Pattern, out pattern) || ((ValuePattern)pattern).Current.IsReadOnly)
                 throw new InvalidOperationException("当前记事本编辑区不支持写入。");
-            RequireForegroundWindow(window);
+            RequireForegroundWindow(window, process);
             ((ValuePattern)pattern).SetValue(replacement);
         }
-        RequireForegroundWindow(window);
+        RequireForegroundWindow(window, process);
         object readable;
         string text;
         if (editor.TryGetCurrentPattern(TextPattern.Pattern, out readable))
@@ -124,29 +175,36 @@ internal sealed class WindowsDesktop : IDisposable
         else if (editor.TryGetCurrentPattern(ValuePattern.Pattern, out readable))
             text = ((ValuePattern)readable).Current.Value;
         else throw new InvalidOperationException("无法读回记事本文字。");
-        RequireForegroundWindow(window);
+        RequireForegroundWindow(window, process);
         if (text.Length > 3889)
             throw new InvalidOperationException("记事本文字超过可返回的长度。");
         return replacement == null ? "读回的记事本文字：" + Environment.NewLine + text :
             "已填写并读回记事本文字：" + Environment.NewLine + text;
     }
 
-    private static void RequireForegroundWindow(IntPtr expected)
+    private static bool IsProcessWindow(IntPtr window, Process process)
+    {
+        uint owner;
+        return window != IntPtr.Zero && GetWindowThreadProcessId(window, out owner) != 0 &&
+            owner == (uint)process.Id;
+    }
+
+    private static void RequireForegroundWindow(IntPtr expected, Process process)
     {
         RequireDesktop();
-        if (GetForegroundWindow() != expected)
+        if (!IsProcessWindow(expected, process) || GetForegroundWindow() != expected)
             throw new InvalidOperationException("记事本已失去前台焦点，本次操作已停止。");
     }
 
-    internal string Close()
+    internal Process RequestClose()
     {
         RequireDesktop();
         if (ownedWindow == null || ownedWindow.HasExited)
             throw new InvalidOperationException("没有本受控端创建且仍在运行的进程。");
         ownedWindow.Refresh();
-        if (!ownedWindow.CloseMainWindow())
-            throw new InvalidOperationException("找不到本受控端新启动的窗口。已运行的应用可能复用了现有进程。");
-        return "已发送正常关闭请求。请在 Windows 上处理应用的保存提示。";
+        if (!ownedWindow.CloseMainWindow() && !ownedWindow.HasExited)
+            throw new InvalidOperationException("找不到可关闭的窗口。如果应用已有保存提示，请在 Windows 上处理。");
+        return ownedWindow;
     }
 
     internal static void RequireDesktop()
@@ -159,6 +217,7 @@ internal sealed class WindowsDesktop : IDisposable
         if (ownedWindow == null) return;
         ownedWindow.Dispose();
         ownedWindow = null;
+        openedWindowHandle = IntPtr.Zero;
         ownsNotepad = false;
     }
 }

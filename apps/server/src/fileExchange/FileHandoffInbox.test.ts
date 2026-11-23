@@ -18,7 +18,12 @@ import { AssetSigner } from "../assets/AssetSigner.ts";
 import { EnvironmentAuth, type AuthenticatedSession } from "../auth/EnvironmentAuth.ts";
 import { ServerConfig } from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import { readFileHandoff, stageThreadFileHandoff, startFileHandoff } from "./FileHandoff.ts";
+import {
+  readFileHandoff,
+  stageThreadFileHandoff,
+  startFileHandoff,
+  sweepFileHandoffs,
+} from "./FileHandoff.ts";
 import { indexFileHandoff, indexedFileHandoffs } from "./FileHandoffInbox.ts";
 
 const sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -137,7 +142,15 @@ it.effect("lists only indexed explicit deliveries for the authenticated recipien
     const indexed = yield* Effect.promise(() => indexedFileHandoffs(root, receiver.sessionId, 0));
     expect(indexed).toHaveLength(2);
 
+    const directories = (yield* fs.readDirectory(root))
+      .filter((name) => /^[0-9a-f]{64}$/u.test(name))
+      .map((name) => path.join(root, name));
+    const workingFiles = Effect.forEach(directories, (directory) => fs.readDirectory(directory));
+    expect((yield* workingFiles).flat()).toContain(`${id}.bytes`);
     yield* TestClock.adjust("8 days");
+    yield* sweepFileHandoffs();
+    expect((yield* workingFiles).flat()).toEqual([]);
+    expect(yield* Effect.promise(() => indexedFileHandoffs(root, other.sessionId, 0))).toEqual([]);
     expect(yield* inbox(receiver)).toEqual({ _tag: "inbox", transfers: [] });
     expect(yield* Effect.promise(() => indexedFileHandoffs(root, receiver.sessionId, 0))).toEqual(
       [],

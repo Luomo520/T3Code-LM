@@ -82,7 +82,7 @@ describe("Linux device status", () => {
     ).rejects.toThrow("valid Linux status");
   });
 
-  it.effect("shares the workspace check and connection limit with file exchange", () => {
+  it.effect("serializes diagnostics and SFTP across workspaces while another device runs", () => {
     execFile.mockReset();
     const target = {
       deviceId: "linux-1",
@@ -92,11 +92,18 @@ describe("Linux device status", () => {
       sshAlias: "linux-files",
       diagnosticsSshAlias: "linux-diagnostics",
     };
-    const bothStarted = Promise.withResolvers<void>();
-    const pending: Array<() => void> = [];
-    execFile.mockImplementation((_file, _args, _options, callback) => {
-      pending.push(() => callback?.(null, "120.5 6000.33\n", ""));
-      if (pending.length === 2) bothStarted.resolve();
+    const anotherWorkspace = { ...target, workspaceRoot: "/work/second" };
+    const secondDevice = {
+      ...target,
+      deviceId: "linux-2",
+      diagnosticsSshAlias: "another-diagnostic",
+    };
+    const pending = new Map<string, () => void>();
+    execFile.mockImplementation((_file, args, options, callback) => {
+      const complete = () => callback?.(null, "120.5 6000.33\n", "");
+      pending.set(String(args?.at(-2)), complete);
+      const signal = (options as { signal: AbortSignal }).signal;
+      signal.addEventListener("abort", complete, { once: true });
       return {} as ReturnType<typeof execFile>;
     });
 
@@ -113,23 +120,56 @@ describe("Linux device status", () => {
       ).toMatchObject({ message: expect.stringContaining("for the calling workspace") });
       expect(execFile).not.toHaveBeenCalled();
 
-      const first = yield* Effect.forkScoped(exchange.inspect({ ...target, check: "uptime" }));
-      const second = yield* Effect.forkScoped(exchange.inspect({ ...target, check: "uptime" }));
-      yield* Effect.promise(() => bothStarted.promise);
-      try {
-        const refused = yield* Effect.flip(
-          exchange.transfer({ ...target, direction: "send", localName: "notes.txt" }),
-        );
-        expect(refused.message).toContain("busy");
-      } finally {
-        pending.forEach((complete) => complete());
-      }
+      const first = yield* exchange
+        .inspect({ ...target, check: "uptime" })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const second = yield* exchange
+        .transfer(
+          { ...anotherWorkspace, direction: "send", localName: "notes.txt" },
+          Effect.fail("calling thread lost access"),
+        )
+        .pipe(Effect.flip, Effect.forkScoped({ startImmediately: true }));
+      const independent = yield* exchange
+        .inspect({ ...secondDevice, check: "uptime" })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      expect([...pending.keys()]).toEqual(["linux-diagnostics", "another-diagnostic"]);
+      expect(yield* exchange.listDevices).toMatchObject([
+        {
+          deviceId: target.deviceId,
+          sftpAliases: [target.sshAlias],
+          waiting: 1,
+          active: "ssh-diagnostics",
+        },
+        { deviceId: secondDevice.deviceId, waiting: 0, active: "ssh-diagnostics" },
+      ]);
+      pending.get("another-diagnostic")?.();
       const expected = { check: "uptime", uptimeSeconds: 120 };
+      expect(yield* Fiber.join(independent)).toEqual(expected);
+      pending.get("linux-diagnostics")?.();
       expect(yield* Fiber.join(first)).toEqual(expected);
-      expect(yield* Fiber.join(second)).toEqual(expected);
+      expect(yield* Fiber.join(second)).toBe("calling thread lost access");
+      expect(yield* exchange.listDevices).toMatchObject([
+        {
+          deviceId: target.deviceId,
+          waiting: 0,
+          active: null,
+          lastDiagnostic: { result: expected },
+        },
+        {
+          deviceId: secondDevice.deviceId,
+          waiting: 0,
+          active: null,
+          lastDiagnostic: { result: expected },
+        },
+      ]);
     }).pipe(
       Effect.scoped,
-      Effect.provide(FileExchange.layerForSftpTest([target], "unused-sftp-server")),
+      Effect.provide(
+        FileExchange.layerForSftpTest(
+          [target, anotherWorkspace, secondDevice],
+          "unused-sftp-server",
+        ),
+      ),
     );
   });
 });

@@ -1,4 +1,12 @@
 import { AuthAccessWriteScope, type CompanionDevice, type EnvironmentId } from "@t3tools/contracts";
+import {
+  lookupWindowsCompanionMac,
+  windowsCompanionAvailability,
+  windowsCompanionCapabilities,
+  windowsCompanionNetworkAdapters,
+} from "@t3tools/client-runtime/device/windows-companion";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { Link } from "@tanstack/react-router";
 import { useGT, useLocale } from "gt-react";
 import { useEffect, useId, useRef, useState } from "react";
 
@@ -7,6 +15,7 @@ import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { buildThreadRouteParams } from "~/threadRoutes";
 import {
   windowsCompanionList,
   windowsCompanionPair,
@@ -137,16 +146,70 @@ function CompanionDeviceList({
       ) : devices.data.devices.length === 0 ? (
         <SettingsRow title={gt("No paired Windows devices")} />
       ) : (
-        devices.data.devices.map((device) => (
-          <CompanionDeviceRow
-            key={device.deviceId}
-            environmentId={environmentId}
-            device={device}
-            refresh={devices.refresh}
-          />
-        ))
+        <>
+          <CompanionMacLookup devices={devices.data.devices} />
+          {devices.data.devices.map((device) => (
+            <CompanionDeviceRow
+              key={device.deviceId}
+              environmentId={environmentId}
+              device={device}
+              enabled={enabled}
+              refresh={devices.refresh}
+            />
+          ))}
+        </>
       )}
     </>
+  );
+}
+
+function CompanionMacLookup({ devices }: { readonly devices: readonly CompanionDevice[] }) {
+  const gt = useGT();
+  const inputId = useId();
+  const [address, setAddress] = useState("");
+  const matches = lookupWindowsCompanionMac(devices, address);
+  const match = matches?.length === 1 ? matches[0] : undefined;
+  const result = !address.trim()
+    ? undefined
+    : !matches
+      ? gt("Enter a valid MAC address.")
+      : match
+        ? gt("Reported by {device}. Verify the device using its pairing.", { device: match.name })
+        : matches.length === 0
+          ? gt("No paired device has reported this MAC address.")
+          : gt(
+              "Multiple paired devices have reported this MAC address. Verify the device using its pairing.",
+            );
+
+  return (
+    <SettingsRow
+      title={<label htmlFor={inputId}>{gt("Find a paired device by MAC address")}</label>}
+    >
+      <Input
+        id={inputId}
+        aria-describedby={result ? `${inputId}-result` : undefined}
+        autoCapitalize="none"
+        autoComplete="off"
+        className="mt-2 max-w-64"
+        maxLength={32}
+        placeholder="02:11:22:33:44:55"
+        spellCheck={false}
+        value={address}
+        onChange={(event) => setAddress(event.target.value)}
+      />
+      <p className="mt-1 text-xs text-muted-foreground" id={`${inputId}-result`} role="status">
+        {result}
+      </p>
+      {matches && matches.length > 1 ? (
+        <ul className="text-xs text-muted-foreground">
+          {matches.map((device) => (
+            <li key={device.deviceId}>
+              {device.name} · {device.info.hostname || device.deviceId}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </SettingsRow>
   );
 }
 
@@ -253,10 +316,12 @@ function formatCompanionTime(value: string, locale: string): string {
 function CompanionDeviceRow({
   environmentId,
   device,
+  enabled,
   refresh,
 }: {
   environmentId: EnvironmentId;
   device: CompanionDevice;
+  enabled: boolean;
   refresh: () => void;
 }) {
   const gt = useGT();
@@ -274,6 +339,26 @@ function CompanionDeviceRow({
     done: gt("Completed"),
     failed: gt("Failed"),
     canceled: gt("Canceled"),
+  };
+  const taskActions: Readonly<Record<string, string>> = {
+    screenshot: gt("Screenshot"),
+    "record-screen": gt("Screen recording"),
+    "open-t3": gt("Open T3 Code"),
+    "open-notepad": gt("Open Notepad"),
+    "close-window": gt("Close window"),
+    "send-file": gt("Send files"),
+    "receive-file": gt("Receive files"),
+    "write-notepad": gt("Write to Notepad"),
+    "read-notepad": gt("Read Notepad"),
+  };
+  const availability = windowsCompanionAvailability(device, enabled);
+  const connectionLabel = {
+    disabled: gt("Disabled"),
+    locked: gt("Windows locked"),
+    paused: gt("Paused"),
+    offline: gt("Offline"),
+    unknown: gt("Online"),
+    confirmOnDevice: gt("Online"),
   };
 
   const rename = async () => {
@@ -318,7 +403,7 @@ function CompanionDeviceRow({
       title={<span className="break-all">{device.name}</span>}
       description={
         <>
-          {device.online ? gt("Online") : gt("Offline")}
+          {connectionLabel[availability]}
           {" · "}
           {gt("Last seen {time}", { time: formatCompanionTime(device.lastSeen, locale) })}
         </>
@@ -388,7 +473,7 @@ function CompanionDeviceRow({
         </div>
       }
     >
-      <CompanionDeviceDetails device={device} />
+      <CompanionDeviceDetails device={device} enabled={enabled} />
       <details className="py-2 text-xs text-muted-foreground">
         <summary className="cursor-pointer">{gt("Recent tasks")}</summary>
         {device.recentTasks.length === 0 ? (
@@ -397,20 +482,38 @@ function CompanionDeviceRow({
           <ul className="space-y-1 pt-2">
             {device.recentTasks.map((task) => (
               <li className="break-all" key={task.id}>
-                {task.action} · {taskStatuses[task.status]} ·{" "}
+                {taskActions[task.action] ?? task.action} · {taskStatuses[task.status]} ·{" "}
                 {formatCompanionTime(task.updatedAt, locale)}
                 <div className="select-all font-mono">{task.id}</div>
                 {task.savedPath ? <div className="select-text">{task.savedPath}</div> : null}
+                {task.threadId ? (
+                  <Link
+                    to="/$environmentId/$threadId"
+                    params={buildThreadRouteParams(scopeThreadRef(environmentId, task.threadId))}
+                    className="underline underline-offset-2 hover:text-foreground"
+                  >
+                    {gt("Open original conversation")}
+                  </Link>
+                ) : null}
               </li>
             ))}
           </ul>
         )}
+        <Button className="mt-2" variant="outline" size="sm" onClick={refresh}>
+          {gt("Refresh recent tasks")}
+        </Button>
       </details>
     </SettingsRow>
   );
 }
 
-function CompanionDeviceDetails({ device }: { readonly device: CompanionDevice }) {
+function CompanionDeviceDetails({
+  device,
+  enabled,
+}: {
+  readonly device: CompanionDevice;
+  readonly enabled: boolean;
+}) {
   const gt = useGT();
   const locale = useLocale();
   const details = [
@@ -420,11 +523,35 @@ function CompanionDeviceDetails({ device }: { readonly device: CompanionDevice }
     { key: "cpu", label: gt("Processor"), value: device.info.cpu },
     { key: "gpu", label: gt("Graphics"), value: device.info.gpu },
     { key: "memory", label: gt("Memory"), value: device.info.memory },
-    ...Object.entries(device.info)
-      .filter(([key]) => /^network(?:[1-6])?$/.test(key))
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, value]) => ({ key, label: gt("Network adapter"), value })),
+    ...windowsCompanionNetworkAdapters(device.info).map(([key, value]) => ({
+      key,
+      label: gt("Network adapter"),
+      value,
+    })),
   ].filter(({ value }) => value);
+  const capabilities = windowsCompanionCapabilities(device, enabled);
+  const capabilityLabels = {
+    sendFile: gt("Send files"),
+    receiveFile: gt("Receive files"),
+    screenshot: gt("Screenshot"),
+    screenRecording: gt("Start screen recording"),
+    desktopInput: gt("Open T3 Code or use Notepad"),
+    stopRecording: gt("Stop screen recording"),
+    installApp: gt("Install apps"),
+  };
+  const capabilityReasons = {
+    disabled: gt("Turn on Windows companions in this environment."),
+    offline: gt("Open the companion on this PC and resume receiving requests."),
+    paused: gt("Resume receiving requests on this PC."),
+    inputPaused: gt("Resume remote input from the tray menu on this PC."),
+    locked: gt("Unlock Windows and resume receiving requests on this PC."),
+    unknown: gt("Run the device check on this PC."),
+    confirmOnDevice: gt("Available with confirmation on this PC."),
+    stopLocally: gt("Stop the recording in the companion on this PC."),
+    stopFromConversation: gt("Available from the original conversation or on this PC."),
+    noRecording: gt("Available while a recording is running."),
+    unsupported: gt("This Windows companion cannot install apps."),
+  };
   return (
     <details className="py-2 text-xs text-muted-foreground">
       <summary className="cursor-pointer">{gt("Device details")}</summary>
@@ -433,18 +560,14 @@ function CompanionDeviceDetails({ device }: { readonly device: CompanionDevice }
           time: formatCompanionTime(device.detailsUpdatedAt ?? device.lastSeen, locale),
         })}
       </p>
-      <p className="pt-2">
-        {!device.online
-          ? gt("Open the Windows companion and resume receiving requests.")
-          : device.info.desktopState === "locked"
-            ? gt("Unlock Windows to confirm file transfers, screenshots and recordings.")
-            : device.info.desktopState === "ready"
-              ? gt("File transfers, screenshots and recordings can be confirmed on this PC.")
-              : gt("Check the desktop status on this PC before sending a request.")}
-      </p>
-      {details.filter((field) => field.key.startsWith("network")).length > 1 ? (
-        <p className="pt-2">{gt("These network adapters belong to the same paired PC.")}</p>
-      ) : null}
+      <dl className="grid gap-x-3 gap-y-1 pt-2 sm:grid-cols-[max-content_minmax(0,1fr)]">
+        {(Object.keys(capabilities) as (keyof typeof capabilities)[]).map((key) => (
+          <div key={key} className="contents">
+            <dt className="text-foreground">{capabilityLabels[key]}</dt>
+            <dd>{capabilityReasons[capabilities[key]]}</dd>
+          </div>
+        ))}
+      </dl>
       {details.length > 0 ? (
         <dl className="grid gap-x-3 gap-y-1 pt-2 sm:grid-cols-[max-content_minmax(0,1fr)]">
           {details.map(({ key, label, value }) => (

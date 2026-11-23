@@ -16,8 +16,7 @@ internal static class DeviceInfo
             { "platform", "windows" },
             { "recordingStop", "true" },
             { "captureTargetV1", "true" },
-            { "version", Program.Version },
-            { "processorCount", Environment.ProcessorCount.ToString(CultureInfo.InvariantCulture) }
+            { "version", Program.Version }
         };
 
         try
@@ -40,11 +39,14 @@ internal static class DeviceInfo
         return WithCurrentNetworks(values);
     }
 
-    internal static Dictionary<string, string> WithDesktopState(Dictionary<string, string> details)
+    internal static Dictionary<string, string> WithDesktopState(
+        Dictionary<string, string> details, bool accepting, bool remoteInputPaused = false)
     {
+        string state = !WindowsDesktop.DesktopAvailable() ? "locked" :
+            !accepting ? "paused" : remoteInputPaused ? "input-paused" : "ready";
         return new Dictionary<string, string>(details)
         {
-            { "desktopState", WindowsDesktop.DesktopAvailable() ? "ready" : "locked" }
+            { "desktopState", state }
         };
     }
 
@@ -69,9 +71,10 @@ internal static class DeviceInfo
                     .Select(address => address.ToString());
                 string ips = String.Join(", ", addresses);
                 byte[] addressBytes = adapter.GetPhysicalAddress().GetAddressBytes();
-                var parts = new List<string> { adapter.Description };
+                var parts = new List<string> { adapter.Name };
+                // 把 MAC 放在地址列表前，IP 较多时仍能在字段长度限制内保留 MAC。
+                if (addressBytes.Length == 6) parts.Add("MAC " + BitConverter.ToString(addressBytes));
                 if (!String.IsNullOrEmpty(ips)) parts.Add("IP " + ips);
-                if (addressBytes.Length > 0) parts.Add("MAC " + BitConverter.ToString(addressBytes));
                 Add(details, "network" + (++index).ToString(CultureInfo.InvariantCulture), String.Join(" · ", parts));
             }
         }

@@ -3,6 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   AuthAccessWriteScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   AuthSessionId,
   AuthSettingsWriteScope,
   EnvironmentAuthenticatedAuth,
@@ -24,6 +26,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as CompanionHttp from "./http.ts";
+import { createAndroidCaptureStore, getAndroidCaptureStore } from "./androidCaptureStore.ts";
 import { getCompanionStore } from "./store.ts";
 
 class CompanionTestApi extends HttpApi.make("environment").add(
@@ -34,12 +37,16 @@ const layerTestAuth = Layer.succeed(EnvironmentAuthenticatedAuth, (effect) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     return yield* Effect.provideService(effect, EnvironmentAuthenticatedPrincipal, {
-      sessionId: AuthSessionId.make("companion-http-test-session"),
-      subject: "companion-http-test",
-      method: "bearer-access-token",
-      scopes: new Set(
-        request.headers["x-test-admin"] === "1" ? [AuthAccessWriteScope] : [AuthSettingsWriteScope],
+      sessionId: AuthSessionId.make(
+        request.headers["x-test-session"] ?? "companion-http-test-session",
       ),
+      subject: "companion-http-test",
+      method: request.headers["x-test-cookie"] ? "browser-session-cookie" : "bearer-access-token",
+      scopes: new Set([
+        request.headers["x-test-admin"] === "1" ? AuthAccessWriteScope : AuthSettingsWriteScope,
+        ...(request.headers["x-test-operate"] ? [AuthOrchestrationOperateScope] : []),
+        ...(request.headers["x-test-read-thread"] === "1" ? [AuthOrchestrationReadScope] : []),
+      ]),
     });
   }),
 );
@@ -87,7 +94,10 @@ const setup = Effect.fnUntraced(function* () {
 });
 
 const admin = { "x-test-admin": "1" };
-const deviceInfo = { name: "Windows test", info: { os: "win32" } };
+const deviceInfo = {
+  name: "Windows test",
+  info: { os: "win32", network1: "LAN · MAC 02-11-22-33-44-55 · IP 192.0.2.1" },
+};
 
 it.effect("authorizes management separately and keeps revoke available after disabling", () =>
   Effect.gen(function* () {
@@ -136,7 +146,14 @@ it.effect("authorizes management separately and keeps revoke available after dis
     });
     expect(renameFromDevice.status).toBe(200);
     expect(store.result("test-thread", task.id)).toMatchObject({ status: "queued" });
-    const taskPoll = yield* request("/poll", { headers: auth, body: deviceInfo });
+    const switchedNetwork = {
+      ...deviceInfo.info,
+      network1: "LAN · MAC 02-11-22-33-44-55 · IP 192.0.2.4",
+    };
+    const taskPoll = yield* request("/poll", {
+      headers: auth,
+      body: { ...deviceInfo, info: switchedNetwork },
+    });
     expect(yield* Effect.promise(() => taskPoll.json())).toEqual({
       name: "Windows local name",
       job: { id: task.id, action: "open-notepad", threadId: "test-thread", params: {} },
@@ -149,10 +166,26 @@ it.effect("authorizes management separately and keeps revoke available after dis
 
     yield* settings.updateSettings({ windowsCompanionEnabled: false });
     const list = yield* request("", { method: "GET", headers: admin });
-    expect(yield* Effect.promise(() => list.json())).toMatchObject({
+    const listBody = (yield* Effect.promise(() => list.json())) as {
+      devices: { recentTasks: unknown[] }[];
+    };
+    expect(listBody).toMatchObject({
       devices: [
-        { deviceId, name: "Windows local name", recentTasks: [{ id: task.id, status: "done" }] },
+        {
+          deviceId,
+          name: "Windows local name",
+          info: switchedNetwork,
+          recentTasks: [{ id: task.id, status: "done" }],
+        },
       ],
+    });
+    expect(listBody.devices[0]?.recentTasks[0]).not.toHaveProperty("threadId");
+    const listWithThread = yield* request("", {
+      method: "GET",
+      headers: { ...admin, "x-test-read-thread": "1" },
+    });
+    expect(yield* Effect.promise(() => listWithThread.json())).toMatchObject({
+      devices: [{ deviceId, recentTasks: [{ id: task.id, threadId: "test-thread" }] }],
     });
     expect((yield* request("/poll", { headers: auth, body: deviceInfo })).status).toBe(404);
     expect((yield* request("/check", { headers: auth, body: { info: {} } })).status).toBe(404);
@@ -161,6 +194,35 @@ it.effect("authorizes management separately and keeps revoke available after dis
     yield* settings.updateSettings({ windowsCompanionEnabled: true });
     expect((yield* request("/poll", { headers: auth, body: deviceInfo })).status).toBe(401);
   }),
+);
+
+it.effect(
+  "accepts a Windows close progress update and exit receipt through the result endpoint",
+  () =>
+    Effect.gen(function* () {
+      const { settings, request, store } = yield* setup();
+      yield* settings.updateSettings({ windowsCompanionEnabled: true });
+      const enrolled = yield* request("/enroll", {
+        body: { code: store.pair().code, ...deviceInfo },
+      });
+      const { token, deviceId } = (yield* Effect.promise(() => enrolled.json())) as {
+        token: string;
+        deviceId: string;
+      };
+      const headers = { authorization: `Bearer ${token}` };
+      const close = store.enqueue("thread", deviceId, "close-window", "close");
+      yield* request("/poll", { headers, body: deviceInfo });
+      const report = (status: string, closeState: string) =>
+        request("/result", {
+          headers,
+          body: { id: close.id, status, closeState, message: "回执" },
+        });
+      expect((yield* report("done", "waiting-for-exit")).status).toBe(400);
+      expect((yield* report("running", "waiting-for-exit")).status).toBe(200);
+      expect(store.result("thread", close.id).status).toBe("running");
+      expect((yield* report("done", "exited")).status).toBe(200);
+      expect(store.result("thread", close.id).status).toBe("done");
+    }),
 );
 
 it.effect("rejects web origins and untrusted or oversized request bodies", () =>
@@ -251,4 +313,80 @@ it.effect("serves the selected and unchanged file only to the companion with the
     yield* fs.writeFileString(filePath, "Hello");
     expect((yield* request("/read-transfer", { headers, body })).status).toBe(409);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("binds Android approval and uploads to the authenticated phone before archiving", () =>
+  Effect.gen(function* () {
+    const { config, request } = yield* setup();
+    const phone = { "x-test-operate": "1", "x-test-session": "phone-one" };
+    const other = { ...phone, "x-test-session": "phone-two" };
+    const send = (headers: Record<string, string>, body: object) =>
+      request("/android-capture", { headers, body });
+    const listen = { _tag: "listen", name: "Test phone" };
+    expect((yield* send({}, listen)).status).toBe(403);
+    expect((yield* send({ ...phone, "x-test-cookie": "1" }, listen)).status).toBe(403);
+    expect((yield* send({ ...phone, origin: "http://localhost" }, listen)).status).toBe(403);
+    expect((yield* send(phone, listen)).status).toBe(200);
+    expect((yield* send(other, listen)).status).toBe(200);
+    const store = getAndroidCaptureStore(config.stateDir);
+    const job = store.enqueue("original", "android:phone-one", "screenshot", "capture-1", 10);
+    const returned = yield* send(phone, listen);
+    expect(yield* Effect.promise(() => returned.json())).toMatchObject({
+      _tag: "pending",
+      job: { id: job.id, action: "screenshot", threadId: "original" },
+    });
+    const otherList = yield* send(other, listen);
+    expect(yield* Effect.promise(() => otherList.json())).toEqual({ _tag: "pending", job: null });
+    const complete = {
+      _tag: "complete",
+      id: job.id,
+      media:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC",
+    };
+    expect((yield* send(phone, complete)).status).toBe(409);
+    expect((yield* send(other, { _tag: "approve", id: job.id })).status).toBe(404);
+    expect((yield* send(phone, { _tag: "approve", id: job.id })).status).toBe(200);
+    expect((yield* send(other, complete)).status).toBe(404);
+    expect((yield* send(phone, complete)).status).toBe(200);
+    expect((yield* send(phone, complete)).status).toBe(200);
+    expect(store.result("original", job.id)).toMatchObject({ status: "done" });
+    expect(() => store.result("other", job.id)).toThrow();
+    for (const reason of ["denied", "locked", "revoked"] as const) {
+      const pending = store.enqueue("original", "android:phone-one", "record-screen", reason, 10);
+      expect((yield* send(phone, { _tag: "reject", id: pending.id, reason })).status).toBe(200);
+      expect(store.result("original", pending.id)).toMatchObject({ status: "failed" });
+      const result = yield* send(phone, { _tag: "approve", id: pending.id });
+      expect(yield* Effect.promise(() => result.json())).toEqual({ _tag: "inactive" });
+    }
+  }),
+);
+
+it.effect("expires Android requests before approval and during a capture", () =>
+  Effect.gen(function* () {
+    const { config } = yield* setup();
+    let time = 1_000_000;
+    const store = yield* Effect.acquireRelease(
+      Effect.sync(() => createAndroidCaptureStore(config.stateDir, () => time)),
+      (captures) => Effect.sync(() => captures.close()),
+    );
+    const device = "android:expiry-test";
+    store.listen(device, "Android");
+    const first = store.enqueue("original", device, "screenshot", "not-approved", 10);
+    time += 45_001;
+    expect(store.approve(device, first.id)).toEqual({ _tag: "inactive" });
+    expect(store.result("original", first.id)).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("过期"),
+    });
+    store.listen(device, "Android");
+    const second = store.enqueue("original", device, "record-screen", "approved", 10);
+    expect(store.approve(device, second.id)._tag).toBe("active");
+    time += 90_001;
+    expect(store.status(device, second.id)).toEqual({ _tag: "inactive" });
+    expect(store.result("original", second.id)).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("过期"),
+    });
+    expect(() => store.complete(device, second.id, "eA==")).toThrow(/no longer active/u);
+  }),
 );

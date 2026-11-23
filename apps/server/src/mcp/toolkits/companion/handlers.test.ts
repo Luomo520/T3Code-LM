@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import { AssetSigner } from "../../../assets/AssetSigner.ts";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
+import { getAndroidCaptureStore } from "../../../companion/androidCaptureStore.ts";
 import { getCompanionStore } from "../../../companion/store.ts";
 import { ServerConfig, layerTest } from "../../../config.ts";
 import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -99,7 +100,15 @@ it.effect("returns image bytes only to the thread that requested the screenshot"
     const running = yield* call("t3_companion_result", { id });
     expect(running.content.map(({ type }) => type)).toEqual(["text"]);
 
-    store.complete(token, { id, status: "done", message: "Captured.", imageBase64: png });
+    const capture = { capturedAt: "2026-11-23T05:01:04.010Z", label: "记事本" };
+    store.complete(token, {
+      id,
+      status: "done",
+      message: "Captured.",
+      imageBase64: png,
+      captureScope: "window",
+      capture,
+    });
     const denied = yield* call(
       "t3_companion_result",
       { id, threadId: owner },
@@ -116,7 +125,9 @@ it.effect("returns image bytes only to the thread that requested the screenshot"
       id,
       status: "done",
       deviceName,
-      captureScope: "primary-display",
+      captureScope: "window",
+      capture,
+      summary: `${deviceName} · 窗口 记事本 · 拍摄时间 ${capture.capturedAt}`,
       screenshot: { mimeType: "image/png", width: 1, height: 1 },
     });
     expect(result.structuredContent).not.toHaveProperty("imagePath");
@@ -202,6 +213,7 @@ it.effect("keeps a completed recording scoped to the original thread", () =>
     );
     expect(result.structuredContent).toMatchObject({
       status: "done",
+      captureScope: "primary-display",
       recording: {
         url: expect.stringMatching(/^https:\/\/companion\.test\/api\/assets\/.+\.avi$/u),
         expiresAt: expect.any(Number),
@@ -229,5 +241,85 @@ it.effect("queues the explicit Notepad text only for its paired device", () =>
     store.complete(token, { id, status: "done", message: "可见的测试文字" });
     const result = yield* call("t3_companion_result", { id });
     expect(result.structuredContent).toMatchObject({ status: "done", message: "可见的测试文字" });
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "routes paired Android captures and terminal results only through the originating thread",
+  () =>
+    Effect.gen(function* () {
+      const { call } = yield* setup();
+      const { stateDir } = yield* ServerConfig;
+      const store = getAndroidCaptureStore(stateDir);
+      const deviceId = "android:companion-test-phone";
+      store.listen(deviceId, "Test Android");
+      const list = yield* call("t3_companion_list", {});
+      expect(list.structuredContent).toMatchObject({
+        devices: [{ deviceId, name: "Test Android", online: true, platform: "android" }],
+      });
+      const unsupported = yield* call("t3_companion_enqueue", {
+        deviceId,
+        action: "open-t3",
+        clientRequestId: "unsupported",
+      });
+      expect(unsupported.isError).toBe(true);
+      const queued = yield* call("t3_companion_enqueue", {
+        deviceId,
+        action: "screenshot",
+        clientRequestId: "android-one",
+      });
+      expect(queued.isError).not.toBe(true);
+      const id = store.listen(deviceId, "Test Android").job!.id;
+      store.approve(deviceId, id);
+      store.complete(deviceId, id, png);
+      const denied = yield* call(
+        "t3_companion_result",
+        { id },
+        {
+          ...scope,
+          thread: { ...scope.thread!, threadId: other },
+        },
+      );
+      expect(denied.isError).toBe(true);
+      const result = yield* call("t3_companion_result", { id });
+      expect(result.content.map(({ type }) => type)).toEqual(["text", "image"]);
+      expect(result.structuredContent).toMatchObject({
+        id,
+        status: "done",
+        captureScope: "android-screen",
+      });
+    }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("returns a signed Android MP4 recording to its original conversation", () =>
+  Effect.gen(function* () {
+    const { call } = yield* setup();
+    const { stateDir } = yield* ServerConfig;
+    const store = getAndroidCaptureStore(stateDir);
+    const deviceId = "android:recording-test-phone";
+    store.listen(deviceId, "Test Android");
+    const queued = yield* call("t3_companion_enqueue", {
+      deviceId,
+      action: "record-screen",
+      clientRequestId: "android-video",
+    });
+    expect(queued.isError).not.toBe(true);
+    const job = store.listen(deviceId, "Test Android").job!;
+    expect(job.durationSeconds).toBe(10);
+    store.approve(deviceId, job.id);
+    expect(() => store.complete(deviceId, job.id, png)).toThrow(/MP4/u);
+    // 测试容器边界、扩展和原会话签名。视频解码由客户端的原生播放器负责。
+    const media = Buffer.from(
+      "000000106674797069736F6D00000000000000086D6F6F76000000096D64617401",
+      "hex",
+    ).toString("base64");
+    store.complete(deviceId, job.id, media);
+    const result = yield* call("t3_companion_result", { id: job.id });
+    expect(result.structuredContent).toMatchObject({
+      id: job.id,
+      status: "done",
+      captureScope: "android-screen",
+      recording: { url: expect.stringMatching(/\.mp4$/u), expiresAt: expect.any(Number) },
+    });
   }).pipe(Effect.provide(testLayer)),
 );

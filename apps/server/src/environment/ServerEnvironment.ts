@@ -228,6 +228,7 @@ export const make = Effect.gen(function* () {
       repositoryIdentity: true,
       connectionProbe: true,
       windowsCompanion: true,
+      linuxSshDevices: true,
       androidUsbBinding: true,
       attachmentUploads: true,
       questionAttachments: true,

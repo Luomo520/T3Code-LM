@@ -1,6 +1,8 @@
 import {
   COMPANION_MAX_RECORDING_SECONDS,
   CompanionCaptureKind,
+  CompanionCaptureMetadata,
+  CompanionWindowsInstallation,
   OrchestratorMcpFailure,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
@@ -44,11 +46,17 @@ const task = Schema.Struct({
 });
 
 const list = Tool.make("t3_companion_list", {
-  description: "List paired Windows companions and whether they are online.",
+  description:
+    "List paired Windows companions and foreground Android clients available for locally confirmed screen capture.",
   parameters: Schema.Struct({ deviceId: Schema.optionalKey(identifier) }),
   success: Schema.Struct({
     devices: Schema.Array(
-      Schema.Struct({ deviceId: identifier, name: Schema.String, online: Schema.Boolean }),
+      Schema.Struct({
+        deviceId: identifier,
+        name: Schema.String,
+        online: Schema.Boolean,
+        platform: Schema.Literals(["windows", "android"]),
+      }),
     ),
   }),
   failure: OrchestratorMcpFailure,
@@ -59,7 +67,7 @@ const list = Tool.make("t3_companion_list", {
 
 const enqueue = Tool.make("t3_companion_enqueue", {
   description:
-    "Request one approved action on a paired Windows companion. The device user approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. For screenshots and recordings, the Windows user chooses the actual window or display. captureKind may suggest its category. durationSeconds sets a recording maximum from 1 to 30 seconds (default 10). Windows shows the recording and can stop it. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. write-notepad replaces the text in the companion's own foreground Notepad with the approved text; read-notepad returns that document's text. Read the original thread result with t3_companion_result.",
+    "Request one approved action on a paired device. Android accepts only screenshot and record-screen, and the phone user confirms the individual request in the foreground before Android asks for screen-sharing consent. The Windows device user also approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. For screenshots and recordings, the device user chooses the actual capture surface. On Windows, captureKind may suggest its category. durationSeconds sets a recording maximum from 1 to 30 seconds (default 10). Windows shows the recording and can stop it. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. write-notepad replaces the text in the companion's own foreground Notepad with the approved text; read-notepad returns that document's text. Read the original thread result with t3_companion_result.",
   parameters: Schema.Struct({
     deviceId: identifier,
     action,
@@ -82,11 +90,14 @@ const enqueue = Tool.make("t3_companion_enqueue", {
 
 export const CompanionResultTool = Tool.make("t3_companion_result", {
   description:
-    "Check a task in this thread. Completed screenshots appear inline. For a completed recording or a file sent by the Windows user, include its download link in the reply. A received file returns the confirmed local save path.",
+    "Check a task in this thread. For close-window, report the waiting message while the task is running and ask the user to handle any save prompt on Windows. Report an exit only when the final result confirms it. Completed screenshots appear inline. For a completed recording or a file sent by the Windows user, include its download link in the reply. A received file returns the confirmed local save path. For an MSI, distinguish an opened installer, cancellation, an unverified outcome, and a verified product code and installed version.",
   parameters: Schema.Struct({ id: identifier }),
   success: Schema.Struct({
     ...task.fields,
-    captureScope: Schema.optionalKey(Schema.Literals(["primary-display", "window", "display"])),
+    captureScope: Schema.optionalKey(
+      Schema.Literals(["primary-display", "window", "display", "android-screen"]),
+    ),
+    capture: Schema.optionalKey(CompanionCaptureMetadata),
     summary: Schema.optionalKey(Schema.String),
     recording: Schema.optionalKey(Schema.Struct({ url: Schema.String, expiresAt: Schema.Number })),
     file: Schema.optionalKey(
@@ -98,6 +109,7 @@ export const CompanionResultTool = Tool.make("t3_companion_result", {
       }),
     ),
     savedFile: Schema.optionalKey(Schema.Struct({ path: Schema.String, sha256: Schema.String })),
+    windowsInstallation: Schema.optionalKey(CompanionWindowsInstallation),
     screenshot: Schema.optionalKey(
       Schema.Struct({
         mimeType: Schema.Literal("image/png"),
@@ -115,7 +127,7 @@ export const CompanionResultTool = Tool.make("t3_companion_result", {
 
 const cancel = Tool.make("t3_companion_cancel", {
   description:
-    "Cancel a queued companion task in this thread, or stop its running Windows recording. Check the result for the saved clip after Windows confirms the stop.",
+    "Cancel a queued companion task in this thread or cancel an Android capture. On Windows, stop can finish a running recording. Check the result for the saved clip after Windows confirms the stop.",
   parameters: Schema.Struct({ id: identifier }),
   success: task,
   failure: OrchestratorMcpFailure,

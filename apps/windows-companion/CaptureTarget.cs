@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -21,6 +22,7 @@ internal sealed class CaptureTarget
     private readonly uint dpi;
     private readonly IntPtr monitor;
     internal readonly string Name;
+    internal readonly string ResultLabel;
     internal string Scope { get { return window == IntPtr.Zero ? "display" : "window"; } }
     internal Size Size { get { return bounds.Size; } }
 
@@ -54,6 +56,7 @@ internal sealed class CaptureTarget
         string id = display.Replace(@"\\.\DISPLAY", "");
         Name = String.Format("显示器 {0} · {1} × {2}{3}", id, bounds.Width, bounds.Height,
             screen.Primary ? " · 主显示器" : "");
+        ResultLabel = CleanLabel(Name, "所选显示器");
     }
 
     private CaptureTarget(IntPtr handle, uint threadId, uint processId, Rectangle area, string title)
@@ -65,6 +68,23 @@ internal sealed class CaptureTarget
         dpi = GetDpiForWindow(handle);
         monitor = MonitorFromWindow(handle, 2);
         Name = String.Format("窗口 · {0}（{1} × {2}，{3}, {4}）", title, area.Width, area.Height, area.X, area.Y);
+        ResultLabel = CleanLabel(title, "所选窗口");
+    }
+
+    private static string CleanLabel(string value, string fallback)
+    {
+        var safe = new StringBuilder(120);
+        foreach (char character in value)
+        {
+            var category = char.GetUnicodeCategory(character);
+            if (char.IsControl(character) || category == UnicodeCategory.Format ||
+                category == UnicodeCategory.LineSeparator || category == UnicodeCategory.ParagraphSeparator ||
+                category == UnicodeCategory.Surrogate) continue;
+            safe.Append(character);
+            if (safe.Length == 120) break;
+        }
+        var label = safe.ToString().Trim();
+        return label.Length == 0 ? fallback : label;
     }
 
     public override string ToString() { return Name; }
@@ -130,7 +150,7 @@ internal sealed class CaptureTarget
         return current;
     }
 
-    private Bitmap Capture()
+    private Bitmap Capture(Action<DateTime> timestamp)
     {
         Rectangle area = Verify();
         var source = new Bitmap(area.Width, area.Height, PixelFormat.Format24bppRgb);
@@ -150,7 +170,9 @@ internal sealed class CaptureTarget
                     if (!printed) throw new InvalidOperationException("所选窗口无法生成图像。");
                 }
             }
+            DateTime capturedAt = DateTime.UtcNow;
             Verify();
+            if (timestamp != null) timestamp(capturedAt);
             return source;
         }
         catch
@@ -160,14 +182,15 @@ internal sealed class CaptureTarget
         }
     }
 
-    internal async Task<Bitmap> CaptureAsync(CancellationToken cancel)
+    internal async Task<Bitmap> CaptureAsync(CancellationToken cancel, Action<DateTime> timestamp = null)
     {
         cancel.ThrowIfCancellationRequested();
         if (Interlocked.CompareExchange(ref capturing, 1, 0) != 0)
             throw new InvalidOperationException("上一帧仍在结束，请稍后重试。");
+        DateTime capturedAt = default(DateTime);
         Task<Bitmap> frame = Task.Run(() =>
         {
-            try { return Capture(); }
+            try { return Capture(time => capturedAt = time); }
             finally { Interlocked.Exchange(ref capturing, 0); }
         });
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel))
@@ -179,6 +202,7 @@ internal sealed class CaptureTarget
                 Bitmap result = await frame;
                 if (cancel.IsCancellationRequested) result.Dispose();
                 cancel.ThrowIfCancellationRequested();
+                if (timestamp != null) timestamp(capturedAt);
                 return result;
             }
         }

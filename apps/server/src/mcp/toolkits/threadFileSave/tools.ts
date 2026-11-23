@@ -28,8 +28,11 @@ const result = Schema.Struct({
   name: Schema.String,
   recipientLabel: Schema.String,
   status: Schema.Literals(["awaiting_save", "saved", "cancelled"]),
+  urlDownload: Schema.optionalKey(Schema.Literal(true)),
+  urlFailure: Schema.optionalKey(Schema.String),
   claimed: Schema.optionalKey(Schema.Literal(true)),
   savedPath: Schema.optionalKey(Schema.String),
+  installRequested: Schema.optionalKey(Schema.Literal(true)),
   installation: Schema.optionalKey(FileHandoffInstallation),
 });
 
@@ -59,7 +62,7 @@ const saveDependencies = [
 
 const save = Tool.make("t3_thread_file_save", {
   description:
-    'For ordinary project files, prefer t3_thread_save_workspace_file. Send or save a file to a device only when the user explicitly asks. To start a new transfer for a normal project file, use exactly this shape: {"source":{"_tag":"workspaceOutput","path":"report.txt"},"target":"Office PC"}. Use the actual file path from the conversation and copy the exact device name from the user, including non-English names. Leave action and id out of new transfers. Use delivery only for files in the project release inventory. Add source.messageId to use a file linked in an earlier assistant reply. Attachments and completed companion tasks are also supported. If the user asks to view the file, show it in the conversation. Verify the receipt using t3_thread_file_save_status before reporting it saved. The server can select the unique named device or the authenticated requester for this device. On choose_target, ask using question id t3-file-save-target and the exact labels, or ask for a save request naming the device. Use action and an existing id only when asked to cancel or redirect a transfer. Claimed means the receiver started receiving.',
+    'For ordinary project files, prefer t3_thread_save_workspace_file. Send or save a file to a device only when the user explicitly asks. To start a new transfer for a normal project file, use exactly this shape: {"source":{"_tag":"workspaceOutput","path":"report.txt"},"target":"Office PC"}. Use the actual file path from the conversation and copy the exact device name from the user, including non-English names. Leave action and id out of new transfers. Use delivery only for files in the project release inventory. Add source.messageId to use a file linked in an earlier assistant reply. Attachments and completed companion tasks are also supported. If the original user requests sending an APK and installing it, use the same transfer tool with the actual APK and target Android client. The receiving user confirms installation on the phone after saving. For a user-supplied direct download URL, use source: {"_tag":"url","url":"https://example.com/file.zip"} with the exact link from the current message and the explicitly requested device. The device must approve the download. If the user asks to view the file, show it in the conversation. Verify the receipt using t3_thread_file_save_status before reporting it saved. The server can select the unique named device or the authenticated requester for this device. On choose_target, ask using question id t3-file-save-target and the exact labels, or ask for a save request naming the device. Use action and an existing id only when asked to cancel or redirect a transfer. Claimed means the receiver started receiving.',
   parameters: Schema.Struct({
     source: Schema.optionalKey(
       Schema.Union([
@@ -72,6 +75,9 @@ const save = Tool.make("t3_thread_file_save", {
         }).annotate({
           description:
             "A regular project file named by the user, created or edited this turn, or linked in an earlier reply.",
+        }),
+        Schema.TaggedStruct("url", { url: filePath }).annotate({
+          description: "Exact public HTTP(S) download URL from the current user message.",
         }),
         Schema.TaggedStruct("attachment", { messageId: MessageId, attachmentId: ChatAttachmentId }),
         Schema.TaggedStruct("companionScreenshot", { taskId: identifier }),
@@ -126,7 +132,7 @@ const saveWorkspaceFile = Tool.make("t3_thread_save_workspace_file", {
 
 const status = Tool.make("t3_thread_file_save_status", {
   description:
-    "Check the real receiving-device receipt using the existing transfer ID. After staging, call with waitMs up to 15000. Report success only after saved. If it still says awaiting_save, tell the user the device has yet to come online or save the file. APK installation requires its own verified receipt.",
+    "Check the real receiving-device receipt using the existing transfer ID. After staging, call with waitMs up to 15000. Report success only after saved. If it reports urlFailure, say that the target device can retry and give the reason. If still awaiting_save without urlFailure, tell the user the device has yet to confirm or save the file. An APK marked installRequested awaits local confirmation after saving. Report installation only after a verified installation receipt.",
   parameters: Schema.Struct({
     id: identifier,
     waitMs: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 15_000 }))),

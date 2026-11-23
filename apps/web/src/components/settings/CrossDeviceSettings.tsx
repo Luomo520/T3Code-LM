@@ -3,6 +3,7 @@ import { useGT } from "gt-react";
 
 import { usePeerLinkHosts } from "~/state/peerLinks";
 import { Button } from "../ui/button";
+import { LinuxSshDeviceSettings } from "./LinuxSshDeviceSettings";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { WindowsCompanionSettings } from "./WindowsCompanionSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -59,6 +60,7 @@ export function CrossDeviceSettings() {
       </SettingsSection>
 
       <WindowsCompanionSettings />
+      <LinuxSshDeviceSettings />
 
       <SettingsSection title={gt("Device panel")}>
         <SettingsRow

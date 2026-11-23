@@ -48,6 +48,26 @@ export function hasExplicitThreadFileSaveIntent(message: string): boolean {
     });
 }
 
+// 识别同一条传输请求末尾的安装要求，保留设备名称供现有目标解析器使用。
+export function threadFileApkInstallRequest(message: string): string | undefined {
+  const text = message.normalize("NFKC").trim();
+  if (
+    /[?？]/u.test(text) ||
+    /\b(?:do not|don't|never|without)\s+install\b|(?:不要|别|无需|不需要|禁止)\s*安装/iu.test(text)
+  )
+    return undefined;
+  const transfer = text
+    .match(
+      /^(.*?)\s*(?:[,，]?\s*(?:并且?|然后|接着|再)\s*安装(?:它|这个\s*APK|该\s*APK)?|\s+(?:and(?: then)?|then)\s+install(?:\s+(?:it|the APK|this APK))?)\s*(?:吧|[,，]?\s*(?:谢谢|please|thanks))?[。.!！]*$/iu,
+    )?.[1]
+    ?.trim();
+  const command = transfer?.replace(
+    /^((?:(?:请|请你|帮我|给我|替我|先|现在)\s*)*)(?:发送?|传送?)\s*(?!(?:到|给|至))(.{1,80}?)\s*(?:到|给|至)\s*(.+)$/u,
+    "$1把$2发到$3",
+  );
+  return command && hasExplicitThreadFileSaveIntent(command) ? command : undefined;
+}
+
 export type ThreadFileDestination =
   | { readonly kind: "current"; readonly device: "mobile" | "desktop" | "any" }
   | { readonly kind: "named"; readonly label: string }
@@ -153,4 +173,22 @@ export function threadFileRedirectDestination(message: string): ThreadFileDestin
   return threadFileDestination(
     text.replace(/^(?:please\s+|could you\s+)?redirect\b/iu, "transfer"),
   );
+}
+
+// 用占位文本保留命令原句，网址里的动词、问号和参数不会参与识别。
+export function threadFileUrlRequest(message: string, sourceUrl: string): string | undefined {
+  const prose = message.replace(/```[\s\S]*?```/gu, " ");
+  const links = [...prose.matchAll(/https?:\/\/[^\s<>"'`「」『』“”。，！？]+/giu)];
+  if (links.length !== 1) return undefined;
+  const link = links[0]!;
+  if (link[0] !== sourceUrl) return undefined;
+  const start = link.index;
+  const before = prose.slice(0, start);
+  const after = prose.slice(start + sourceUrl.length);
+  const command = /下载/u.test(before + after)
+    ? `${before}这个文件${after}`.replace(/下载\s*这个文件\s*(?=到|至)/gu, "下载")
+    : `${before}this file${after}`;
+  return /下载|\bdownload\b/iu.test(command) && hasExplicitThreadFileSaveIntent(command)
+    ? command
+    : undefined;
 }

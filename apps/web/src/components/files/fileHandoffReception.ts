@@ -68,7 +68,8 @@ export interface ReceiptTarget {
 
 type Receipt =
   | { readonly state: "working" | "downloaded" | "failed" }
-  | { readonly state: "receipt" | "saved"; readonly savedPath?: string };
+  | { readonly state: "receipt"; readonly retryAt: number; readonly savedPath?: string }
+  | { readonly state: "saved"; readonly savedPath?: string };
 
 const receipts = new Map<string, Receipt>();
 const listeners = new Set<() => void>();
@@ -114,7 +115,8 @@ export async function receiveAgentFile(
     !input.file.sha256 ||
     previous?.state === "working" ||
     previous?.state === "saved" ||
-    (!input.retry && (previous?.state === "failed" || previous?.state === "downloaded"))
+    (!input.retry && (previous?.state === "failed" || previous?.state === "downloaded")) ||
+    (input.automatic && previous?.state === "receipt" && previous.retryAt > Date.now())
   )
     return;
 
@@ -181,6 +183,11 @@ export async function receiveAgentFile(
       throw new Error("文件回执暂不可用。");
     setReceipt(input, { state: "saved", ...verified });
   } catch {
-    setReceipt(input, verified ? { state: "receipt", ...verified } : { state: "failed" });
+    setReceipt(
+      input,
+      verified
+        ? { state: "receipt", retryAt: Date.now() + 15_000, ...verified }
+        : { state: "failed" },
+    );
   }
 }

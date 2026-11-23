@@ -1119,12 +1119,32 @@ export const CompanionCaptureMetadata = Schema.Struct({
     Schema.isPattern(/^[^\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]+$/u),
   ),
 });
+export const CompanionWindowsInstallation = Schema.Union([
+  Schema.Struct({
+    attempt: Schema.Int.check(Schema.isGreaterThan(0)),
+    status: Schema.Literals(["opened", "canceled", "unverified"]),
+  }),
+  Schema.Struct({
+    attempt: Schema.Int.check(Schema.isGreaterThan(0)),
+    status: Schema.Literal("verified"),
+    productCode: Schema.String.check(
+      Schema.isPattern(/^\{[A-F0-9]{8}(?:-[A-F0-9]{4}){3}-[A-F0-9]{12}\}$/u),
+    ),
+    version: Schema.String.check(Schema.isMaxLength(32), Schema.isPattern(/^\d+(?:\.\d+){1,3}$/u)),
+  }),
+]);
 export const CompanionResultInput = Schema.Struct({
   captureScope: Schema.optionalKey(CompanionCaptureKind),
   capture: Schema.optionalKey(CompanionCaptureMetadata),
   id: CompanionIdentifier,
   status: Schema.Literals(["running", "done", "failed"]),
   closeState: Schema.optionalKey(Schema.Literals(["waiting-for-exit", "exited"])),
+  windowsInstallation: Schema.optionalKey(
+    Schema.Struct({
+      sha256: CompanionFileSha256,
+      result: CompanionWindowsInstallation,
+    }),
+  ),
   message: Schema.String.check(Schema.isMaxLength(4096)),
   file: Schema.optionalKey(
     Schema.Struct({

@@ -52,12 +52,20 @@ vi.mock(import("~/state/windowsCompanion"), async (original) => {
             hostname: "PC-TEST",
             gpu: "Sample Graphics",
             memory: "32 GiB",
-            network1: "LAN · IP 192.0.2.1",
+            network1: "LAN · IP 192.0.2.1 · MAC 02-11-22-33-44-55",
           },
           online: false,
           lastSeen: "2026-11-23T01:00:00Z",
           detailsUpdatedAt: "2026-11-23T03:30:00Z",
-          recentTasks: [],
+          recentTasks: [
+            {
+              id: "task-test",
+              threadId: "thread-test",
+              action: "screenshot",
+              status: "done",
+              updatedAt: "2026-11-23T03:31:00Z",
+            },
+          ],
         },
       ],
     }),
@@ -89,8 +97,27 @@ it("preserves device management when new pairing is turned off", async () => {
   await expect.element(screen.getByText("PC-TEST")).toBeVisible();
   await expect.element(screen.getByText("Sample Graphics")).toBeVisible();
   await expect.element(screen.getByText("32 GiB")).toBeVisible();
-  await expect.element(screen.getByText("LAN · IP 192.0.2.1")).toBeVisible();
+  await expect
+    .element(screen.getByText("LAN · IP 192.0.2.1 · MAC 02-11-22-33-44-55"))
+    .toBeVisible();
   await expect.element(screen.getByText(/^Details updated/)).toBeVisible();
+  await expect
+    .element(screen.getByText("This Windows companion cannot install apps."))
+    .toBeVisible();
+  await userEvent.fill(
+    screen.getByLabelText("Find a paired device by MAC address"),
+    "02:11:22:33:44:55",
+  );
+  await expect
+    .element(
+      screen.getByText("Reported by Windows test device. Verify the device using its pairing."),
+    )
+    .toBeVisible();
+  await userEvent.click(screen.getByText("Recent tasks"));
+  await expect.element(screen.getByText("task-test")).toBeVisible();
+  await expect
+    .element(screen.getByRole("link", { name: "Open original conversation" }))
+    .toHaveAttribute("href", "/companion-test/thread-test");
   expect(screen.getByRole("button", { name: "Add Windows device" }).query()).toBeNull();
   expect(server.pair).not.toHaveBeenCalled();
 });

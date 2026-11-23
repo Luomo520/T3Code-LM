@@ -23,6 +23,7 @@ export function useDeviceInputQueue(options: {
   const [panelId] = useState(randomUUID);
   const [view, setView] = useState(EMPTY);
   const [error, setError] = useState<string | null>(null);
+  const [leaseNotice, setLeaseNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const lease = useRef<string | null>(null);
   const generation = useRef(0);
@@ -42,7 +43,8 @@ export function useDeviceInputQueue(options: {
 
   async function refresh(action: "status" | "join" | "activate") {
     const version = generation.current;
-    const result = await request(action, lease.current);
+    const requestedLease = lease.current;
+    const result = await request(action, requestedLease);
     if (generation.current !== version) {
       if (action === "join" && result._tag === "Success" && result.value.lease) {
         await request("release", result.value.lease);
@@ -50,6 +52,13 @@ export function useDeviceInputQueue(options: {
       return;
     }
     if (result._tag === "Success") {
+      if (requestedLease !== null && result.value.lease === undefined) {
+        setLeaseNotice(
+          result.value.ownerLocalApp
+            ? "手机已接手，请重新申请输入。"
+            : "输入请求已失效，请重新申请。",
+        );
+      }
       lease.current = result.value.lease ?? null;
       setView(result.value);
       setError(null);
@@ -58,7 +67,10 @@ export function useDeviceInputQueue(options: {
       if (action === "status") {
         const current = lease.current;
         lease.current = null;
-        if (current !== null) void request("release", current);
+        if (current !== null) {
+          setLeaseNotice("设备连接中断，请重新申请输入。");
+          void request("release", current);
+        }
         setView(EMPTY);
       }
     }
@@ -67,6 +79,7 @@ export function useDeviceInputQueue(options: {
   async function change(action: "join" | "activate") {
     if (!options.enabled || pending) return;
     generation.current++;
+    setLeaseNotice(null);
     setPending(true);
     try {
       await refresh(action);
@@ -81,6 +94,7 @@ export function useDeviceInputQueue(options: {
     lease.current = null;
     setView(EMPTY);
     setError(null);
+    setLeaseNotice(null);
     if (current !== null) void request("release", current);
   }
 
@@ -105,7 +119,7 @@ export function useDeviceInputQueue(options: {
 
   return {
     view,
-    error,
+    error: error ?? leaseNotice,
     pending,
     join: () => change("join"),
     activate: () => change("activate"),

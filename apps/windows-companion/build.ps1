@@ -16,6 +16,6 @@ try {
     Copy-Item -LiteralPath "$PSScriptRoot\setup.nsi" -Destination "$output\setup.nsi" -Force
     & $MakeNsis /INPUTCHARSET UTF8 /V2 "$output\setup.nsi"
     if ($LASTEXITCODE -ne 0) { throw "makensis failed ($LASTEXITCODE)" }
-    Get-FileHash -Algorithm SHA256 T3Code-LM-Companion-0.2.4-1-Windows-x64-Setup.exe
+    Get-FileHash -Algorithm SHA256 T3Code-LM-Companion-0.2.5-1-Windows-x64-Setup.exe
 }
 finally { Pop-Location }

@@ -26,7 +26,7 @@ internal sealed class ScreenRecording : IDisposable
         width = Math.Max(1, (int)(source.Width * scale));
         height = Math.Max(1, (int)(source.Height * scale));
         byteLimit = maxBytes;
-        writer = new BinaryWriter(new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.Read));
+        writer = new BinaryWriter(new FileStream(file, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read));
         try
         {
             // 写入单流 MJPEG AVI，最终保存时补齐帧数、索引和 RIFF 长度。
@@ -75,7 +75,9 @@ internal sealed class ScreenRecording : IDisposable
         }
     }
 
-    public void Dispose()
+    public void Dispose() { Finish(null); }
+
+    internal void Finish(Action<FileStream> onSaved)
     {
         if (disposed) return;
         disposed = true;
@@ -91,6 +93,12 @@ internal sealed class ScreenRecording : IDisposable
             Update(4, (uint)(Position - 8));
             Update(totalFrames, (uint)frames.Count);
             Update(streamLength, (uint)frames.Count);
+            if (onSaved != null)
+            {
+                var stream = (FileStream)writer.BaseStream;
+                stream.Flush(true);
+                onSaved(stream);
+            }
         }
         finally { writer.Dispose(); }
     }

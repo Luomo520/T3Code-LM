@@ -5,6 +5,12 @@ import {
   cancelFileDownload,
   locateSavedFileHandoff,
 } from "./methods/fileDownloads.ts";
+import {
+  discardLocalFileMove,
+  finishLocalFileMove,
+  pickLocalFileMove,
+  readLocalFileMove,
+} from "./methods/localFileMove.ts";
 
 import { receiveProviderAuthCallback, cancelProviderAuthCallback } from "./methods/providerAuth.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
@@ -161,6 +167,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(openExternal);
   yield* ipc.handle(downloadFile);
   yield* ipc.handle(downloadHandoffFile);
+  yield* ipc.handle(pickLocalFileMove);
+  yield* ipc.handle(readLocalFileMove);
+  yield* ipc.handle(discardLocalFileMove);
+  yield* ipc.handle(finishLocalFileMove);
   yield* ipc.handle(locateSavedFileHandoff);
   yield* ipc.handle(cancelFileDownload);
   yield* ipc.handle(readMedia);

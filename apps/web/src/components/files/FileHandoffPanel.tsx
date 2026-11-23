@@ -1,5 +1,8 @@
 import {
   fileHandoffErrorMessage,
+  formatFileMoveResult,
+  hasVerifiedFileMoveReceipt,
+  type PendingFileMove,
   receiveDirectFile,
   sendHandoffFile,
   unwrapFileHandoff,
@@ -13,7 +16,7 @@ import {
   type FileHandoffRequest,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { startFileDownload, startVerifiedDesktopDownload } from "~/lib/fileDownload";
@@ -49,6 +52,15 @@ export function FileHandoffPanel({ thread }: { readonly thread: ScopedThreadRef 
   );
 }
 
+type Selection =
+  | { readonly id: string; readonly file: File }
+  | {
+      readonly id: string;
+      readonly token: string;
+      readonly name: string;
+      readonly sizeBytes: number;
+    };
+
 function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
   const { environmentId, threadId } = thread;
   const connection = usePreparedConnection(environmentId);
@@ -59,9 +71,19 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
   const receive = useAtomCommand(atoms.receive, quiet);
   const [closing, setClosing] = useState<string | null>(null);
   const [recipient, setRecipient] = useState<AuthSessionId | null>(null);
-  const [selection, setSelection] = useState<{ readonly file: File; readonly id: string } | null>(
-    null,
-  );
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const pickedMove = useRef<string | null>(null);
+  const pickingMove = useRef(false);
+  const moveRef = useRef<PendingFileMove | null>(null);
+  const [pendingMove, setPendingMove] = useState<PendingFileMove | null>(null);
+  const [moveStatus, setMoveStatus] = useState<string | null>(null);
+  const bridge = window.desktopBridge;
+  const supportsMove =
+    bridge?.getClientPlatform() === "win32" &&
+    bridge.pickLocalFileMove &&
+    bridge.readLocalFileMove &&
+    bridge.discardLocalFileMove &&
+    bridge.finishLocalFileMove;
   const [lockedRecipient, setLockedRecipient] = useState<AuthSessionId | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,13 +109,81 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
     () => () => {
       upload.current?.abort();
       directDownload.current?.abort();
+      const discard = window.desktopBridge?.discardLocalFileMove;
+      if (pickedMove.current) void discard?.(pickedMove.current).catch(() => {});
+      if (moveRef.current) void discard?.(moveRef.current.token).catch(() => {});
+      pickedMove.current = null;
+      moveRef.current = null;
     },
     [],
   );
   useLiveRefresh(list.isPending ? null : list.refresh, { intervalMs: 5_000 });
 
+  function discardSelection() {
+    if (pickedMove.current) void bridge?.discardLocalFileMove?.(pickedMove.current).catch(() => {});
+    pickedMove.current = null;
+  }
+
+  async function pickMove() {
+    if (!bridge?.pickLocalFileMove || upload.current || pendingMove || pickingMove.current) return;
+    pickingMove.current = true;
+    setError(null);
+    try {
+      const selected = await bridge.pickLocalFileMove();
+      if (!selected) return;
+      if (!fileInput.current) {
+        void bridge.discardLocalFileMove?.(selected.token).catch(() => {});
+        return;
+      }
+      discardSelection();
+      pickedMove.current = selected.token;
+      setSelection({ ...selected, id: randomUUID() });
+      setLockedRecipient(null);
+      if (fileInput.current) fileInput.current.value = "";
+    } catch (cause) {
+      setError(fileHandoffErrorMessage(cause, "无法读取选中的文件。"));
+    } finally {
+      pickingMove.current = false;
+    }
+  }
+
+  function preserveMove(move: PendingFileMove, message: string) {
+    if (moveRef.current !== move) return;
+    moveRef.current = null;
+    setPendingMove(null);
+    setMoveStatus(message);
+    void bridge?.discardLocalFileMove?.(move.token).catch(() => {});
+  }
+
+  const settleMove = useEffectEvent((move: PendingFileMove) => {
+    if (!bridge?.finishLocalFileMove || moveRef.current !== move) return;
+    moveRef.current = null;
+    setMoveStatus("目标设备已确认保存，正在核对源文件。");
+    void bridge
+      .finishLocalFileMove({ token: move.token, sha256: move.sha256 })
+      .catch(() => "retained" as const)
+      .then((result) => {
+        setMoveStatus(formatFileMoveResult(result));
+        setPendingMove(null);
+      });
+  });
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 根据接收设备完成保存的回执核对本机源文件。
+  useEffect(() => {
+    if (!pendingMove || connection._tag !== "Some") return;
+    const item = snapshot?.transfers.find((entry) => entry.id === pendingMove.id);
+    if (hasVerifiedFileMoveReceipt(item, pendingMove)) settleMove(pendingMove);
+  }, [connection._tag, pendingMove, snapshot]);
+
   async function send() {
-    if (!selection || !recipient || upload.current || connection._tag !== "Some") return;
+    if (
+      !selection ||
+      !recipient ||
+      upload.current ||
+      pickingMove.current ||
+      connection._tag !== "Some"
+    )
+      return;
     const controller = new AbortController();
     upload.current = controller;
     setLockedRecipient(recipient);
@@ -101,8 +191,10 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
     setProgress(0);
     setTransport(supportsDirect ? "direct" : "relay");
     try {
-      const { file, id } = selection;
-      await sendHandoffFile({
+      const { id } = selection;
+      const sizeBytes = "file" in selection ? selection.file.size : selection.sizeBytes;
+      const name = "file" in selection ? selection.file.name : selection.name;
+      const sha256 = await sendHandoffFile({
         environmentId,
         httpBaseUrl: connection.value.httpBaseUrl,
         start,
@@ -110,8 +202,8 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
           threadId,
           id,
           recipient,
-          sizeBytes: file.size,
-          name: file.name,
+          sizeBytes,
+          name,
           ...(supportsDirect ? { direct: true } : {}),
         },
         ...(supportsDirect
@@ -123,8 +215,14 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
               },
             }
           : {}),
-        slice: async (offset, length) =>
-          new Uint8Array(await file.slice(offset, offset + length).arrayBuffer()),
+        slice: async (offset, length) => {
+          if ("file" in selection)
+            return new Uint8Array(
+              await selection.file.slice(offset, offset + length).arrayBuffer(),
+            );
+          if (!bridge?.readLocalFileMove) throw new Error("本机文件选择已失效。");
+          return bridge.readLocalFileMove({ token: selection.token, offset, length });
+        },
         post: (url, body, signal) =>
           fetch(url, {
             method: "POST",
@@ -134,8 +232,15 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
           }),
         signal: controller.signal,
         onProgress: (offset) =>
-          setProgress(file.size > 0 ? Math.floor((100 * offset) / file.size) : 100),
+          setProgress(sizeBytes > 0 ? Math.floor((100 * offset) / sizeBytes) : 100),
       });
+      if ("token" in selection) {
+        const pending = { token: selection.token, id, sha256, sizeBytes };
+        pickedMove.current = null;
+        moveRef.current = pending;
+        setPendingMove(pending);
+        setMoveStatus("等待目标设备保存并校验文件。");
+      }
       setSelection(null);
       setLockedRecipient(null);
       if (fileInput.current) fileInput.current.value = "";
@@ -158,7 +263,9 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
     setError(null);
     try {
       unwrapFileHandoff(await receive({ environmentId, input: { _tag: "cancel", threadId, id } }));
+      if (pendingMove?.id === id) preserveMove(pendingMove, "传输已取消，源文件已保留。");
       if (selection?.id === id) {
+        discardSelection();
         setSelection(null);
         setLockedRecipient(null);
         if (fileInput.current) fileInput.current.value = "";
@@ -275,11 +382,22 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
             disabled={progress !== null}
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
+              discardSelection();
               setSelection(file ? { file, id: randomUUID() } : null);
               setLockedRecipient(null);
               setError(null);
             }}
           />
+          {supportsMove && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={progress !== null || pendingMove !== null}
+              onClick={() => void pickMove()}
+            >
+              {selection && "token" in selection ? selection.name : "选择要移动的文件"}
+            </Button>
+          )}
           <select
             aria-label="接收设备"
             className="max-w-full rounded border bg-background px-2 py-1"
@@ -301,7 +419,7 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
           </select>
           {progress === null ? (
             <Button size="sm" disabled={!recipient || !selection} onClick={() => void send()}>
-              {lockedRecipient ? "继续上传" : "发送"}
+              {lockedRecipient ? "继续上传" : selection && "token" in selection ? "移动" : "发送"}
             </Button>
           ) : (
             <Button variant="outline" size="sm" onClick={() => upload.current?.abort()}>
@@ -309,6 +427,16 @@ function FileHandoffContents({ thread }: { readonly thread: ScopedThreadRef }) {
             </Button>
           )}
         </div>
+      )}
+      {moveStatus && <p role="status">{moveStatus}</p>}
+      {pendingMove && moveStatus === "等待目标设备保存并校验文件。" && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => preserveMove(pendingMove, "已选择保留源文件。")}
+        >
+          保留源文件
+        </Button>
       )}
       {progress !== null && (
         <p role="status">

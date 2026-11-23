@@ -52,6 +52,8 @@ import * as AssetSigner from "./AssetSigner.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import { archiveCapture, captureArchiveDirectory } from "../companion/captureArchive.ts";
+import { getCompanionStore } from "../companion/store.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
@@ -624,38 +626,54 @@ export const openWorkspaceFileForHandoff = Effect.fn("AssetAccess.openWorkspaceF
   },
 );
 
+const prepareCompanionFileAsset = Effect.fn("AssetAccess.prepareCompanionFileAsset")(function* (
+  threadId: ThreadId,
+  source: string,
+  expiresAt: number,
+) {
+  const config = yield* ServerConfig.ServerConfig;
+  const path = yield* Path.Path;
+  const fileName = path.basename(source);
+  const temporaryFolder = path.join(config.stateDir, "windows-companion", "screenshots");
+  const archiveFolder = captureArchiveDirectory(config.stateDir, threadId);
+  const folder =
+    /\.(avi|mp4)$/u.test(fileName) && path.resolve(source) === path.resolve(archiveFolder, fileName)
+      ? archiveFolder
+      : temporaryFolder;
+  const resource = {
+    _tag: "media-file",
+    threadId,
+    path: source,
+    disposition: "attachment",
+  } as const;
+  if (
+    path.resolve(source) !== path.resolve(folder, fileName) ||
+    !/^[0-9a-f-]{36}\.(avi|mp4|bin)$/u.test(fileName)
+  ) {
+    return yield* new AssetWorkspaceAssetNotFoundError({ resource, checkedPath: source });
+  }
+  const fileSystem = yield* FileSystem.FileSystem;
+  const canonicalFolder = yield* fileSystem
+    .realPath(folder)
+    .pipe(Effect.mapError((cause) => new AssetWorkspaceAssetInspectionError({ resource, cause })));
+  const { claims } = yield* finalizeAbsoluteMediaFileAsset({
+    requestedPath: source,
+    expectedCanonicalPath: path.join(canonicalFolder, fileName),
+    workspaceRoot: undefined,
+    resource,
+    expiresAt,
+  });
+  return { claims, fileName, resource };
+});
+
 export const issueCompanionFileDownload = Effect.fn("AssetAccess.issueCompanionFileDownload")(
   function* (threadId: ThreadId, source: string, downloadName?: string) {
-    const config = yield* ServerConfig.ServerConfig;
-    const path = yield* Path.Path;
-    const fileName = path.basename(source);
-    const folder = path.join(config.stateDir, "windows-companion", "screenshots");
-    const resource = {
-      _tag: "media-file",
-      threadId,
-      path: source,
-      disposition: "attachment",
-    } as const;
-    if (
-      path.resolve(source) !== path.resolve(folder, fileName) ||
-      !/^[0-9a-f-]{36}\.(avi|bin)$/u.test(fileName)
-    ) {
-      return yield* new AssetWorkspaceAssetNotFoundError({ resource, checkedPath: source });
-    }
-    const fileSystem = yield* FileSystem.FileSystem;
-    const canonicalFolder = yield* fileSystem
-      .realPath(folder)
-      .pipe(
-        Effect.mapError((cause) => new AssetWorkspaceAssetInspectionError({ resource, cause })),
-      );
     const expiresAt = (yield* Clock.currentTimeMillis) + ASSET_TOKEN_TTL_MS;
-    const { claims } = yield* finalizeAbsoluteMediaFileAsset({
-      requestedPath: source,
-      expectedCanonicalPath: path.join(canonicalFolder, fileName),
-      workspaceRoot: undefined,
-      resource,
+    const { claims, fileName, resource } = yield* prepareCompanionFileAsset(
+      threadId,
+      source,
       expiresAt,
-    });
+    );
     const signer = yield* AssetSigner.AssetSigner;
     const payload = base64UrlEncode(
       encodeAssetClaims({
@@ -952,6 +970,34 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       } else {
         fileName = PROJECT_FAVICON_FALLBACK_MARKER;
       }
+      break;
+    }
+    case "companion-recording": {
+      const { threadId, taskId } = input.resource;
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const folder = captureArchiveDirectory(stateDir, threadId);
+      const archives = [path.join(folder, `${taskId}.avi`), path.join(folder, `${taskId}.mp4`)];
+      const found = yield* Effect.findFirst(archives, (file) => fileSystem.exists(file)).pipe(
+        Effect.mapError(
+          (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        ),
+      );
+      let source = Option.getOrElse(found, () => archives[0]!);
+      if (Option.isNone(found)) {
+        // 首次播放时把尚在中转目录中的旧会话录像纳入会话归档。
+        const previous = yield* Effect.try({
+          try: () => getCompanionStore(stateDir).result(threadId, taskId).recordingPath,
+          catch: () => new AssetWorkspaceAssetNotFoundError({ resource: input.resource }),
+        });
+        if (previous === undefined)
+          return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+        source = yield* archiveCapture(threadId, taskId, previous, "avi").pipe(
+          Effect.mapError(
+            (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+          ),
+        );
+      }
+      ({ claims, fileName } = yield* prepareCompanionFileAsset(threadId, source, expiresAt));
       break;
     }
     case "tool-output-image": {

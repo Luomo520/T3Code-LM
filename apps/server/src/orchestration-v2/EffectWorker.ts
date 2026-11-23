@@ -541,7 +541,13 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           case "scheduled-tasks.cleanup":
-            return resourceCleanup.cleanupScheduledTasks(effect.threadId).pipe(
+            return Effect.all(
+              [
+                resourceCleanup.cleanupScheduledTasks(effect.threadId),
+                resourceCleanup.cleanupCompanionCaptures(effect.threadId),
+              ],
+              { discard: true },
+            ).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationEffectExecutionError({

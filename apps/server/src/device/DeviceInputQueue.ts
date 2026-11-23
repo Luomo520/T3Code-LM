@@ -17,6 +17,7 @@ type Entry = Owner & {
   readonly lease: string;
   deadline: number;
   active: boolean;
+  activationVersion: number;
   readonly localApp?: true;
 };
 
@@ -25,7 +26,7 @@ export const deviceInputKey = (hostId: string, deviceId: string) =>
 
 export function makeDeviceInputQueue() {
   const devices = new Map<string, Entry[]>();
-  const dockActions = new Set<string>();
+  const dockActions = new Map<string, { interrupted: boolean }>();
   const expire = (key: string, now: number) => {
     const queue = devices.get(key)?.filter((entry) => entry.deadline > now) ?? [];
     if (queue.length === 0) devices.delete(key);
@@ -48,7 +49,7 @@ export function makeDeviceInputQueue() {
         entry.panelId === input.panelId &&
         entry.localApp === localApp,
     );
-    const fresh = input.action === "join" && index < 0;
+    const fresh = input.action === "join" && index < 0 && input.lease === undefined;
     if (fresh) {
       const entry: Entry = {
         sessionId,
@@ -57,12 +58,18 @@ export function makeDeviceInputQueue() {
         lease: NodeCrypto.randomUUID(),
         deadline: now + LEASE_MS,
         active: false,
+        activationVersion: 0,
         ...(localApp ? { localApp } : {}),
       };
+      const dockAction = dockActions.get(key);
+      if (dockAction) dockAction.interrupted = true;
       if (localApp) {
-        // 本机手势优先，并作废旧的远程写入租约。
-        for (let index = entries.length - 1; index >= 0; index--) {
-          if (entries[index]?.active) entries.splice(index, 1);
+        // 本机优先。若原队首正在重读屏幕，交还后也须从头检查。
+        const head = entries[0];
+        if (head?.active) {
+          entries.shift();
+        } else if (head) {
+          head.activationVersion++;
         }
         entries.unshift(entry);
         index = 0;
@@ -100,14 +107,41 @@ export function makeDeviceInputQueue() {
 
   return {
     update,
+    beginActivation(
+      key: string,
+      sessionId: AuthSessionId,
+      input: DeviceInputQueueInput,
+      now: number,
+    ) {
+      expire(key, now);
+      const first = devices.get(key)?.[0];
+      if (
+        !first ||
+        first.active ||
+        first.localApp ||
+        dockActions.has(key) ||
+        first.lease !== input.lease ||
+        first.sessionId !== sessionId ||
+        first.threadId !== input.threadId ||
+        first.panelId !== input.panelId
+      ) {
+        return null;
+      }
+      const version = ++first.activationVersion;
+      return (checkedAt: number) =>
+        devices.get(key)?.[0] === first &&
+        first.deadline > checkedAt &&
+        first.activationVersion === version;
+    },
     reserveDockAction(key: string, now: number) {
       expire(key, now);
       if (devices.has(key) || dockActions.has(key)) return null;
-      dockActions.add(key);
+      const action = { interrupted: false };
+      dockActions.set(key, action);
       return {
-        canStart: () => !devices.has(key),
+        canStart: () => dockActions.get(key) === action && !action.interrupted,
         release: () => {
-          dockActions.delete(key);
+          if (dockActions.get(key) === action) dockActions.delete(key);
         },
       };
     },

@@ -44,7 +44,7 @@ vi.mock(import("./CommandOutputPanel"), async (original) => ({
 it("previews a stored screenshot and hands off the unmodified PNG only after Save", async () => {
   const threadId = ThreadId.make("screenshot-thread");
   const itemId = TurnItemId.make("screenshot-result");
-  const summary = "书房 PC · 主显示器 · 上报时间 2026-11-23T02:15:00Z";
+  const summary = "书房 PC · 窗口 记事本 · 拍摄时间 2026-11-23T02:14:02.100Z";
   const projectedItem = {
     position: 1,
     visibility: "local",
@@ -177,12 +177,21 @@ function syntheticRecording() {
 const recordingPath =
   "/api/assets/test-payload.test-signature/a0000000-0000-4000-a000-000000000000.avi";
 
-function projectedRecording(expiresAt: number): OrchestrationV2ProjectedTurnItem {
+function projectedRecording(expiresAt: number, taskId?: string): OrchestrationV2ProjectedTurnItem {
   const threadId = ThreadId.make("recording-thread");
   const itemId = TurnItemId.make("recording-result");
   const metadata = {
     action: "record-screen",
     status: "done",
+    ...(taskId
+      ? {
+          id: taskId,
+          deviceName: "书房 PC",
+          captureScope: "window",
+          capture: { label: "记事本", capturedAt: "2026-11-23T02:14:05.120Z" },
+          updatedAt: "2026-11-23T02:15:00.000Z",
+        }
+      : {}),
     recording: { url: `http://127.0.0.1:3000${recordingPath}`, expiresAt },
   };
   return {
@@ -277,4 +286,24 @@ it.each([
   await userEvent.click(screen.getByRole("button", { name: "播放录屏" }));
   await expect.element(screen.getByText(message)).toBeVisible();
   expect(requests).toHaveBeenCalledTimes(requested ? 1 : 0);
+});
+
+it("renews the archived clip in the original thread when the stored link has expired", async () => {
+  const requests = mockRecordingRequest(new Response(syntheticRecording()));
+  const taskId = "a0000000-0000-4000-a000-000000000000";
+  refresh.mockResolvedValueOnce(`https://thread.test${recordingPath}`);
+  await using screen = await render(
+    <V2ItemInspector
+      projectedItem={projectedRecording(1, taskId)}
+      environmentId={EnvironmentId.make("recording-environment")}
+    />,
+    { router: false },
+  );
+
+  await expect
+    .element(screen.getByText("书房 PC · 窗口 记事本 · 录制开始 2026-11-23T02:14:05.120Z"))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "播放录屏" }));
+  await expect.element(screen.getByRole("img", { name: "Windows 窗口录屏" })).toBeVisible();
+  expect(requests).toHaveBeenCalledTimes(1);
 });

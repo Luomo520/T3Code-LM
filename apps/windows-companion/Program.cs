@@ -6,13 +6,13 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("T3Code-LM Windows 受控端")]
 [assembly: AssemblyProduct("T3Code-LM Windows 受控端")]
-[assembly: AssemblyVersion("0.2.4.1")]
-[assembly: AssemblyFileVersion("0.2.4.1")]
-[assembly: AssemblyInformationalVersion("0.2.4-1")]
+[assembly: AssemblyVersion("0.2.5.1")]
+[assembly: AssemblyFileVersion("0.2.5.1")]
+[assembly: AssemblyInformationalVersion("0.2.5-1")]
 
 internal static class Program
 {
-    public const string Version = "0.2.4-1";
+    public const string Version = "0.2.5-1";
 
     [STAThread]
     private static void Main()

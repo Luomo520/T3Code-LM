@@ -4,19 +4,30 @@ import {
   type FileHandoffReply,
   type FileHandoffRequest,
   type FileHandoffTransfer,
+  type FileHandoffUrlDownload,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
   formatFileHandoffReceipt,
   unwrapFileHandoff,
 } from "@t3tools/client-runtime/state/fileHandoff";
-import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
+import { useEffect, useEffectEvent, useState, useSyncExternalStore } from "react";
 
 import { useConnectedEnvironmentIds } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
+import { toastManager } from "../ui/toast";
 import { SavedFileHandoffLocation } from "./SavedFileHandoffLocation";
 import {
   fileHandoffAtoms,
@@ -48,20 +59,24 @@ function useHandoffRefresh(refresh: () => void, enabled: boolean, pending: boole
   }, [enabled]);
 }
 
-export function DesktopFileHandoffInbox() {
+export function FileHandoffInbox() {
   const environments = useConnectedEnvironmentIds();
   return environments.map((environmentId) => (
-    <DesktopHandoffEnvironment key={environmentId} environmentId={environmentId} />
+    <HandoffEnvironment key={environmentId} environmentId={environmentId} />
   ));
 }
 
-function DesktopHandoffEnvironment({ environmentId }: { readonly environmentId: EnvironmentId }) {
+function HandoffEnvironment({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const { httpBaseUrl, request } = useReception(environmentId);
+  const desktop = Boolean(window.desktopBridge?.downloadHandoffFile);
   const inbox = useEnvironmentQuery(
     httpBaseUrl ? fileHandoffAtoms.list({ environmentId, input: { _tag: "inbox" } }) : null,
   );
   useHandoffRefresh(inbox.refresh, httpBaseUrl !== null, inbox.isPending);
-  const entries = inbox.data?._tag === "inbox" ? inbox.data.transfers : null;
+  const entries = desktop && inbox.data?._tag === "inbox" ? inbox.data.transfers : null;
+  const urlDownloads = inbox.data?._tag === "inbox" ? inbox.data.urlDownloads : undefined;
+  const [handled, setHandled] = useState<ReadonlySet<string>>(() => new Set());
+  const next = urlDownloads?.find((item) => !handled.has(item.id));
 
   const process = useEffectEvent(async (transfers: NonNullable<typeof entries>, url: string) => {
     for (const file of transfers) {
@@ -81,7 +96,123 @@ function DesktopHandoffEnvironment({ environmentId }: { readonly environmentId: 
   useEffect(() => {
     if (httpBaseUrl && entries && inbox.dataUpdatedAt > 0) void process(entries, httpBaseUrl);
   }, [entries, httpBaseUrl, inbox.dataUpdatedAt]);
-  return null;
+  return httpBaseUrl && next ? (
+    <UrlDownloadDialog
+      key={next.id}
+      environmentId={environmentId}
+      item={next}
+      httpBaseUrl={httpBaseUrl}
+      desktop={desktop}
+      request={request}
+      finished={() => {
+        setHandled((current) => new Set([...current, next.id]));
+        inbox.refresh();
+      }}
+    />
+  ) : null;
+}
+
+function UrlDownloadDialog({
+  environmentId,
+  item,
+  httpBaseUrl,
+  desktop,
+  request,
+  finished,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly item: FileHandoffUrlDownload;
+  readonly httpBaseUrl: string;
+  readonly desktop: boolean;
+  readonly request: (input: FileHandoffRequest) => Promise<FileHandoffReply>;
+  readonly finished: () => void;
+}) {
+  const { id, threadId } = item;
+  const [ready, setReady] = useState(item.ready);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(item.failure ?? null);
+  async function save(file: NonNullable<FileHandoffUrlDownload["ready"]>) {
+    const target = { environmentId, threadId, file: { id, name: item.name, ...file } };
+    await receiveAgentFile({
+      ...target,
+      httpBaseUrl,
+      desktop,
+      request,
+      automatic: false,
+      retry: true,
+    });
+    const receipt = readFileReceipt(target);
+    if (receipt?.state === "saved" || receipt?.state === "downloaded") {
+      toastManager.add({
+        type: "success",
+        title: receipt.state === "saved" ? `已保存 ${item.name}` : "已交给浏览器下载",
+      });
+      finished();
+    } else {
+      setError(
+        receipt?.state === "receipt" ? "文件已保存，接收回执待发送。" : "文件未保存，请重试。",
+      );
+    }
+  }
+
+  async function respond(action: "approveUrl" | "cancel") {
+    setBusy(true);
+    setError(null);
+    try {
+      if (action === "approveUrl" && ready) {
+        await save(ready);
+      } else {
+        const reply = await request({ _tag: action, threadId, id });
+        if (reply._tag === "finished" && reply.disposition === "cancelled") finished();
+        else if (reply._tag === "receive") {
+          const file = { sizeBytes: reply.sizeBytes, sha256: reply.sha256 };
+          setReady(file);
+          // 浏览器选择保存位置需要一次新的点击手势。
+          if (desktop) await save(file);
+        } else throw new Error("无法处理下载请求。");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法处理下载请求，请重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open>
+      <DialogPopup showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>下载到这台设备</DialogTitle>
+          <DialogDescription>
+            {item.senderLabel} 请求下载 {item.name}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <p className="break-all text-sm" lang="en" dir="ltr">
+            {item.sourceUrl}
+          </p>
+          {busy ? (
+            <p role="status" className="mt-2 text-sm">
+              正在处理下载请求…
+            </p>
+          ) : null}
+          {error ? (
+            <p role="alert" className="mt-2 text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={() => void respond("cancel")}>
+            取消请求
+          </Button>
+          <Button disabled={busy} onClick={() => void respond("approveUrl")}>
+            {ready ? "保存到我的设备" : "确认下载"}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
 }
 
 function useThreadHandoffs(thread: ScopedThreadRef) {
@@ -103,8 +234,15 @@ export function ThreadFileSaveStatus(props: {
   readonly id: string;
   readonly fallback: string;
 }) {
-  const { httpBaseUrl, request, transfers } = useThreadHandoffs(props.thread);
+  const { httpBaseUrl, request, list, transfers } = useThreadHandoffs(props.thread);
   const file = transfers.find((item) => item.id === props.id);
+  useHandoffRefresh(
+    list.refresh,
+    httpBaseUrl !== null &&
+      (!file?.disposition ||
+        (file.installRequested === true && file.installation?.status !== "verified")),
+    list.isPending,
+  );
   const settled = file ? formatFileHandoffReceipt(file) : null;
   if (file && settled) {
     return (

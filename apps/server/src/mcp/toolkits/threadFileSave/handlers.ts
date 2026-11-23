@@ -8,18 +8,21 @@ import {
 import * as Digest from "effect/crypto/Digest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 
 import type { OpenMediaFile } from "../../../assets/MediaFile.ts";
 import { resolveAttachmentPath } from "../../../attachmentStore.ts";
 import { EnvironmentAuth } from "../../../auth/EnvironmentAuth.ts";
 import { SessionStore } from "../../../auth/SessionStore.ts";
+import { archivedCapturePath, captureArchiveDirectory } from "../../../companion/captureArchive.ts";
 import { getCompanionStore } from "../../../companion/store.ts";
 import { ServerConfig } from "../../../config.ts";
 import {
   manageThreadFileHandoff,
   readThreadFileHandoffStatus,
   stageThreadFileHandoff,
+  stageThreadUrlDownload,
 } from "../../../fileExchange/FileHandoff.ts";
 import { isActiveRun } from "../../../orchestration-v2/ThreadManagementService.ts";
 import { requireThreadScope } from "../../McpInvocationContext.ts";
@@ -28,9 +31,11 @@ import { callerLinkOrigin } from "../../linkOrigin.ts";
 import { assertLiveCaller, readCaller, unavailable } from "../../threadAccess.ts";
 import {
   hasExplicitThreadFileSaveIntent,
+  threadFileApkInstallRequest,
   threadFileDestination,
   threadFileManagementIntent,
   threadFileRedirectDestination,
+  threadFileUrlRequest,
 } from "./intent.ts";
 import { ThreadFileSaveToolkit } from "./tools.ts";
 import { resolveWorkspaceOutput } from "./workspaceOutput.ts";
@@ -72,7 +77,7 @@ const waitForReceipt = Effect.fn("ThreadFileSave.waitForReceipt")(function* (
   );
   const deadline = (yield* Clock.currentTimeMillis) + waitMs;
   let receipt = yield* read;
-  while (receipt.status === "awaiting_save") {
+  while (receipt.status === "awaiting_save" && !receipt.urlFailure) {
     const remaining = deadline - (yield* Clock.currentTimeMillis);
     if (remaining <= 0) break;
     yield* Effect.sleep(Math.min(remaining, 250));
@@ -117,12 +122,22 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
   ) {
     return yield* invalid("请从已连接的客户端发出保存请求。");
   }
+  const apkInstallRequest =
+    action === undefined && source?._tag !== "url"
+      ? threadFileApkInstallRequest(userMessage.text)
+      : undefined;
+  const requestText =
+    source?._tag === "url"
+      ? threadFileUrlRequest(userMessage.text, source.url)
+      : (apkInstallRequest ?? userMessage.text);
+  if (requestText === undefined)
+    return yield* invalid("请在原会话明确要求下载，并提供该文件的完整网址。");
   if (action !== undefined) {
     if (threadFileManagementIntent(userMessage.text) !== action) {
       return yield* invalid("请在原会话明确要求取消或改发这次文件传输。");
     }
   } else if (
-    !hasExplicitThreadFileSaveIntent(userMessage.text) ||
+    !hasExplicitThreadFileSaveIntent(requestText) ||
     threadFileManagementIntent(userMessage.text)
   ) {
     return yield* invalid("请在当前会话明确说明要保存文件，或使用附件旁的保存操作。");
@@ -198,7 +213,7 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
   const destination =
     action === "redirect"
       ? threadFileRedirectDestination(userMessage.text)
-      : threadFileDestination(userMessage.text);
+      : threadFileDestination(requestText);
   const requestedClients = destination.kind === "named" ? exactClients(destination.label) : [];
   const chosenClients =
     target === undefined
@@ -261,6 +276,33 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
   }
 
   if (!source) return yield* invalid("请指定要发送的文件。");
+  if (
+    apkInstallRequest &&
+    !(recipient.client.browser === undefined && recipient.client.os?.toLowerCase() === "android")
+  ) {
+    return yield* invalid("此设备无法确认 APK 安装，请选择已配对的 Android 客户端。");
+  }
+  if (source._tag === "url") {
+    const recipientAlias = yield* originAlias(recipient);
+    const hash = yield* digest.digestHex(
+      Digest.sha256,
+      new TextEncoder().encode(
+        [threadId, run.userMessageId, "url", source.url, recipientAlias]
+          .map((field) => `${field.length}:${field}`)
+          .join(""),
+      ),
+    );
+    const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+    return yield* stageThreadUrlDownload({
+      threadId,
+      id,
+      requester: requester.sessionId,
+      requesterAlias: clientAlias,
+      sourceOrdinal: run.ordinal,
+      recipient: recipient.sessionId,
+      sourceUrl: source.url,
+    }).pipe(Effect.mapError((error) => invalid(error.message)));
+  }
   const config = yield* ServerConfig;
   let file: {
     readonly sourcePath: string;
@@ -283,23 +325,36 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
       : null;
     if (!attachment || !sourcePath) return yield* invalid("该附件不属于本会话或原文件已不可用。");
     file = { sourcePath, name: attachment.name };
-  } else {
+  } else if (source._tag === "companionFile") {
     const task = yield* Effect.try({
       try: () => getCompanionStore(config.stateDir).result(threadId, source.taskId),
       catch: () => invalid("该设备结果不属于本会话或已不可用。"),
     });
-    if (source._tag === "companionFile") {
-      if (task.action !== "send-file" || task.status !== "done" || !task.transferredFile) {
-        return yield* invalid("设备尚未完成发送，或原文件已不可用。");
-      }
-      const { path, name, sha256 } = task.transferredFile;
-      file = { sourcePath: path, name, expectedSourceSha256: sha256 };
-    } else {
-      if (task.action !== "screenshot" || task.status !== "done" || !task.imagePath) {
-        return yield* invalid("原截图还没有完成或已不可用。");
-      }
-      file = { sourcePath: task.imagePath, name: `截图-${task.id}.png` };
+    if (task.action !== "send-file" || task.status !== "done" || !task.transferredFile) {
+      return yield* invalid("设备尚未完成发送，或原文件已不可用。");
     }
+    const { path, name, sha256 } = task.transferredFile;
+    file = { sourcePath: path, name, expectedSourceSha256: sha256 };
+  } else {
+    const fs = yield* FileSystem.FileSystem;
+    const archive = archivedCapturePath(
+      captureArchiveDirectory(config.stateDir, threadId),
+      source.taskId,
+      "png",
+    );
+    const archived =
+      archive !== null && (yield* fs.exists(archive).pipe(Effect.orElseSucceed(() => false)));
+    const sourcePath = archived
+      ? archive
+      : yield* Effect.try({
+          try: () => getCompanionStore(config.stateDir).result(threadId, source.taskId).imagePath,
+          catch: () => invalid("该设备结果不属于本会话或已不可用。"),
+        });
+    if (!sourcePath) return yield* invalid("原截图还没有完成或已不可用。");
+    file = { sourcePath, name: `截图-${source.taskId}.png` };
+  }
+  if (apkInstallRequest && !file.name.toLowerCase().endsWith(".apk")) {
+    return yield* invalid("请指定要发送并安装的 APK 文件。");
   }
   const recipientAlias = yield* originAlias(recipient);
   const idHash = yield* digest.digestHex(
@@ -330,6 +385,7 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
     sourceOrdinal: run.ordinal,
     recipient: recipient.sessionId,
     autoReceive: true,
+    ...(apkInstallRequest ? { installRequested: true as const } : {}),
   }).pipe(Effect.mapError((error) => invalid(error.message)));
   if (!waitForOnlineReceipt || staged.status !== "awaiting_save" || !recipient.connected) {
     return staged;

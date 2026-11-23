@@ -34,14 +34,24 @@ export const layer = McpToolAccess.toLayer(LinuxDeviceStatusToolkit, {
         });
       }
 
-      const current = yield* checkCaller;
-      if (current.caller?.projectId !== caller.projectId) return yield* unavailable();
+      const recheck = checkCaller.pipe(
+        Effect.flatMap((current) =>
+          current.caller?.projectId === caller.projectId &&
+          current.caller.worktreePath === caller.worktreePath
+            ? Effect.void
+            : Effect.fail(unavailable()),
+        ),
+      );
+      yield* recheck;
       const exchange = yield* FileExchange.FileExchange;
       const status = yield* exchange
-        .inspect({
-          ...input,
-          workspaceRoot: current.caller.worktreePath ?? project.value.workspaceRoot,
-        })
+        .inspect(
+          {
+            ...input,
+            workspaceRoot: caller.worktreePath ?? project.value.workspaceRoot,
+          },
+          recheck,
+        )
         .pipe(
           Effect.mapError(
             (error) =>
