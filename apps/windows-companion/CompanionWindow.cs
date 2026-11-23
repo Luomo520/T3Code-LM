@@ -31,6 +31,7 @@ internal sealed class CompanionWindow : Form
     private readonly Button allowButton = ButtonFor("允许这次");
     private readonly Button refuseButton = ButtonFor("拒绝");
     private readonly Button recordButton = ButtonFor("开始录制");
+    private readonly Button screenshotButton = ButtonFor("截取画面");
     private readonly Button pickButton = ButtonFor("选择文件");
     private readonly NotifyIcon tray;
     private readonly ToolStripMenuItem pauseMenu;
@@ -56,7 +57,13 @@ internal sealed class CompanionWindow : Form
     private const int RemoteRecordingSeconds = 10;
     private const int RemoteRecordingMaxBytes = 5 * 1024 * 1024;
     private TaskCompletionSource<bool> remoteRecording;
-    private Stopwatch remoteRecordingElapsed;
+    private Stopwatch recordingElapsed;
+    private CaptureChoice recordingChoice;
+    private CancellationTokenSource frameCancel;
+    private bool framePending;
+    private Form captureDialog;
+    private bool pickingLocalCapture;
+    private const int RemoteRecordingMaximum = 30;
     private string watchedRecordingId;
     private bool checkingRecordingStop, recordingStopRequested;
 
@@ -112,9 +119,14 @@ internal sealed class CompanionWindow : Form
         allowButton.Click += delegate { SetApproval(true); };
         refuseButton.Click += delegate { SetApproval(false); };
         recordButton.Click += delegate { ToggleRecording(); };
+        screenshotButton.Click += async delegate { await TakeLocalScreenshot(); };
         pickButton.Click += delegate { SelectFile(); };
         pollTimer.Tick += async delegate { await Poll(); };
-        recordTimer.Tick += delegate { RecordFrame(); };
+        recordTimer.Tick += async delegate { await RecordFrame(); };
+        Resize += delegate
+        {
+            if (recording != null && WindowState == FormWindowState.Minimized) FinishRecording();
+        };
         recordingStopTimer.Tick += async delegate { await CheckRecordingStop(); };
         recordingStatus.Text = "本机录制和文件选择";
         SystemEvents.SessionSwitch += SessionSwitch;
@@ -146,7 +158,7 @@ internal sealed class CompanionWindow : Form
         AddAcross(content, activity, 3);
         AddAcross(content, Commands(allowButton, refuseButton), 13);
         AddAcross(content, recordingStatus, 3);
-        AddAcross(content, Commands(recordButton, pickButton), 0);
+        AddAcross(content, Commands(screenshotButton, recordButton, pickButton), 0);
     }
 
     private static void AddAcross(TableLayoutPanel parent, Control control, int bottom)
@@ -228,6 +240,8 @@ internal sealed class CompanionWindow : Form
         pauseMenu.Text = pauseButton.Text;
         allowButton.Enabled = refuseButton.Enabled = approval != null && accepting;
         allowButton.Visible = refuseButton.Visible = approval != null;
+        screenshotButton.Enabled = recording == null && !working && !pickingLocalCapture;
+        recordButton.Enabled = recording != null || (!working && !pickingLocalCapture);
         recordButton.Text = recording == null ? "开始录制" : "停止录制";
         recordMenu.Enabled = recording != null;
         tray.Icon = recording != null ? SystemIcons.Warning : SystemIcons.Application;
@@ -252,7 +266,7 @@ internal sealed class CompanionWindow : Form
             lastStatus = "正在配对…";
             UpdateView();
             info = await Task.Run(() => DeviceInfo.Read(), lifetime.Token);
-            var response = await CompanionApi.Post(server, "enroll", new { code = enteredCode, name = enteredName, info },
+            var response = await CompanionApi.Post(server, "enroll", new { code = enteredCode, name = enteredName, info = DeviceInfo.WithDesktopState(info) },
                 null, lifetime.Token);
             var next = new Pairing { Address = server.AbsoluteUri, Name = enteredName, Token = Json.String(response, "token"),
                 DeviceId = Json.String(response, "deviceId") };
@@ -330,6 +344,7 @@ internal sealed class CompanionWindow : Form
         acceptanceVersion++;
         pollTimer.Stop();
         SetApproval(false);
+        if (captureDialog != null) captureDialog.Close();
         if (inProgress != null) inProgress.Cancel();
         if (remoteRecording != null) FinishRecording("接收已暂停，录像仅保存在本机。");
         lastStatus = text;
@@ -372,7 +387,7 @@ internal sealed class CompanionWindow : Form
         try
         {
             info = await Task.Run(() => DeviceInfo.Read(), lifetime.Token);
-            var payload = new Dictionary<string, object> { { "info", info } };
+            var payload = new Dictionary<string, object> { { "info", DeviceInfo.WithDesktopState(info) } };
             if (renamedTo != null) payload["name"] = renamedTo;
             var response = await CompanionApi.Post(origin, "check", payload, current.Token, lifetime.Token);
             if (paired != current || quitting) return;
@@ -439,13 +454,14 @@ internal sealed class CompanionWindow : Form
             {
                 cancel.CancelAfter(TimeSpan.FromSeconds(2));
                 var state = await CompanionApi.Post(origin, "poll",
-                    new { name = current.Name, info, watchRecordingId = id }, current.Token, cancel.Token);
+                    new { name = current.Name, info = DeviceInfo.WithDesktopState(info), watchRecordingId = id }, current.Token, cancel.Token);
                 object requested;
                 if (watchedRecordingId == id && paired == current && accepting &&
                     state != null && state.TryGetValue("stopRequested", out requested) && Equals(requested, true))
                 {
                     recordingStopRequested = true;
                     SetApproval(false);
+                    if (captureDialog != null) captureDialog.Close();
                     if (remoteRecording != null) FinishRecording();
                 }
             }
@@ -467,7 +483,7 @@ internal sealed class CompanionWindow : Form
     {
         var current = paired;
         var target = origin;
-        if (!accepting || editing || working || current == null) return;
+        if (!accepting || editing || working || pickingLocalCapture || current == null) return;
         working = true;
         int started = acceptanceVersion;
         try
@@ -479,7 +495,7 @@ internal sealed class CompanionWindow : Form
                 info = await Task.Run(() => DeviceInfo.WithCurrentNetworks(previous), lifetime.Token);
             }
             if (!accepting || paired != current || started != acceptanceVersion) return;
-            var response = await CompanionApi.Post(target, "poll", new { name = current.Name, info }, current.Token, lifetime.Token);
+            var response = await CompanionApi.Post(target, "poll", new { name = current.Name, info = DeviceInfo.WithDesktopState(info) }, current.Token, lifetime.Token);
             if (paired != current) return;
 
             ApplyServerName(current, Json.String(response, "name"));
@@ -534,8 +550,9 @@ internal sealed class CompanionWindow : Form
             outcome.Remove("imageBase64");
             outcome.Remove("recordingBase64");
             outcome.Remove("file");
+            outcome.Remove("captureScope");
             outcome["status"] = "failed";
-            outcome["message"] = hasRecording ? "本机已暂停，录像保存在本机。" : "本机已暂停，文件未上传。";
+            outcome["message"] = hasRecording ? "本机已暂停，录像保存在本机。" : "本机已暂停，结果未上传。";
             await CompanionApi.Post(target, "result", outcome, token, lifetime.Token);
             return;
         }
@@ -560,8 +577,8 @@ internal sealed class CompanionWindow : Form
         string label;
         switch (action)
         {
-            case "screenshot": label = "截取主屏幕并发送至已配对服务器"; break;
-            case "record-screen": label = "录制主屏幕（最多 10 秒），完成后将录像发回原会话"; break;
+            case "screenshot": label = "选择目标截图并发回原会话"; break;
+            case "record-screen": label = "选择目标录制并发回原会话"; break;
             case "open-t3": label = "打开 T3Code-LM"; break;
             case "open-notepad": label = "打开记事本"; break;
             case "close-window": label = "关闭受控端打开的窗口"; break;
@@ -611,25 +628,36 @@ internal sealed class CompanionWindow : Form
             UpdateView();
             if (action == "screenshot")
             {
+                var choice = ChooseCapture(Json.String(arguments, "captureKind"), false, true, 1, 1);
+                CheckCaptureApproval(choice, started, requestAge, false);
                 using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
                 {
                     inProgress = cancel;
                     try
                     {
-                        string image = await WindowsMcp.Screenshot(cancel.Token);
-                        cancel.Token.ThrowIfCancellationRequested();
-                        outcome["imageBase64"] = image;
-                        outcome["message"] = "主屏幕截图已生成。";
+                        using (var frame = await choice.Target.CaptureAsync(cancel.Token))
+                        {
+                            string image = await Task.Run(() => CaptureTarget.EncodePng(frame), cancel.Token);
+                            cancel.Token.ThrowIfCancellationRequested();
+                            WindowsDesktop.RequireDesktop();
+                            outcome["imageBase64"] = image;
+                            outcome["captureScope"] = choice.Target.Scope;
+                            outcome["message"] = "所选目标的截图已生成。";
+                        }
                     }
                     finally { inProgress = null; }
                 }
             }
             else if (action == "record-screen")
             {
-                outcome["recordingBase64"] = await RecordForThread(started, requestAge);
+                int requested = ReadRecordingDuration(Json.String(arguments, "durationSeconds"));
+                var choice = ChooseCapture(Json.String(arguments, "captureKind"), true, true, requested, requested);
+                CheckCaptureApproval(choice, started, requestAge, true);
+                outcome["recordingBase64"] = await RecordForThread(choice, started, requestAge);
+                outcome["captureScope"] = choice.Target.Scope;
                 outcome["message"] = recordingStopRequested
                     ? "已按原会话请求结束录制，副本保存在本机。"
-                    : "主屏幕录像已生成，副本保存在本机。";
+                    : "所选目标的录像已生成，副本保存在本机。";
             }
             else if (action == "send-file" || action == "receive-file")
             {
@@ -668,26 +696,44 @@ internal sealed class CompanionWindow : Form
         return outcome;
     }
 
-    private async Task<string> RecordForThread(int started, Stopwatch requestAge)
+    private static int ReadRecordingDuration(string value)
+    {
+        int seconds;
+        if (value == null) return RemoteRecordingSeconds;
+        if (!Int32.TryParse(value, out seconds) || seconds < 1 || seconds > RemoteRecordingMaximum)
+            throw new InvalidDataException("录制时长应为 1 到 30 秒的整数。");
+        return seconds;
+    }
+
+    private CaptureChoice ChooseCapture(string kind, bool record, bool send, int seconds, int maximum)
+    {
+        if (kind != null && kind != "window" && kind != "display")
+            throw new InvalidDataException("拍摄目标类型无效。");
+        return CaptureChoice.Ask(this, kind, record, send, seconds, maximum,
+            dialog => captureDialog = dialog);
+    }
+
+    private void CheckCaptureApproval(CaptureChoice choice, int started, Stopwatch requestAge, bool record)
+    {
+        if (record && recordingStopRequested)
+            throw new InvalidOperationException("原会话已停止录屏请求，录制尚未开始。");
+        if (choice == null || !accepting || started != acceptanceVersion || requestAge.Elapsed.TotalSeconds >= 50)
+            throw new InvalidOperationException("已取消选择、暂停接收或请求已过期。");
+        WindowsDesktop.RequireDesktop();
+    }
+
+    private async Task<string> RecordForThread(CaptureChoice choice, int started, Stopwatch requestAge)
     {
         if (recording != null) throw new InvalidOperationException("本机已经在录制。");
         string file = ChooseRecordingPath();
-        if (recordingStopRequested)
-            throw new InvalidOperationException("原会话已停止录屏请求，录制尚未开始。");
-        if (file == null || !accepting || started != acceptanceVersion || requestAge.Elapsed.TotalSeconds >= 50)
-            throw new InvalidOperationException("已取消保存、暂停接收或请求已过期，录制未开始。");
+        CheckCaptureApproval(file == null ? null : choice, started, requestAge, true);
         var finished = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        recording = new ScreenRecording(file, 640, RemoteRecordingMaxBytes);
-        recordingPath = file;
-        remoteRecording = finished;
-        remoteRecordingElapsed = Stopwatch.StartNew();
-        recordingStatus.Text = "正在录制主屏幕 · 最多 10 秒 · 录像将发回原会话";
-        UpdateView();
-        recordTimer.Start();
+        StartRecording(choice, file, finished);
 
         bool saved = await finished.Task;
         if (!saved || !accepting || started != acceptanceVersion)
             throw new InvalidOperationException("录屏已结束。已写入的内容保存在本机，未上传。");
+        WindowsDesktop.RequireDesktop();
         return await Task.Run(() =>
         {
             using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -708,8 +754,9 @@ internal sealed class CompanionWindow : Form
     private static string FriendlyError(Exception ex)
     {
         if (ex is OperationCanceledException) return "操作已取消或连接超时。";
-        if (ex is HttpRequestException) return "无法建立连接。请核对服务地址、证书或 Windows-MCP 状态。";
-        if (ex is ArgumentException || ex is ApiFailure || ex is InvalidDataException || ex is InvalidOperationException)
+        if (ex is HttpRequestException) return "无法建立连接。请核对服务地址和证书。";
+        if (ex is IOException || ex is UnauthorizedAccessException) return "无法读取或写入本机文件，请检查路径和访问权限。";
+        if (ex is ArgumentException || ex is ApiFailure || ex is InvalidOperationException)
             return ex.Message;
         return "操作失败（" + ex.GetType().Name + "）。";
     }
@@ -733,11 +780,54 @@ internal sealed class CompanionWindow : Form
         }
     }
 
+    private async Task TakeLocalScreenshot()
+    {
+        if (working || pickingLocalCapture || recording != null) return;
+        pickingLocalCapture = true;
+        UpdateView();
+        try
+        {
+            var choice = ChooseCapture(null, false, false, 1, 1);
+            if (choice == null) return;
+            using (var dialog = new SaveFileDialog
+            {
+                Title = "保存截图",
+                Filter = "PNG 图像 (*.png)|*.png",
+                FileName = "T3Code-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".png",
+                AddExtension = true,
+                RestoreDirectory = true
+            })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
+                {
+                    inProgress = cancel;
+                    try
+                    {
+                        using (var frame = await choice.Target.CaptureAsync(cancel.Token))
+                        {
+                            string image = await Task.Run(() => CaptureTarget.EncodePng(frame), cancel.Token);
+                            cancel.Token.ThrowIfCancellationRequested();
+                            WindowsDesktop.RequireDesktop();
+                            byte[] bytes = Convert.FromBase64String(image);
+                            using (var file = new FileStream(dialog.FileName, FileMode.CreateNew, FileAccess.Write))
+                                file.Write(bytes, 0, bytes.Length);
+                        }
+                    }
+                    finally { inProgress = null; }
+                }
+                recordingStatus.Text = "截图已保存 · " + Path.GetFileName(dialog.FileName);
+            }
+        }
+        catch (Exception ex) { recordingStatus.Text = "截图失败 · " + FriendlyError(ex); }
+        finally { pickingLocalCapture = false; UpdateView(); }
+    }
+
     private string ChooseRecordingPath()
     {
         using (var dialog = new SaveFileDialog
         {
-            Title = "保存主屏幕录制",
+            Title = "保存录像",
             Filter = "AVI 视频 (*.avi)|*.avi",
             FileName = "T3Code-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".avi",
             AddExtension = true,
@@ -751,38 +841,78 @@ internal sealed class CompanionWindow : Form
     private void ToggleRecording()
     {
         if (recording != null) { FinishRecording(); return; }
-        string file = ChooseRecordingPath();
-        if (file == null) return;
+        if (working || pickingLocalCapture) return;
+        pickingLocalCapture = true;
+        UpdateView();
         try
         {
-            recording = new ScreenRecording(file);
-            recordingPath = file;
-            recordingStatus.Text = "正在录制主屏幕 · 保存在此电脑";
-            UpdateView();
-            recordTimer.Start();
+            var choice = ChooseCapture(null, true, false, 30, 600);
+            if (choice == null) return;
+            string file = ChooseRecordingPath();
+            if (file == null) return;
+            StartRecording(choice, file, null);
         }
         catch (Exception ex)
         {
             recordingStatus.Text = "录制启动失败 · " + FriendlyError(ex);
         }
+        finally { pickingLocalCapture = false; UpdateView(); }
     }
 
-    private void RecordFrame()
+    private void StartRecording(CaptureChoice choice, string file, TaskCompletionSource<bool> remote)
     {
+        choice.Target.Verify();
+        recording = remote == null
+            ? new ScreenRecording(file, choice.Target.Size)
+            : new ScreenRecording(file, choice.Target.Size, 640, RemoteRecordingMaxBytes);
+        recordingPath = file;
+        recordingChoice = choice;
+        remoteRecording = remote;
+        recordingElapsed = Stopwatch.StartNew();
+        frameCancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        string description = choice.Target.Name;
+        if (description.Length > 75) description = description.Substring(0, 74) + "…";
+        recordingStatus.Text = "正在录制 · " + description + " · 最多 " + choice.Seconds + " 秒 · " +
+            (remote == null ? "保存在此电脑" : "录像将发回原会话");
+        Reveal();
+        UpdateView();
+        recordTimer.Start();
+    }
+
+    private async Task RecordFrame()
+    {
+        var current = recording;
+        if (current == null) return;
+        if (recordingElapsed.Elapsed.TotalSeconds >= recordingChoice.Seconds ||
+            current.Count >= ScreenRecording.FrameLimit)
+        {
+            FinishRecording();
+            return;
+        }
+        if (framePending) return;
+        framePending = true;
+        var token = frameCancel.Token;
         try
         {
-            recording.Capture();
-            if (recording.Count >= ScreenRecording.FrameLimit ||
-                (remoteRecordingElapsed != null && remoteRecordingElapsed.Elapsed.TotalSeconds >= RemoteRecordingSeconds))
-                FinishRecording();
+            using (var frame = await recordingChoice.Target.CaptureAsync(token))
+            {
+                if (recording == current && recordingElapsed.Elapsed.TotalSeconds < recordingChoice.Seconds)
+                    current.AddFrame(frame);
+            }
         }
-        catch (Exception ex) { FinishRecording(FriendlyError(ex)); }
+        catch (Exception ex)
+        {
+            if (recording == current) FinishRecording(FriendlyError(ex));
+        }
+        finally { framePending = false; }
     }
 
     private void FinishRecording(string reason = null)
     {
         if (recording == null) return;
         recordTimer.Stop();
+        frameCancel.Cancel();
+        frameCancel.Dispose();
         var remote = remoteRecording;
         bool hasFrames = recording.Count > 0;
         bool saved = false;
@@ -790,7 +920,10 @@ internal sealed class CompanionWindow : Form
         {
             recording.Dispose();
             saved = hasFrames && reason == null;
-            recordingStatus.Text = "录制已保存 · " + Path.GetFileName(recordingPath);
+            recordingStatus.Text = hasFrames
+                ? "录制已保存 · " + Path.GetFileName(recordingPath)
+                : "没有收到可保存的录像帧。";
+            if (!hasFrames) File.Delete(recordingPath);
             if (reason != null) recordingStatus.Text += " · " + reason;
         }
         catch (Exception ex) { recordingStatus.Text = "录制保存失败 · " + FriendlyError(ex); }
@@ -798,7 +931,9 @@ internal sealed class CompanionWindow : Form
         {
             recording = null;
             remoteRecording = null;
-            remoteRecordingElapsed = null;
+            recordingElapsed = null;
+            recordingChoice = null;
+            frameCancel = null;
             if (remote != null) remote.TrySetResult(saved);
             UpdateView();
         }
@@ -806,13 +941,31 @@ internal sealed class CompanionWindow : Form
 
     private void SessionSwitch(object sender, SessionSwitchEventArgs e)
     {
-        if (e.Reason != SessionSwitchReason.SessionLock && e.Reason != SessionSwitchReason.RemoteDisconnect &&
-            e.Reason != SessionSwitchReason.ConsoleDisconnect) return;
+        bool locked = e.Reason == SessionSwitchReason.SessionLock ||
+            e.Reason == SessionSwitchReason.RemoteDisconnect || e.Reason == SessionSwitchReason.ConsoleDisconnect;
+        if (!locked && e.Reason != SessionSwitchReason.SessionUnlock &&
+            e.Reason != SessionSwitchReason.RemoteConnect && e.Reason != SessionSwitchReason.ConsoleConnect) return;
         if (!IsHandleCreated || quitting) return;
-        BeginInvoke(new Action(delegate
+        BeginInvoke(new Action(async delegate
         {
-            StopAccepting("Windows 已锁定或断开，接收已暂停");
-            FinishRecording();
+            if (locked)
+            {
+                StopAccepting("Windows 已锁定或断开，接收已暂停");
+                FinishRecording();
+            }
+            var current = paired;
+            var target = origin;
+            if (current == null || quitting) return;
+            try
+            {
+                // check 刷新桌面状态，锁屏时不会调用领取任务的 poll。
+                var available = DeviceInfo.WithDesktopState(info);
+                if (locked) available["desktopState"] = "locked";
+                await CompanionApi.Post(target, "check", new { info = available }, current.Token, lifetime.Token);
+            }
+            catch (OperationCanceledException) { }
+            catch (HttpRequestException) { }
+            catch (ApiFailure) { }
         }));
     }
 
@@ -822,6 +975,8 @@ internal sealed class CompanionWindow : Form
         {
             e.Cancel = true;
             if (approval != null) SetApproval(false);
+            if (pickingLocalCapture && inProgress != null) inProgress.Cancel();
+            FinishRecording();
             Hide();
             return;
         }

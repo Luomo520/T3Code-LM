@@ -108,7 +108,24 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
       let params: Record<string, string> = {};
       const fail = (message: string) =>
         new OrchestratorMcpFailure({ code: "invalid_request", message });
-      if (input.action === "receive-file") {
+      if (
+        (input.captureKind !== undefined &&
+          input.action !== "screenshot" &&
+          input.action !== "record-screen") ||
+        (input.durationSeconds !== undefined && input.action !== "record-screen")
+      ) {
+        return yield* fail(
+          "Capture options apply only to their corresponding screenshot or recording action.",
+        );
+      }
+      if (input.action === "screenshot" || input.action === "record-screen") {
+        params = {
+          ...(input.captureKind === undefined ? {} : { captureKind: input.captureKind }),
+          ...(input.durationSeconds === undefined
+            ? {}
+            : { durationSeconds: String(input.durationSeconds) }),
+        };
+      } else if (input.action === "receive-file") {
         if (!input.attachmentId)
           return yield* fail("Select a file already attached to this thread.");
         const { projection } = yield* readThread(threadId, ["messages"]);
@@ -201,6 +218,7 @@ export const layerResult = McpToolAccess.toLayer(CompanionResultToolkit, {
         );
         return {
           ...summary,
+          captureScope: task.captureScope ?? "primary-display",
           recording: {
             url:
               origin === undefined
@@ -225,8 +243,8 @@ export const layerResult = McpToolAccess.toLayer(CompanionResultToolkit, {
       }
       return {
         ...summary,
-        captureScope: "primary-display" as const,
-        summary: `${task.deviceName} · 主显示器 · 上报时间 ${task.updatedAt}`,
+        captureScope: task.captureScope ?? "primary-display",
+        summary: `${task.deviceName} · ${task.captureScope === "window" ? "所选窗口" : task.captureScope === "display" ? "所选显示器" : "主显示器"} · 上报时间 ${task.updatedAt}`,
         screenshot: {
           mimeType: "image/png" as const,
           data: Buffer.from(bytes).toString("base64"),

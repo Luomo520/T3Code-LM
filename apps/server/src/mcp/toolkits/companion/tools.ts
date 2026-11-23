@@ -1,4 +1,9 @@
-import { OrchestratorMcpFailure, TrimmedNonEmptyString } from "@t3tools/contracts";
+import {
+  COMPANION_MAX_RECORDING_SECONDS,
+  CompanionCaptureKind,
+  OrchestratorMcpFailure,
+  TrimmedNonEmptyString,
+} from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { AssetSigner } from "../../../assets/AssetSigner.ts";
@@ -54,12 +59,16 @@ const list = Tool.make("t3_companion_list", {
 
 const enqueue = Tool.make("t3_companion_enqueue", {
   description:
-    "Request one approved action on a paired Windows companion. The device user approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. It records the primary screen for up to 10 seconds after local approval. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. write-notepad replaces the text in the companion's own foreground Notepad with the approved text; read-notepad returns that document's text. Read the original thread result with t3_companion_result.",
+    "Request one approved action on a paired Windows companion. The device user approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. For screenshots and recordings, the Windows user chooses the actual window or display. captureKind may suggest its category. durationSeconds sets a recording maximum from 1 to 30 seconds (default 10). Windows shows the recording and can stop it. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. write-notepad replaces the text in the companion's own foreground Notepad with the approved text; read-notepad returns that document's text. Read the original thread result with t3_companion_result.",
   parameters: Schema.Struct({
     deviceId: identifier,
     action,
     clientRequestId: identifier,
     attachmentId: Schema.optionalKey(identifier),
+    captureKind: Schema.optionalKey(CompanionCaptureKind),
+    durationSeconds: Schema.optionalKey(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: COMPANION_MAX_RECORDING_SECONDS })),
+    ),
     text: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
   }),
   success: task,
@@ -77,7 +86,7 @@ export const CompanionResultTool = Tool.make("t3_companion_result", {
   parameters: Schema.Struct({ id: identifier }),
   success: Schema.Struct({
     ...task.fields,
-    captureScope: Schema.optionalKey(Schema.Literal("primary-display")),
+    captureScope: Schema.optionalKey(Schema.Literals(["primary-display", "window", "display"])),
     summary: Schema.optionalKey(Schema.String),
     recording: Schema.optionalKey(Schema.Struct({ url: Schema.String, expiresAt: Schema.Number })),
     file: Schema.optionalKey(

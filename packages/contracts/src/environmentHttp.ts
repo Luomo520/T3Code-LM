@@ -1106,7 +1106,10 @@ const CompanionFileBase64 = Schema.String.check(
   Schema.isMaxLength(COMPANION_MAX_IMAGE_BASE64_LENGTH),
   Schema.isBase64(),
 );
+export const CompanionCaptureKind = Schema.Literals(["window", "display"]);
+export const COMPANION_MAX_RECORDING_SECONDS = 30;
 export const CompanionResultInput = Schema.Struct({
+  captureScope: Schema.optionalKey(CompanionCaptureKind),
   id: CompanionIdentifier,
   status: Schema.Literals(["done", "failed"]),
   message: Schema.String.check(Schema.isMaxLength(4096)),
@@ -1151,6 +1154,7 @@ export const CompanionDevice = Schema.Struct({
       action: Schema.String,
       status: Schema.Literals(["queued", "running", "done", "failed", "canceled"]),
       updatedAt: Schema.String,
+      savedPath: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))),
     }),
   ).check(Schema.isMaxLength(10)),
 });

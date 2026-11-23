@@ -399,6 +399,8 @@ function CompanionDeviceRow({
               <li className="break-all" key={task.id}>
                 {task.action} · {taskStatuses[task.status]} ·{" "}
                 {formatCompanionTime(task.updatedAt, locale)}
+                <div className="select-all font-mono">{task.id}</div>
+                {task.savedPath ? <div className="select-text">{task.savedPath}</div> : null}
               </li>
             ))}
           </ul>
@@ -431,6 +433,18 @@ function CompanionDeviceDetails({ device }: { readonly device: CompanionDevice }
           time: formatCompanionTime(device.detailsUpdatedAt ?? device.lastSeen, locale),
         })}
       </p>
+      <p className="pt-2">
+        {!device.online
+          ? gt("Open the Windows companion and resume receiving requests.")
+          : device.info.desktopState === "locked"
+            ? gt("Unlock Windows to confirm file transfers, screenshots and recordings.")
+            : device.info.desktopState === "ready"
+              ? gt("File transfers, screenshots and recordings can be confirmed on this PC.")
+              : gt("Check the desktop status on this PC before sending a request.")}
+      </p>
+      {details.filter((field) => field.key.startsWith("network")).length > 1 ? (
+        <p className="pt-2">{gt("These network adapters belong to the same paired PC.")}</p>
+      ) : null}
       {details.length > 0 ? (
         <dl className="grid gap-x-3 gap-y-1 pt-2 sm:grid-cols-[max-content_minmax(0,1fr)]">
           {details.map(({ key, label, value }) => (

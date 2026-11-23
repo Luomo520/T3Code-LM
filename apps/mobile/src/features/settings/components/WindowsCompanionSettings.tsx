@@ -283,7 +283,43 @@ function describeDevice(device: CompanionDevice): string {
   return [
     device.online ? "在线" : "离线",
     `资料更新时间 · ${updated}`,
+    !device.online
+      ? "请在这台电脑上打开受控端并恢复接收。"
+      : device.info.desktopState === "locked"
+        ? "请先解锁 Windows，再确认收发文件、截图或录屏。"
+        : device.info.desktopState === "ready"
+          ? "可在这台电脑上确认收发文件、截图和录屏。"
+          : "请在这台电脑上核实桌面状态后再发送请求。",
+    ...(fields.filter((field) => field.startsWith("网卡 ·")).length > 1
+      ? ["以下网卡属于同一台已配对电脑。"]
+      : []),
     "",
     ...(fields.length > 0 ? fields : ["在 Windows 受控端运行「设备自检」可发送设备资料。"]),
+    ...device.recentTasks.flatMap((task, index) => [
+      ...(index === 0 ? ["", "最近任务"] : []),
+      `${companionActionLabels[task.action] ?? task.action} · ${taskStatusLabels[task.status]} · ${new Date(task.updatedAt).toLocaleString()}`,
+      task.id,
+      ...(task.savedPath ? [task.savedPath] : []),
+    ]),
   ].join("\n");
 }
+
+const companionActionLabels: Readonly<Record<string, string>> = {
+  screenshot: "截图",
+  "record-screen": "录屏",
+  "open-t3": "打开 T3",
+  "open-notepad": "打开记事本",
+  "close-window": "关闭窗口",
+  "send-file": "发送文件",
+  "receive-file": "接收文件",
+  "write-notepad": "填写记事本",
+  "read-notepad": "读取记事本",
+};
+
+const taskStatusLabels = {
+  queued: "排队中",
+  running: "进行中",
+  done: "已完成",
+  failed: "失败",
+  canceled: "已取消",
+} as const;

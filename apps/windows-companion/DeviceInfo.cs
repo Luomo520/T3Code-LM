@@ -15,6 +15,7 @@ internal static class DeviceInfo
             { "os", Environment.OSVersion.VersionString },
             { "platform", "windows" },
             { "recordingStop", "true" },
+            { "captureTargetV1", "true" },
             { "version", Program.Version },
             { "processorCount", Environment.ProcessorCount.ToString(CultureInfo.InvariantCulture) }
         };
@@ -37,6 +38,14 @@ internal static class DeviceInfo
         }
 
         return WithCurrentNetworks(values);
+    }
+
+    internal static Dictionary<string, string> WithDesktopState(Dictionary<string, string> details)
+    {
+        return new Dictionary<string, string>(details)
+        {
+            { "desktopState", WindowsDesktop.DesktopAvailable() ? "ready" : "locked" }
+        };
     }
 
     internal static Dictionary<string, string> WithCurrentNetworks(Dictionary<string, string> previous)

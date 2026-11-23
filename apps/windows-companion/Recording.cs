@@ -4,14 +4,12 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Text;
-using System.Windows.Forms;
 
 internal sealed class ScreenRecording : IDisposable
 {
     internal const int Interval = 200;
     internal const int FrameLimit = 3000;
     private readonly BinaryWriter writer;
-    private readonly Rectangle screen = Screen.PrimaryScreen.Bounds;
     private readonly List<Tuple<uint, uint>> frames = new List<Tuple<uint, uint>>();
     private readonly int width;
     private readonly int height;
@@ -21,12 +19,13 @@ internal sealed class ScreenRecording : IDisposable
 
     internal int Count { get { return frames.Count; } }
 
-    internal ScreenRecording(string file, int maxWidth = 1280, long maxBytes = 500000000)
+    internal ScreenRecording(string file, Size source, int maxEdge = 1280, long maxBytes = 500000000)
     {
         WindowsDesktop.RequireDesktop();
-        width = Math.Min(maxWidth, screen.Width);
+        double scale = Math.Min(1, maxEdge / (double)Math.Max(source.Width, source.Height));
+        width = Math.Max(1, (int)(source.Width * scale));
+        height = Math.Max(1, (int)(source.Height * scale));
         byteLimit = maxBytes;
-        height = Math.Max(1, (int)(screen.Height * (width / (double)screen.Width)));
         writer = new BinaryWriter(new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.Read));
         try
         {
@@ -59,17 +58,12 @@ internal sealed class ScreenRecording : IDisposable
     private long Position { get { return writer.BaseStream.Position; } }
     private void Four(string value) { writer.Write(Encoding.ASCII.GetBytes(value)); }
 
-    internal void Capture()
+    internal void AddFrame(Bitmap source)
     {
-        WindowsDesktop.RequireDesktop();
-        if (Screen.PrimaryScreen.Bounds != screen) throw new InvalidOperationException("主显示器尺寸已改变，录制已结束。");
-        using (var source = new Bitmap(screen.Width, screen.Height, PixelFormat.Format24bppRgb))
         using (var frame = new Bitmap(width, height, PixelFormat.Format24bppRgb))
-        using (var display = Graphics.FromImage(source))
         using (var resize = Graphics.FromImage(frame))
         using (var jpeg = new MemoryStream())
         {
-            display.CopyFromScreen(screen.Location, Point.Empty, screen.Size);
             resize.DrawImage(source, 0, 0, width, height);
             frame.Save(jpeg, ImageFormat.Jpeg);
             if (Position + jpeg.Length + (frames.Count + 2L) * 16 + 16 > byteLimit)

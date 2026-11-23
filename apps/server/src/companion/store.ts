@@ -65,6 +65,7 @@ interface Task {
   readonly deviceName: string;
   readonly imagePath?: string;
   readonly recordingPath?: string;
+  readonly captureScope?: NonNullable<Completion["captureScope"]>;
   readonly stopRequested?: true;
   readonly transferredFile?: {
     readonly path: string;
@@ -88,6 +89,7 @@ interface TaskRow {
   readonly result_hash: string | null;
   readonly transfer_receipt: string | null;
   readonly stop_requested_at: number | null;
+  readonly capture_scope: NonNullable<Completion["captureScope"]> | null;
 }
 
 interface DeviceRow {
@@ -239,6 +241,13 @@ function decodePng(source: string): Buffer {
   throw invalid;
 }
 
+function supportsCaptureOptions(params: Strings, info: Strings): boolean {
+  return (
+    (params.captureKind === undefined && params.durationSeconds === undefined) ||
+    info.captureTargetV1 === "true"
+  );
+}
+
 export function createCompanionStore(stateDir: string, now = Date.now) {
   const directory = NodePath.resolve(stateDir, "windows-companion");
   const screenshots = NodePath.join(directory, "screenshots");
@@ -278,6 +287,7 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       result_hash TEXT,
       transfer_receipt TEXT,
       stop_requested_at INTEGER,
+      capture_scope TEXT,
       UNIQUE(thread_id, request_id)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS tasks_by_device ON tasks(device_id, sequence);
@@ -341,6 +351,9 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
     if (!taskColumns.some((column) => column.name === "stop_requested_at")) {
       db.exec("ALTER TABLE tasks ADD COLUMN stop_requested_at INTEGER");
     }
+    if (!taskColumns.some((column) => column.name === "capture_scope")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN capture_scope TEXT");
+    }
   });
 
   function maintenance(time: number): void {
@@ -377,6 +390,7 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       updatedAt: timestamp(task.updated_at),
       message: task.message,
       deviceName: task.device_name,
+      ...(task.capture_scope === null ? {} : { captureScope: task.capture_scope }),
       ...(task.status === "running" && task.stop_requested_at !== null
         ? { stopRequested: true }
         : {}),
@@ -516,6 +530,17 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         `)
           .get(device.id) as TaskRow | undefined;
         if (task === undefined) return { name: device.name, job: null };
+        const params = JSON.parse(task.params) as Strings;
+        if (!supportsCaptureOptions(params, info)) {
+          db.prepare(`
+            UPDATE tasks SET status = 'failed', message = ?, updated_at = ? WHERE id = ?
+          `).run(
+            "The Windows companion no longer supports the requested capture options.",
+            time,
+            task.id,
+          );
+          return { name: device.name, job: null };
+        }
         // 已领取但未收到回执的任务在超时后结案，避免重做桌面操作。
         db.prepare(`
           UPDATE tasks SET status = 'running', message = 'Waiting for the Windows device.',
@@ -527,7 +552,7 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
             id: task.id,
             action: task.action,
             threadId: task.thread_id,
-            params: JSON.parse(task.params) as Strings,
+            params,
           },
         };
       });
@@ -582,6 +607,24 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
             .prepare("SELECT * FROM tasks WHERE device_id = ? AND id = ?")
             .get(device.id, input.id) as TaskRow | undefined;
           if (task === undefined) throw new CompanionError(404, "Windows request not found.");
+          if (
+            input.captureScope !== undefined &&
+            (input.status !== "done" ||
+              (task.action !== "screenshot" && task.action !== "record-screen"))
+          ) {
+            throw new CompanionError(400, "Only a completed capture may report its capture scope.");
+          }
+          const captureKind = (JSON.parse(task.params) as Strings).captureKind;
+          if (
+            input.status === "done" &&
+            captureKind !== undefined &&
+            input.captureScope !== captureKind
+          ) {
+            throw new CompanionError(
+              400,
+              "The recorded scope differs from the requested capture kind.",
+            );
+          }
           if (
             input.imageBase64 !== undefined &&
             (task.action !== "screenshot" || input.status !== "done")
@@ -656,11 +699,13 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
                 }
               : (input.savedFile ?? null);
           const resultHash = hash(
-            JSON.stringify(
-              receipt === null
-                ? [input.status, input.message, media === undefined ? null : hash(media)]
-                : [input.status, input.message, media === undefined ? null : hash(media), receipt],
-            ),
+            JSON.stringify([
+              input.status,
+              input.message,
+              media === undefined ? null : hash(media),
+              ...(receipt === null ? [] : [receipt]),
+              ...(input.captureScope === undefined ? [] : [input.captureScope]),
+            ]),
           );
           if (task.result_hash === resultHash) return;
           if (task.status !== "running") {
@@ -683,13 +728,14 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
             shouldSweep = true;
           }
           db.prepare(`
-            UPDATE tasks SET status = ?, message = ?, image_name = ?, result_hash = ?, transfer_receipt = ?, updated_at = ? WHERE id = ?
+            UPDATE tasks SET status = ?, message = ?, image_name = ?, result_hash = ?, transfer_receipt = ?, capture_scope = ?, updated_at = ? WHERE id = ?
           `).run(
             input.status,
             input.message,
             imageName,
             resultHash,
             receipt === null ? null : JSON.stringify(receipt),
+            input.captureScope ?? null,
             time,
             task.id,
           );
@@ -718,7 +764,10 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         )
         .all() as unknown as DeviceRow[];
       const history = db.prepare(`
-        SELECT id, action, status, updated_at FROM tasks WHERE device_id = ?
+        SELECT id, action, status, updated_at,
+          CASE WHEN action = 'receive-file' AND status = 'done'
+            THEN json_extract(transfer_receipt, '$.path') END AS saved_path
+        FROM tasks WHERE device_id = ?
         ORDER BY updated_at DESC, sequence DESC LIMIT 10
       `);
       return devices.map((device) => ({
@@ -728,11 +777,17 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         lastSeen: timestamp(device.last_seen),
         detailsUpdatedAt: timestamp(device.details_updated_at ?? device.last_seen),
         online: time - device.last_seen < ONLINE_TTL,
-        recentTasks: (history.all(device.id) as unknown as TaskRow[]).map((task) => ({
+        recentTasks: (
+          history.all(device.id) as unknown as (Pick<
+            TaskRow,
+            "id" | "action" | "status" | "updated_at"
+          > & { saved_path: string | null })[]
+        ).map((task) => ({
           id: task.id,
           action: task.action,
           status: task.status,
           updatedAt: timestamp(task.updated_at),
+          ...(task.saved_path ? { savedPath: task.saved_path } : {}),
         })),
       }));
     },
@@ -783,8 +838,11 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
           }
           return taskView(existing);
         }
-        const device = db.prepare("SELECT name FROM devices WHERE id = ?").get(deviceId);
+        const device = db.prepare("SELECT name, info FROM devices WHERE id = ?").get(deviceId);
         if (device === undefined) throw new CompanionError(404, "Windows companion not found.");
+        if (!supportsCaptureOptions(params, JSON.parse(String(device.info)) as Strings)) {
+          throw new CompanionError(409, "This Windows companion does not support capture options.");
+        }
         const pending = db
           .prepare(`
           SELECT COUNT(*) AS count FROM tasks WHERE device_id = ? AND status IN ('queued', 'running')

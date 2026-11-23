@@ -138,6 +138,43 @@ describe("Windows companion store", () => {
     );
   });
 
+  it("keeps capture options and results tied to capable paired devices and the original thread", () => {
+    const { store, enroll } = setup();
+    const legacy = enroll("Legacy PC");
+    const info = { captureTargetV1: "true" };
+    const device = store.enroll(store.pair().code, "PC", info);
+    const params = { captureKind: "window", durationSeconds: "4" };
+    expect(() =>
+      store.enqueue("thread", legacy.deviceId, "record-screen", "legacy", params),
+    ).toThrow(expect.objectContaining({ status: 409 }));
+    const outdated = store.enqueue("thread", device.deviceId, "record-screen", "outdated", params);
+    expect(store.poll(device.token, "PC", {}).job).toBeNull();
+    expect(store.result("thread", outdated.id).status).toBe("failed");
+    store.poll(device.token, "PC", info);
+    const task = store.enqueue("thread", device.deviceId, "screenshot", "capture", {
+      captureKind: "window",
+    });
+    expect(store.poll(device.token, "PC", info).job?.params).toEqual({ captureKind: "window" });
+    const completion = {
+      id: task.id,
+      status: "done",
+      message: "captured",
+      imageBase64: screenshot().toString("base64"),
+    } as const;
+    expect(() => store.complete(device.token, { ...completion, captureScope: "display" })).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+    store.complete(device.token, { ...completion, captureScope: "window" });
+    store.complete(device.token, { ...completion, captureScope: "window" });
+    expect(store.result("thread", task.id)).toMatchObject({
+      captureScope: "window",
+      status: "done",
+    });
+    expect(() => store.result("another-thread", task.id)).toThrow(
+      expect.objectContaining({ status: 404 }),
+    );
+  });
+
   it("binds Windows file transfers to the claimed job, SHA-256 and original thread", () => {
     const { store, enroll } = setup();
     const device = enroll("PC");
@@ -168,6 +205,10 @@ describe("Windows companion store", () => {
     ).toThrow(expect.objectContaining({ status: 400 }));
     store.complete(device.token, { id: outbound.id, status: "done", message: "saved", savedFile });
     expect(store.result("thread", outbound.id)).toMatchObject({ status: "done", savedFile });
+    const history = store.list().find((entry) => entry.deviceId === device.deviceId)?.recentTasks;
+    expect(history?.find((task) => task.id === outbound.id)).toMatchObject({
+      savedPath: savedFile.path,
+    });
 
     const inbound = store.enqueue("thread", device.deviceId, "send-file", "inbound");
     expect(store.poll(device.token, "PC", {}).job).toMatchObject({ id: inbound.id });
