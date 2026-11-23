@@ -29,6 +29,28 @@ function trimmed(value: string | null | undefined): string | undefined {
   return result && result.length > 0 ? result : undefined;
 }
 
+// Codex 原生路径只接受 ASCII。限定前缀和可显示字符，避免把普通任务路径误当作中文标题。
+export function codexTaskName(displayName: string): string {
+  return (
+    "t3n_" +
+    Array.from(displayName, (character) => character.codePointAt(0)!.toString(16)).join("_")
+  );
+}
+
+export function codexActivityTitle(path: string): string {
+  const leaf = path.split("/").at(-1) ?? "";
+  if (!/^t3n_(?:[0-9a-f]{1,6}_){0,11}[0-9a-f]{1,6}$/u.test(leaf)) return path;
+  const points = leaf
+    .slice(4)
+    .split("_")
+    .map((hex) => Number.parseInt(hex, 16));
+  if (points.some((point) => point > 0x10ffff)) return path;
+  const title = String.fromCodePoint(...points);
+  return /^[\p{L}\p{N} _-]+$/u.test(title) && title.trim() && codexTaskName(title) === leaf
+    ? title
+    : path;
+}
+
 export function subagentThreadTitle(input: {
   readonly parentTitle: string;
   readonly title?: string | null;

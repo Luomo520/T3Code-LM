@@ -157,6 +157,7 @@ import {
   providerMessageTextWithAttachmentPaths,
 } from "@t3tools/provider-core/server/attachmentPrompt";
 import {
+  codexActivityTitle,
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
@@ -3567,7 +3568,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 nativeItemId: `${input.item.id}:${input.item.agentThreadId}`,
                 nativeToolCallId: input.item.id,
                 prompt: "",
-                title: input.item.agentPath,
+                title: codexActivityTitle(input.item.agentPath),
                 model: null,
                 ordinal,
                 emitInitialPrompt: false,

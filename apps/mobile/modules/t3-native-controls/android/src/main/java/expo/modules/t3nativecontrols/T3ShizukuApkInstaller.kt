@@ -42,6 +42,22 @@ internal object T3ShizukuApkInstaller {
     }
   }
 
+  fun accessStatus(): String = runCatching {
+    when {
+      !available() -> "unavailable"
+      !authorized() -> if (Shizuku.shouldShowRequestPermissionRationale()) "denied" else "available"
+      Shizuku.getUid() == 0 -> "root"
+      else -> "adb"
+    }
+  }.getOrDefault("unavailable")
+
+  suspend fun requestAccess(): String {
+    if (accessStatus() == "available" && !requestPermission()) {
+      return if (available()) "denied" else "unavailable"
+    }
+    return accessStatus()
+  }
+
   suspend fun install(context: Context, apk: File): String? {
     check(available()) { "Shizuku / Sui 当前不可用。请在设备上启动服务后重试。" }
     check(requestPermission() && available() && authorized()) {

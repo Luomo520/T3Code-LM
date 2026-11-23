@@ -86,6 +86,18 @@ const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
+const CodexTaskNameTool = Tool.make("t3_subagent_name", {
+  description:
+    "Prepare a short display name for a native Codex child. Pass the desired Chinese or mixed-language name and use the returned task_name in the native spawn call.",
+  parameters: Schema.Struct({
+    displayName: TrimmedNonEmptyString.check(Schema.isPattern(/^[\p{L}\p{N} _-]{1,12}$/u)),
+  }),
+  success: Schema.Struct({ task_name: Schema.String }),
+})
+  .annotate(Tool.Title, "设置子代理名称")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Idempotent, true);
+
 const DelegateTaskTool = Tool.make("delegate_task", {
   description:
     "Codex targets are native-only and rejected by this tool, including requests with model options or worktree isolation. Use the parent model's real native subagent tools; if they cannot preserve the requested settings, report the mismatch and keep work in the parent. Never fall back to ordinary threads, attached forks or another provider. For non-Codex targets: needs an agent running inside a T3 thread. Delegate one task to a T3-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Set target.environmentId to run it in a linked environment (t3_environment_links): it runs there as an ordinary thread, in the project with this thread's repository unless target.projectId names one, with this thread's provider and model unless target names others from orchestrator_capabilities with the same environmentId, and omitted modes capped by the link's access. It wakes this thread when it ends like any other task. Choose providers and models from orchestrator_capabilities, which uses the same live catalog as the composer. Prefer native subagent tools for same-provider work only when they support the chosen model and no model options are requested or inherited. Use this for any model missing from the native tool, including same-provider work, for cross-provider work, or for explicitly T3-owned child tasks. For every T3 delegated review round, call delegate_task again with the original brief, prior findings, responses, and unresolved objections in the task prompt. Track each round by its own taskId and use a distinct clientRequestId per round, stable across retries of that round. The childThreadId is backing storage, not the target for starting another delegated review round through t3_thread_send. Set isolation to worktree for a separate checkout based on the parent local commit, with project setup completed before the child starts. Uncommitted edits are not copied; omitted isolation shares the parent checkout. Use delegate_task when model options are requested or the child keeps the parent's provider instance and model with nonempty inheritedOptions from orchestrator_capabilities, even for native-supported models. Native subagents cannot reliably apply T3 model options. Set target.options using advertised IDs: Claude {effort: 'max', fastMode: true}; Codex {reasoningEffort: 'max', serviceTier: 'priority'}. Check providerInstanceId, model, and options in the result. Provider/model and modes inherit unless overridden. Options inherit only for the same instance and model; explicit entries override individual values and [] or {} clears them. A requested runtimeMode must be one the target provider lists in orchestrator_capabilities runtimeModes; an inherited one steps down to the broadest mode it offers. Leave runtimeMode unset unless the user asks for a supervised child: approval-required and auto-accept-edits usually make the child wait for a person at each action that needs approval. Prefer mode='async' for long work; mode='wait' blocks until completion, a blocking question, a pending approval, or timeout. If hasPendingQuestion, pass threadId=childThreadId to t3_pending_request_list, t3_pending_request_read (with requestId) and t3_pending_request_respond, or ask the user; the task's completion still wakes this thread. If pendingApproval is set, read the fresh full request in childThreadId before responding: the record can outlive its provider callback. It grants no approval authority; decisions remain with the child's existing approval holder, and pending request tools answer questions only. The child keeps running and its completion still wakes this thread. timeoutMs on mode=wait is only the parent's wait budget and does not cancel the child. waitTimedOut on that wait call means the timeout fired; keep that taskId and read status on later task_status. An async child's completion wakes this thread through a notification, steered into active turns where supported or queued otherwise, so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn.",
@@ -358,6 +370,7 @@ const EnvironmentUnlinkTool = Tool.make("t3_environment_unlink", {
 
 export const OrchestratorToolkit = Toolkit.make(
   OrchestratorCapabilitiesTool,
+  CodexTaskNameTool,
   DelegateTaskTool,
   TaskStatusTool,
   TaskCancelTool,

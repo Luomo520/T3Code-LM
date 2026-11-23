@@ -27,3 +27,12 @@ it("refuses a t3_thread_update whose fields do not fit its action", () => {
     true,
   );
 });
+
+it("接受中文名称，拒绝路径和空名称", () => {
+  const decode = Schema.decodeUnknownExit(
+    OrchestratorToolkit.tools.t3_subagent_name.parametersSchema,
+  );
+  expect(Exit.isSuccess(decode({ displayName: "列表筛选" }))).toBe(true);
+  expect(Exit.isFailure(decode({ displayName: "root/child" }))).toBe(true);
+  expect(Exit.isFailure(decode({ displayName: "  " }))).toBe(true);
+});

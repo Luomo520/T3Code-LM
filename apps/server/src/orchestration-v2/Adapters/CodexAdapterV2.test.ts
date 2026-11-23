@@ -6487,7 +6487,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               id: "call-codex-interrupt-subagent",
               kind: "started",
               agentThreadId: INTERRUPT_CHILD_NATIVE_THREAD,
-              agentPath: "/root/stop_hold",
+              agentPath: "/root/t3n_5217_8868_7b5b_9009",
             },
             threadId: INTERRUPT_NATIVE_THREAD,
             turnId: INTERRUPT_NATIVE_TURN,
@@ -6687,6 +6687,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       );
       assert.equal(childCommandUpdates.at(-1)?.turnItem.status, "interrupted");
       assert.equal(harness.subagentUpdates().at(-1)?.subagent.status, "interrupted");
+      assert.equal(harness.subagentUpdates().at(-1)?.subagent.title, "列表筛选");
       assert.isDefined(
         harness
           .subagentUpdates()

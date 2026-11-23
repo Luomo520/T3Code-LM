@@ -1,6 +1,6 @@
 import { requireOptionalNativeModule } from "expo";
 import { useEffect, useState } from "react";
-import { Alert, View } from "react-native";
+import { Alert, AppState, View } from "react-native";
 
 import { AppText } from "../../../components/ui/AppText";
 import { SettingsRow } from "./SettingsRow";
@@ -19,7 +19,19 @@ type InstallResult =
   | { readonly status: "installed" | "cancelled" | "permission-required" }
   | { readonly status: "failed"; readonly message: string };
 
+const accessLabels = {
+  unavailable: "请先启动 Shizuku 或 Sui",
+  available: "可请求授权",
+  denied: "已拒绝，可在授权管理中为 T3 开启权限",
+  adb: "ADB 已授权",
+  root: "Root 已授权",
+} as const;
+
+type DeviceAccess = keyof typeof accessLabels;
+
 const installer = requireOptionalNativeModule<{
+  getDeviceAccess: () => Promise<DeviceAccess>;
+  requestDeviceAccess: () => Promise<DeviceAccess>;
   getSelectedApk: () => Promise<SelectedApk | null>;
   pickApk: () => Promise<SelectedApk | null>;
   installApk: (id: string, method: InstallMethod) => Promise<InstallResult>;
@@ -38,8 +50,30 @@ function errorMessage(error: unknown) {
 
 export function LocalApkInstallSection() {
   const [selected, setSelected] = useState<SelectedApk | null>(null);
-  const [pending, setPending] = useState<"pick" | InstallMethod | null>(null);
+  const [pending, setPending] = useState<"access" | "pick" | InstallMethod | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const [access, setAccess] = useState<DeviceAccess | null>(null);
+  useEffect(() => {
+    let active = true;
+    const refresh = () =>
+      void installer?.getDeviceAccess().then(
+        (value) => {
+          if (active) setAccess(value);
+        },
+        () => {
+          if (active) setAccess("unavailable");
+        },
+      );
+    refresh();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") refresh();
+    });
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, []);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 设置页重新打开时，读取 Android 模块保存的 APK 选择。
   useEffect(() => {
@@ -59,6 +93,18 @@ export function LocalApkInstallSection() {
 
   if (!installer) return null;
   const native = installer;
+
+  async function requestAccess() {
+    setPending("access");
+    setMessage(null);
+    try {
+      setAccess(await native.requestDeviceAccess());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "未能读取设备授权");
+    } finally {
+      setPending(null);
+    }
+  }
 
   async function pick() {
     setMessage(null);
@@ -109,6 +155,15 @@ export function LocalApkInstallSection() {
 
   return (
     <View className="gap-2">
+      <SettingsSection title="设备授权">
+        <SettingsRow
+          icon="bolt.circle"
+          label="请求 ADB / Root 授权"
+          value={access ? accessLabels[access] : "正在检查…"}
+          disabled={pending !== null || access === "adb" || access === "root"}
+          onPress={() => void requestAccess()}
+        />
+      </SettingsSection>
       <SettingsSection title="安装本地 APK">
         <SettingsRow
           icon="folder"
@@ -140,7 +195,13 @@ export function LocalApkInstallSection() {
           textRole="footnote"
           className="px-4 text-foreground-muted"
         >
-          {pending === "pick" ? "正在读取 APK…" : pending ? "正在等待安装结果…" : message}
+          {pending === "access"
+            ? "正在请求设备授权…"
+            : pending === "pick"
+              ? "正在读取 APK…"
+              : pending
+                ? "正在等待安装结果…"
+                : message}
         </AppText>
       ) : null}
     </View>

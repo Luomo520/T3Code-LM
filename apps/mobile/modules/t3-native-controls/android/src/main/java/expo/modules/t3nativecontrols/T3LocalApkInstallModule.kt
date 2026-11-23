@@ -41,6 +41,12 @@ class T3LocalApkInstallModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("T3LocalApkInstall")
 
+    AsyncFunction("getDeviceAccess") { T3ShizukuApkInstaller.accessStatus() }
+
+    AsyncFunction("requestDeviceAccess").Coroutine<String> {
+      runExclusive { T3ShizukuApkInstaller.requestAccess() }
+    }
+
     AsyncFunction("getSelectedApk") {
       selection?.takeIf { it.file.isFile }?.toMap()
     }.runOnQueue(Queues.MAIN)
