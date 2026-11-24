@@ -95,11 +95,20 @@ internal fun localCaptureUnlocked(context: Context): Boolean =
     !context.getSystemService(KeyguardManager::class.java).isKeyguardLocked
 
 class T3LocalScreenCaptureModule : Module() {
+  private val prompt = T3CapturePrompt()
   private val owner = UUID.randomUUID().toString()
 
   override fun definition() = ModuleDefinition {
     Name("T3LocalScreenCapture")
     Events("onRecordingStarted", "onConsentRequested")
+
+    AsyncFunction("showRequestPrompt").Coroutine { id: String, title: String, message: String, hold: String?, remainingMs: Int ->
+      withContext(Dispatchers.Main) {
+        val activity = appContext.currentActivity ?: return@withContext "expired"
+        prompt.show(activity, id, title, message, hold, remainingMs)
+      }
+    }
+    AsyncFunction("dismissRequestPrompt") { id: String -> prompt.dismiss(id) }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("isUnlocked") {
       val context = appContext.reactContext ?: return@AsyncFunction false
@@ -194,6 +203,7 @@ class T3LocalScreenCaptureModule : Module() {
 
     OnDestroy {
       android.os.Handler(android.os.Looper.getMainLooper()).post {
+        prompt.dismiss()
         T3CaptureRequests.sharedService?.stopShare(owner, null, "revoked")
         T3CaptureRequests.stop(owner, false)
       }

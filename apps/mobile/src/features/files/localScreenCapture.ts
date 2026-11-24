@@ -46,6 +46,14 @@ export interface LocalScreenCapture {
     | ({ readonly status: "done" } & LocalCaptureResult)
     | { readonly status: "denied" | "locked" | "revoked" | "canceled" | "failed" }
   >;
+  showRequestPrompt?(
+    id: string,
+    title: string,
+    message: string,
+    hold: string | null,
+    remainingMs: number,
+  ): Promise<"once" | "hold" | "deny" | "expired">;
+  dismissRequestPrompt?(id: string): Promise<void>;
   isUnlocked(): Promise<boolean>;
   capture(kind: LocalCaptureKind, requestId: string): Promise<LocalCaptureResult | null>;
   stopRecording(requestId: string): Promise<void>;

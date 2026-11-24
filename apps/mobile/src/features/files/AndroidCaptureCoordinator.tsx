@@ -350,6 +350,7 @@ function EnvironmentCaptureCoordinator({
       const job = response.value.job;
       const existing = offered.current;
       if (existing && existing.id !== job?.id) {
+        void native.dismissRequestPrompt?.(existing.id).catch(() => {});
         offered.current = null;
         if (captureOwner === existing.id) captureOwner = null;
       }
@@ -433,15 +434,40 @@ function EnvironmentCaptureCoordinator({
           void finish({ _tag: "reject", id: job.id, reason: "denied" });
         }
       };
-      // 使用独立的 Android 原生对话框承接这次明确授权。
-      Alert.alert(
-        isRecording ? "允许本次录屏？" : "允许本次截图？",
+      const title = isRecording ? "允许本次录屏？" : "允许本次截图？";
+      const message =
         (isRecording
           ? `「${environmentLabel}」的会话请求录屏，最长 ${job.durationSeconds} 秒。授权后，结果将发送回发起请求的会话。`
           : `「${environmentLabel}」的会话请求截图。授权后，截图将发送回发起请求的会话。`) +
-          (offerHold
-            ? ` 屏幕解锁且停留在原会话时，系统共享和停止通知可见期间，60 秒内会自动处理此会话的${isRecording ? "录屏" : "截图"}请求。可在通知栏结束共享。`
-            : ""),
+        (offerHold
+          ? ` 屏幕解锁且停留在原会话时，系统共享和停止通知可见期间，60 秒内会自动处理此会话的${isRecording ? "录屏" : "截图"}请求。可在通知栏结束共享。`
+          : "");
+      if (native.showRequestPrompt && job.expiresInMs !== undefined) {
+        const id = job.id;
+        const forget = () => {
+          if (offered.current?.id !== id) return;
+          offered.current = null;
+          if (captureOwner === id) captureOwner = null;
+          presented.current = null;
+        };
+        void native
+          .showRequestPrompt(
+            id,
+            title,
+            message,
+            offerHold ? `自动${isRecording ? "录屏" : "截图"} 60 秒` : null,
+            job.expiresInMs,
+          )
+          .then((choice) => {
+            if (choice === "expired") forget();
+            else decide(choice === "once" || choice === "hold", choice === "hold");
+          })
+          .catch(forget);
+        return;
+      }
+      Alert.alert(
+        title,
+        message,
         [
           ...(offerHold
             ? [
@@ -481,6 +507,7 @@ function EnvironmentCaptureCoordinator({
       unsubscribe?.();
       if (shared.current) endShare();
       available.current = false;
+      if (offered.current) void native.dismissRequestPrompt?.(offered.current.id).catch(() => {});
       const job = current.current;
       if (captureOwner === offered.current?.id || captureOwner === job) captureOwner = null;
       offered.current = null;
