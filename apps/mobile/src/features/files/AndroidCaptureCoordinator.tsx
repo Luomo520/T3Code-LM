@@ -27,7 +27,11 @@ import { localScreenCapture, type CaptureSharingChoice } from "./localScreenCapt
 
 type Job = AndroidCaptureJobData;
 type NativeCapture = NonNullable<typeof localScreenCapture>;
-type ScopedShare = { readonly threadId: Job["threadId"]; readonly routeKey: string };
+type ScopedShare = {
+  readonly threadId: Job["threadId"];
+  readonly routeKey: string;
+  readonly action: Job["action"];
+};
 type ShareChoice = ScopedShare & { readonly choice: CaptureSharingChoice };
 
 function currentThreadRoute(environmentId: EnvironmentId, threadId: Job["threadId"]) {
@@ -36,6 +40,10 @@ function currentThreadRoute(environmentId: EnvironmentId, threadId: Job["threadI
   if (route?.name !== "Thread") return null;
   const params = route.params as { environmentId?: string; threadId?: string } | undefined;
   return params?.environmentId === environmentId && params.threadId === threadId ? route.key : null;
+}
+
+function captureKind(action: Job["action"]) {
+  return action === "screenshot" ? "screenshot" : "recording";
 }
 
 // 应用同一时间只有一个原生对话框。跨环境请求保留排队，等待本机继续处理。
@@ -88,7 +96,8 @@ function EnvironmentCaptureCoordinator({
     await request(input);
   }
 
-  async function capture(job: Job, selection?: ShareChoice) {
+  async function capture(job: Job, selectedShare?: ShareChoice) {
+    let selection = selectedShare;
     if (!available.current || current.current !== null || captureOwner !== job.id) return;
     current.current = job.id;
     const stillCurrent = () => current.current === job.id;
@@ -120,6 +129,8 @@ function EnvironmentCaptureCoordinator({
         selection &&
         (approved.value.job.threadId !== selection.threadId ||
           approved.value.job.id !== job.id ||
+          approved.value.job.action !== selection.action ||
+          approved.value.job.durationSeconds !== job.durationSeconds ||
           currentThreadRoute(environmentId, selection.threadId) !== selection.routeKey)
       ) {
         endShare();
@@ -127,9 +138,13 @@ function EnvironmentCaptureCoordinator({
         return;
       }
       backendApproved.current = true;
-      const kind = job.action === "screenshot" ? "screenshot" : "recording";
+      const kind = captureKind(job.action);
+      const captureOnce = () =>
+        native.captureEnvironmentRequest
+          ? native.captureEnvironmentRequest(kind, job.id, job.durationSeconds, environmentId)
+          : native.captureApprovedRequest?.(kind, job.id, job.durationSeconds);
       if (selection) shared.current = selection;
-      const result =
+      let result =
         selection && native.captureScopedRequest
           ? await native.captureScopedRequest(
               kind,
@@ -140,21 +155,63 @@ function EnvironmentCaptureCoordinator({
               selection.routeKey,
               selection.choice,
             )
-          : native.captureEnvironmentRequest
-            ? await native.captureEnvironmentRequest(
-                kind,
-                job.id,
-                job.durationSeconds,
-                environmentId,
-              )
-            : await native.captureApprovedRequest?.(kind, job.id, job.durationSeconds);
+          : await captureOnce();
       backendApproved.current = false;
+      if (selection?.choice === "reuse" && result?.status === "sharing_unavailable") {
+        const scope = selection;
+        endShare();
+        selection = undefined;
+        const canContinue = () =>
+          stillCurrent() &&
+          isAppActive() &&
+          currentThreadRoute(environmentId, scope.threadId) === scope.routeKey;
+        if (!canContinue() || !(await native.isUnlocked())) {
+          await finish({ _tag: "reject", id: job.id, reason: "canceled" });
+          return;
+        }
+        // 投屏可能在领取请求与采集之间到期。同一任务可重新确认，只有机主点击才打开系统授权。
+        const confirmed = await new Promise<boolean>((resolve) =>
+          Alert.alert(
+            job.action === "screenshot" ? "允许本次截图？" : "允许本次录屏？",
+            "60 秒共享已结束或不可用。继续系统授权可处理这一次请求。",
+            [
+              { text: "拒绝", style: "cancel", onPress: () => resolve(false) },
+              { text: "继续系统授权", onPress: () => resolve(true) },
+            ],
+            { cancelable: true, onDismiss: () => resolve(false) },
+          ),
+        );
+        if (!confirmed || !canContinue()) {
+          await finish({ _tag: "reject", id: job.id, reason: confirmed ? "canceled" : "denied" });
+          return;
+        }
+        if (
+          !(await native.isUnlocked()) ||
+          readAndroidCapturePolicy(environmentId, job.action) === "deny"
+        ) {
+          await finish({ _tag: "reject", id: job.id, reason: "revoked" });
+          return;
+        }
+        const latest = await request({ _tag: "status", id: job.id });
+        if (latest._tag !== "Success" || latest.value._tag !== "active" || !canContinue()) {
+          await finish({ _tag: "reject", id: job.id, reason: "canceled" });
+          return;
+        }
+        backendApproved.current = true;
+        result = await captureOnce();
+        backendApproved.current = false;
+      }
       if (!result || result.status !== "done") {
         if (selection) endShare();
         await finish({
           _tag: "reject",
           id: job.id,
-          reason: lockedRequest.current === job.id ? "locked" : (result?.status ?? "failed"),
+          reason:
+            lockedRequest.current === job.id
+              ? "locked"
+              : result?.status === "sharing_unavailable"
+                ? "revoked"
+                : (result?.status ?? "failed"),
         });
         return;
       }
@@ -179,10 +236,21 @@ function EnvironmentCaptureCoordinator({
       const media = await file.base64();
       if (!stillCurrent()) return;
       const unlocked = await native.isUnlocked();
+      const shareStillVisible =
+        selection && unlocked
+          ? await native.canAutoReuseSharing?.(
+              kind,
+              environmentId,
+              selection.threadId,
+              selection.routeKey,
+              0,
+            )
+          : false;
       if (!stillCurrent()) return;
       if (
         selection &&
-        (!isAppActive() ||
+        (!shareStillVisible ||
+          !isAppActive() ||
           shared.current?.routeKey !== selection.routeKey ||
           currentThreadRoute(environmentId, selection.threadId) !== selection.routeKey)
       ) {
@@ -268,14 +336,28 @@ function EnvironmentCaptureCoordinator({
       }
       captureOwner = job.id;
       offered.current = job;
-      const routeKey = native.captureScopedRequest
-        ? currentThreadRoute(environmentId, job.threadId)
-        : null;
-      const sharing = routeKey
-        ? await native.canReuseSharing?.(environmentId, job.threadId, routeKey).catch(() => false)
-        : false;
+      const routeKey =
+        native.captureScopedRequest && native.canAutoReuseSharing
+          ? currentThreadRoute(environmentId, job.threadId)
+          : null;
+      const scope = routeKey ? { threadId: job.threadId, routeKey, action: job.action } : null;
+      const held = shared.current;
+      const sharing =
+        scope &&
+        held?.routeKey === scope.routeKey &&
+        held.threadId === scope.threadId &&
+        held.action === scope.action &&
+        (await native
+          .canAutoReuseSharing?.(
+            captureKind(job.action),
+            environmentId,
+            job.threadId,
+            scope.routeKey,
+            job.durationSeconds,
+          )
+          .catch(() => false));
       const offerHold =
-        routeKey && !sharing && policy === "ask"
+        scope && !sharing && policy === "ask"
           ? await native.canKeepSharing?.().catch(() => false)
           : false;
       if (!available.current || !isAppActive() || offered.current?.id !== job.id) {
@@ -284,13 +366,22 @@ function EnvironmentCaptureCoordinator({
         presented.current = null;
         return;
       }
-      if (!sharing && policy === "system" && native.captureEnvironmentRequest) {
+      if (
+        scope &&
+        sharing &&
+        currentThreadRoute(environmentId, scope.threadId) === scope.routeKey
+      ) {
+        offered.current = null;
+        void capture(job, { ...scope, choice: "reuse" });
+        return;
+      }
+      if (policy === "system" && native.captureEnvironmentRequest) {
         offered.current = null;
         void capture(job);
         return;
       }
       const isRecording = job.action === "record-screen";
-      const decide = (approved: boolean, choice?: CaptureSharingChoice) => {
+      const decide = (approved: boolean, hold = false) => {
         if (offered.current?.id !== job.id) return;
         offered.current = null;
         if (!isAppActive()) {
@@ -300,17 +391,14 @@ function EnvironmentCaptureCoordinator({
         }
         if (approved) {
           if (
-            choice &&
-            (!routeKey || currentThreadRoute(environmentId, job.threadId) !== routeKey)
+            hold &&
+            (!scope || currentThreadRoute(environmentId, job.threadId) !== scope.routeKey)
           ) {
             if (captureOwner === job.id) captureOwner = null;
             void finish({ _tag: "reject", id: job.id, reason: "canceled" });
             return;
           }
-          void capture(
-            job,
-            choice && routeKey ? { threadId: job.threadId, routeKey, choice } : undefined,
-          );
+          void capture(job, hold && scope ? { ...scope, choice: "hold" } : undefined);
         } else {
           if (captureOwner === job.id) captureOwner = null;
           void finish({ _tag: "reject", id: job.id, reason: "denied" });
@@ -323,16 +411,19 @@ function EnvironmentCaptureCoordinator({
           ? `「${environmentLabel}」的会话请求录屏，最长 ${job.durationSeconds} 秒。授权后，结果将发送回发起请求的会话。`
           : `「${environmentLabel}」的会话请求截图。授权后，截图将发送回发起请求的会话。`) +
           (offerHold
-            ? " 共享 60 秒期间，此会话可继续请求截图或录屏。每次由你确认，可在通知栏结束共享。"
-            : sharing
-              ? " 将使用本会话已开启的屏幕共享。"
-              : ""),
+            ? ` 屏幕解锁且停留在原会话时，系统共享和停止通知可见期间，60 秒内会自动处理此会话的${isRecording ? "录屏" : "截图"}请求。可在通知栏结束共享。`
+            : ""),
         [
-          ...(offerHold ? [{ text: "共享 60 秒", onPress: () => decide(true, "hold") }] : []),
+          ...(offerHold
+            ? [
+                {
+                  text: `自动${isRecording ? "录屏" : "截图"} 60 秒`,
+                  onPress: () => decide(true, true),
+                },
+              ]
+            : []),
           { text: "拒绝", style: "cancel", onPress: () => decide(false) },
-          sharing
-            ? { text: "使用当前共享", onPress: () => decide(true, "reuse") }
-            : { text: "继续系统授权", onPress: () => decide(true) },
+          { text: "继续系统授权", onPress: () => decide(true) },
         ],
         { cancelable: true, onDismiss: () => decide(false) },
       );

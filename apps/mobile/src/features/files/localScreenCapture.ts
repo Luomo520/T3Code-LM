@@ -18,7 +18,13 @@ export interface LocalScreenCapture {
     environmentId: string,
   ): ReturnType<NonNullable<LocalScreenCapture["captureApprovedRequest"]>>;
   canKeepSharing?(): Promise<boolean>;
-  canReuseSharing?(environmentId: string, threadId: string, routeKey: string): Promise<boolean>;
+  canAutoReuseSharing?(
+    kind: LocalCaptureKind,
+    environmentId: string,
+    threadId: string,
+    routeKey: string,
+    seconds: number,
+  ): Promise<boolean>;
   endSharing?(environmentId: string): Promise<void>;
   captureScopedRequest?(
     kind: LocalCaptureKind,
@@ -28,7 +34,10 @@ export interface LocalScreenCapture {
     threadId: string,
     routeKey: string,
     choice: CaptureSharingChoice,
-  ): ReturnType<NonNullable<LocalScreenCapture["captureApprovedRequest"]>>;
+  ): Promise<
+    | Awaited<ReturnType<NonNullable<LocalScreenCapture["captureApprovedRequest"]>>>
+    | { readonly status: "sharing_unavailable" }
+  >;
   captureApprovedRequest?(
     kind: LocalCaptureKind,
     requestId: string,

@@ -10,6 +10,16 @@ const state = vi.hoisted(() => ({
   send: vi.fn(),
   unlocked: vi.fn(),
   deleteFile: vi.fn(),
+  scopedCapture: vi.fn(),
+  canAutoReuseSharing: vi.fn(),
+  canKeepSharing: vi.fn(),
+  endSharing: vi.fn(),
+  route: null as {
+    name: string;
+    key: string;
+    params: { environmentId: string; threadId: string };
+  } | null,
+  routeListener: null as (() => void) | null,
 }));
 
 vi.mock("@t3tools/client-runtime/state/environmentHttpAuth", () => ({}));
@@ -37,7 +47,16 @@ vi.mock("../../lib/appState", () => ({
   useAppActive: () => state.active,
 }));
 vi.mock("../../lib/rootNavigation", () => ({
-  rootNavigationRef: { isReady: () => false },
+  rootNavigationRef: {
+    isReady: () => state.route !== null,
+    getCurrentRoute: () => state.route,
+    addListener: (_event: string, listener: () => void) => {
+      state.routeListener = listener;
+      return () => {
+        state.routeListener = null;
+      };
+    },
+  },
 }));
 vi.mock("../agent-awareness/androidNotifications", () => ({
   canNotifyAndroidCaptureRequests: () => true,
@@ -59,6 +78,10 @@ vi.mock("./localScreenCapture", () => ({
   localScreenCapture: {
     isUnlocked: state.unlocked,
     captureApprovedRequest: state.capture,
+    captureScopedRequest: state.scopedCapture,
+    canAutoReuseSharing: state.canAutoReuseSharing,
+    canKeepSharing: state.canKeepSharing,
+    endSharing: state.endSharing,
     cancelCapture: vi.fn(async () => {}),
   },
 }));
@@ -162,6 +185,130 @@ it("presents a queued recording only once after returning to the foreground", as
   } finally {
     state.active = true;
     await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+    vi.resetAllMocks();
+  }
+});
+
+it("uses visible sharing automatically for the same action and restores consent after scope changes", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.useFakeTimers();
+  const root = createRoot(document.createElement("div"));
+  state.route = {
+    name: "Thread",
+    key: "original-route",
+    params: { environmentId: "env-android", threadId: "original-thread" },
+  };
+  const screenshot = {
+    id: "first-shot",
+    threadId: "original-thread",
+    action: "screenshot",
+    durationSeconds: 10,
+    expiresAt: 1_800_000_000_000,
+  };
+  let job = screenshot;
+  let sharingVisible = false;
+  const done = { status: "done", uri: "file:///cache/capture.png", name: "capture.png" };
+  const reply = (value: unknown) => ({ _tag: "Success", value });
+  state.unlocked.mockResolvedValue(true);
+  state.canKeepSharing.mockResolvedValue(true);
+  state.canAutoReuseSharing.mockImplementation(async () => sharingVisible);
+  state.endSharing.mockImplementation(async () => {
+    sharingVisible = false;
+  });
+  state.scopedCapture.mockImplementation(async (...args: unknown[]) => {
+    if (args[6] === "hold") sharingVisible = true;
+    return done;
+  });
+  state.capture.mockResolvedValue(done);
+  state.send.mockImplementation(async ({ input }) => {
+    switch (input._tag) {
+      case "listen":
+        return reply({ _tag: "pending", job });
+      case "approve":
+      case "status":
+        return reply({ _tag: "active", job });
+      case "complete":
+      case "reject":
+        return reply({ _tag: "accepted" });
+      default:
+        throw new Error("Unexpected Android capture request");
+    }
+  });
+  const next = async (newJob: typeof screenshot) => {
+    job = newJob;
+    await act(async () => vi.advanceTimersByTimeAsync(4_000));
+  };
+  const press = async (text: string) => {
+    const button = state.alert.mock.lastCall?.[2].find((action) => action.text === text);
+    expect(button).toBeDefined();
+    await act(async () => button?.onPress());
+  };
+  try {
+    await act(async () => root.render(<AndroidCaptureCoordinator />));
+    expect(state.scopedCapture).not.toHaveBeenCalled();
+    expect(state.alert.mock.lastCall?.[1]).toContain("自动处理此会话的截图请求");
+    await press("自动截图 60 秒");
+    expect(state.scopedCapture).toHaveBeenLastCalledWith(
+      "screenshot",
+      "first-shot",
+      10,
+      "env-android",
+      "original-thread",
+      "original-route",
+      "hold",
+    );
+
+    await next({ ...screenshot, id: "automatic-shot" });
+    expect(state.alert).toHaveBeenCalledOnce();
+    expect(state.scopedCapture).toHaveBeenLastCalledWith(
+      "screenshot",
+      "automatic-shot",
+      10,
+      "env-android",
+      "original-thread",
+      "original-route",
+      "reuse",
+    );
+
+    await next({ ...screenshot, id: "different-operation", action: "record-screen" });
+    expect(state.alert.mock.lastCall?.[0]).toBe("允许本次录屏？");
+    expect(state.scopedCapture).toHaveBeenCalledTimes(2);
+    await press("拒绝");
+
+    await next({ ...screenshot, id: "different-thread", threadId: "other-thread" });
+    expect(state.alert.mock.lastCall?.[2].map(({ text }) => text)).toEqual([
+      "拒绝",
+      "继续系统授权",
+    ]);
+    expect(state.scopedCapture).toHaveBeenCalledTimes(2);
+    await press("拒绝");
+
+    state.scopedCapture.mockResolvedValueOnce({ status: "sharing_unavailable" });
+    await next({ ...screenshot, id: "expires-before-capture" });
+    expect(state.alert.mock.lastCall?.[1]).toContain("共享已结束或不可用");
+    expect(state.capture).not.toHaveBeenCalled();
+    await press("继续系统授权");
+    expect(state.capture).toHaveBeenCalledWith("screenshot", "expires-before-capture", 10);
+    expect(state.send.mock.lastCall?.[0].input).toMatchObject({
+      _tag: "complete",
+      id: "expires-before-capture",
+    });
+
+    await next({ ...screenshot, id: "new-explicit-share" });
+    await press("自动截图 60 秒");
+    state.route = { name: "Home", key: "home", params: state.route.params };
+    state.routeListener?.();
+    expect(state.endSharing).toHaveBeenCalledTimes(2);
+    await next({ ...screenshot, id: "after-route-change" });
+    expect(state.alert.mock.lastCall?.[2].map(({ text }) => text)).toEqual([
+      "拒绝",
+      "继续系统授权",
+    ]);
+  } finally {
+    await act(async () => root.unmount());
+    state.route = null;
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.resetAllMocks();
   }

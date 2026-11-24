@@ -20,6 +20,12 @@ import java.util.UUID
 
 internal enum class T3CaptureMode { SCREENSHOT, RECORDING }
 
+private fun captureMode(kind: String) = when (kind) {
+  "screenshot" -> T3CaptureMode.SCREENSHOT
+  "recording" -> T3CaptureMode.RECORDING
+  else -> error("未知的屏幕捕获用途。")
+}
+
 internal data class T3CaptureDisplay(val width: Int, val height: Int, val densityDpi: Int)
 
 @Suppress("DEPRECATION")
@@ -34,7 +40,12 @@ internal fun captureDisplay(activity: Activity): T3CaptureDisplay {
   return T3CaptureDisplay(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
 }
 
-internal data class T3CaptureScope(val environment: String, val thread: String, val route: String)
+internal data class T3CaptureScope(
+  val environment: String,
+  val thread: String,
+  val route: String,
+  val mode: T3CaptureMode,
+)
 
 internal class T3CaptureRequest(
   val owner: String,
@@ -125,8 +136,11 @@ class T3LocalScreenCaptureModule : Module() {
       context != null && T3LocalScreenCaptureService.shareNotificationAvailable(context)
     }.runOnQueue(Queues.MAIN)
 
-    AsyncFunction("canReuseSharing") { environment: String, thread: String, route: String ->
-      T3CaptureRequests.sharedService?.canReuse(owner, T3CaptureScope(environment, thread, route)) == true
+    AsyncFunction("canAutoReuseSharing") { kind: String, environment: String, thread: String, route: String, seconds: Int ->
+      require(seconds in 0..30)
+      T3CaptureRequests.sharedService?.canReuse(
+        owner, T3CaptureScope(environment, thread, route, captureMode(kind)), seconds,
+      ) == true
     }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("endSharing") { environment: String ->
@@ -140,7 +154,10 @@ class T3LocalScreenCaptureModule : Module() {
     AsyncFunction("captureScopedRequest").Coroutine {
       kind: String, requestId: String, seconds: Int, environment: String, thread: String, route: String, choice: String ->
       require(seconds in 1..30 && choice in setOf("hold", "reuse"))
-      capture(kind, requestId, seconds, environment, T3CaptureScope(environment, thread, route), choice == "reuse")
+      capture(
+        kind, requestId, seconds, environment, T3CaptureScope(environment, thread, route, captureMode(kind)),
+        choice == "reuse",
+      )
     }
 
     AsyncFunction("capture").Coroutine { kind: String, requestId: String ->
@@ -191,11 +208,7 @@ class T3LocalScreenCaptureModule : Module() {
     reuse: Boolean = false,
   ): Map<String, String> =
     withContext(Dispatchers.Main) {
-      val mode = when (kind) {
-        "screenshot" -> T3CaptureMode.SCREENSHOT
-        "recording" -> T3CaptureMode.RECORDING
-        else -> error("未知的屏幕捕获用途。")
-      }
+      val mode = captureMode(kind)
       check(Build.VERSION.SDK_INT >= 29) { "此 Android 版本不支持会话屏幕捕获。" }
       val activity = appContext.currentActivity ?: error("请回到会话后重试。")
       if (!localCaptureUnlocked(activity)) return@withContext mapOf("status" to "locked")
@@ -208,13 +221,17 @@ class T3LocalScreenCaptureModule : Module() {
       check(T3CaptureRequests.current == null) { "已有屏幕捕获请求，请先结束它。" }
       val setting = environment?.let { T3CapturePolicy.read(activity, it, kind) } ?: "ask"
       if (setting !in setOf("ask", "system")) return@withContext mapOf("status" to "denied")
-      if (sharedScope != null && !T3LocalScreenCaptureService.shareNotificationAvailable(activity)) {
+      if (sharedScope != null &&
+        (setting != "ask" || !T3LocalScreenCaptureService.shareNotificationAvailable(activity))
+      ) {
         T3CaptureRequests.sharedService?.stopShare(owner, environment, "revoked")
-        return@withContext mapOf("status" to "revoked")
+        return@withContext mapOf("status" to if (reuse) "sharing_unavailable" else "revoked")
       }
       val existing = T3CaptureRequests.sharedService
-      if (reuse && (sharedScope == null || existing?.canReuse(owner, sharedScope) != true)) {
-        return@withContext mapOf("status" to "revoked")
+      if (reuse && (sharedScope == null ||
+          existing?.canReuse(owner, sharedScope, remoteDurationSeconds ?: 0) != true)
+      ) {
+        return@withContext mapOf("status" to "sharing_unavailable")
       }
       if (!reuse) existing?.stopShare(owner, null, "canceled")
       val request = T3CaptureRequest(

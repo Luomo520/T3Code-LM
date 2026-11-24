@@ -73,11 +73,17 @@ class T3LocalScreenCaptureService : Service() {
     else -> null
   }
 
-  internal fun canReuse(owner: String, scope: T3CaptureScope): Boolean {
+  internal fun canReuse(owner: String, scope: T3CaptureScope, seconds: Int): Boolean {
     val session = share ?: return false
     val failure = shareFailure(session)
-    if (failure != null) shutdown(failure)
-    return failure == null && session.owner == owner && session.scope == scope && active == null
+    if (failure != null) {
+      shutdown(failure)
+      return false
+    }
+    if (session.owner != owner || session.scope != scope || active != null) return false
+    // 临近超时的录屏通过逐次授权，避免在共享到期时截断录像。
+    return scope.mode != T3CaptureMode.RECORDING || seconds == 0 ||
+      session.expiresAt - SystemClock.elapsedRealtime() >= seconds * 1_000L + 500L
   }
 
   internal fun stopShare(owner: String, environment: String?, reason: String) {
@@ -99,14 +105,8 @@ class T3LocalScreenCaptureService : Service() {
 
   internal fun startSharedRequest(request: T3CaptureRequest) {
     val scope = request.sharedScope
-    if (scope == null || !canReuse(request.owner, scope)) {
-      request.resolve(null, "revoked")
-      return
-    }
-    val needed = (request.remoteDurationSeconds ?: 0) * 1_000L
-    if (request.mode == T3CaptureMode.RECORDING && share!!.expiresAt - SystemClock.elapsedRealtime() < needed + 500L) {
-      shutdown("revoked")
-      request.resolve(null, "revoked")
+    if (scope == null || !canReuse(request.owner, scope, request.remoteDurationSeconds ?: 0)) {
+      request.resolve(null, "sharing_unavailable")
       return
     }
     accept(request)
@@ -409,7 +409,8 @@ class T3LocalScreenCaptureService : Service() {
         if (Build.VERSION.SDK_INT >= 31) {
           builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         }
-        builder.setContentText("仅用于原会话，最多 60 秒")
+        val kind = if (mode == T3CaptureMode.SCREENSHOT) "截图" else "录屏"
+        builder.setContentText("原会话的${kind}请求会自动处理，最多 60 秒")
         // 通知被机主从通知栏清除时也必须停止共享。
         builder.setDeleteIntent(stop)
       }
