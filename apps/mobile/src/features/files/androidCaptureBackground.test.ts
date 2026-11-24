@@ -95,3 +95,57 @@ it("posts only the original paired request and honors a policy revoked before de
     input: { _tag: "reject", id: "job", reason: "denied" },
   });
 });
+
+it("rechecks the queue after an empty response or network failure without posting twice", async () => {
+  vi.useFakeTimers();
+  mocks.listen.mockReset();
+  mocks.post.mockReset();
+  mocks.policy = "ask";
+  const pending = {
+    _tag: "Success",
+    value: {
+      _tag: "pending",
+      job: { id: "late-job", threadId: "original", action: "screenshot", expiresInMs: 120_000 },
+    },
+  };
+  const late = Promise.withResolvers<typeof pending>();
+  mocks.listen
+    .mockResolvedValueOnce({ _tag: "Success", value: { _tag: "pending", job: null } })
+    .mockResolvedValueOnce({ _tag: "Failure", error: new Error("network unavailable") })
+    .mockResolvedValueOnce(pending)
+    .mockResolvedValueOnce(pending)
+    .mockReturnValueOnce(late.promise);
+
+  try {
+    const check = checkAndroidCaptureRequestsInBackground();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(mocks.listen).toHaveBeenCalledTimes(2);
+    expect(mocks.post).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(mocks.post).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "paired-env",
+      environmentLabel: "书房",
+      threadId: "original",
+      jobId: "late-job",
+      recording: false,
+      expiresInMs: 120_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    await check;
+    expect(mocks.listen).toHaveBeenCalledTimes(5);
+    expect(mocks.post).toHaveBeenCalledOnce();
+
+    late.resolve({
+      ...pending,
+      value: { ...pending.value, job: { ...pending.value.job, id: "expired-check" } },
+    });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mocks.post).toHaveBeenCalledOnce();
+    expect(mocks.listen).toHaveBeenCalledTimes(5);
+  } finally {
+    mocks.foreground?.();
+    vi.useRealTimers();
+  }
+});
