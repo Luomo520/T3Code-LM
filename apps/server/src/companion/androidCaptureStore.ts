@@ -417,6 +417,15 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
       sweep();
       return taskView(inThread(threadId, id));
     },
+    cancelRecordings(threadId: string, messageId?: string) {
+      // 补交回执、重复停止均不得覆盖终态。按轮次停止时只撤销该用户消息发起的录屏。
+      const requestId = messageId === undefined ? null : "record:" + messageId;
+      db.prepare(`
+        UPDATE tasks SET status = 'canceled', message = ?, updated_at = ?
+        WHERE thread_id = ? AND action = 'record-screen' AND status IN ('queued', 'running')
+          AND (? IS NULL OR request_id = ?)
+      `).run("对话已停止，已取消录屏。", now(), threadId, requestId, requestId);
+    },
     cancel(threadId: string, id: string) {
       const time = sweep();
       const task = inThread(threadId, id);
@@ -435,4 +444,14 @@ export function getAndroidCaptureStore(stateDir: string) {
   const store = createAndroidCaptureStore(stateDir);
   stores.set(stateDir, store);
   return store;
+}
+
+// 未使用过手机采集的后端在普通会话停止时无需创建数据库。重启后仍能取消已有队列。
+export function existingAndroidCaptureStore(stateDir: string) {
+  return (
+    stores.get(stateDir) ??
+    (NodeFS.existsSync(NodePath.join(stateDir, "android-capture", "tasks.sqlite"))
+      ? getAndroidCaptureStore(stateDir)
+      : undefined)
+  );
 }

@@ -419,6 +419,32 @@ it.effect(
     }),
 );
 
+it.effect("stops queued and active Android recordings within the requested scope", () =>
+  Effect.gen(function* () {
+    const { config } = yield* setup();
+    const store = getAndroidCaptureStore(config.stateDir);
+    const device = "android:stop";
+    store.listen(device, "K60");
+    const record = (thread: string, message: string) =>
+      store.enqueue(thread, device, "record-screen", "record:" + message, 7);
+    const active = record("first", "a");
+    expect(store.approve(device, active.id)._tag).toBe("active");
+    const queued = record("first", "b");
+    const other = record("second", "c");
+    const screenshot = store.enqueue("first", device, "screenshot", "shot", 10);
+    store.cancelRecordings("first", "a");
+    expect(store.status(device, active.id)._tag).toBe("inactive");
+    expect(() => store.complete(device, active.id, "")).toThrow(/no longer active/u);
+    expect(store.listen(device, "K60").job?.id).toBe(queued.id);
+    store.cancelRecordings("first");
+    store.cancelRecordings("first");
+    expect(record("first", "b")).toMatchObject({ id: queued.id, status: "canceled" });
+    expect(store.approve(device, queued.id)._tag).toBe("inactive");
+    expect(store.listen(device, "K60").job?.id).toBe(other.id);
+    expect(store.result("first", screenshot.id).status).toBe("queued");
+  }),
+);
+
 it.effect("expires Android requests before approval and during a capture", () =>
   Effect.gen(function* () {
     const { config } = yield* setup();

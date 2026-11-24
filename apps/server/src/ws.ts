@@ -115,6 +115,8 @@ import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as ServerConfig from "./config.ts";
+import { existingAndroidCaptureStore } from "./companion/androidCaptureStore.ts";
+import type { RunId } from "@t3tools/contracts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -1990,6 +1992,25 @@ export const layerWsRpc = (
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
 
+      const cancelStoppedRecordings = Effect.fn("ws.cancelStoppedRecordings")(
+        function* (threadId: ThreadId, runId?: RunId) {
+          const store = existingAndroidCaptureStore(config.stateDir);
+          if (!store) return;
+          if (runId === undefined) return store.cancelRecordings(threadId);
+          const records = yield* threadManagement.getThreadRecords(threadId, ["runs"], {
+            runIds: [runId],
+          });
+          const run = records.runs.find((item) => item.id === runId);
+          if (run) store.cancelRecordings(threadId, run.userMessageId);
+        },
+        (operation, threadId, _runId?: RunId) =>
+          operation.pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("对话已停止，但取消手机录屏失败", { threadId, cause }),
+            ),
+          ),
+      );
+
       const handlers = ServerWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
@@ -2033,6 +2054,14 @@ export const layerWsRpc = (
                   ),
                 )
                 .pipe(
+                  Effect.tap((result) => {
+                    if (result.replayed) return Effect.void;
+                    if (command.type === "thread.stop")
+                      return cancelStoppedRecordings(command.threadId);
+                    if (command.type === "run.interrupt" && command.holdQueue)
+                      return cancelStoppedRecordings(command.threadId, command.runId);
+                    return Effect.void;
+                  }),
                   Effect.tap((result) =>
                     result.replayed ? Effect.void : recordClientCommandAnalytics(command),
                   ),
@@ -2052,7 +2081,9 @@ export const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
         [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: (input) =>
-          threadManagement.forceStopThread(input),
+          threadManagement
+            .forceStopThread(input)
+            .pipe(Effect.tap(() => cancelStoppedRecordings(input.threadId, input.runId))),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           readWorkflowScript({ scriptPath: input.scriptPath }),
         [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: (input) =>
@@ -3121,11 +3152,13 @@ export const layerWsRpc = (
           Effect.fnUntraced(function* (input) {
             const path = yield* Path.Path;
             if (input.resource._tag === "companion-recording") {
-              yield* threadManagement.getThreadRecords(input.resource.threadId, []).pipe(
-                Effect.mapError(
-                  () => new AssetWorkspaceContextNotFoundError({ resource: input.resource }),
-                ),
-              );
+              yield* threadManagement
+                .getThreadRecords(input.resource.threadId, [])
+                .pipe(
+                  Effect.mapError(
+                    () => new AssetWorkspaceContextNotFoundError({ resource: input.resource }),
+                  ),
+                );
               return yield* issueAssetUrl({ resource: input.resource });
             }
             if (
