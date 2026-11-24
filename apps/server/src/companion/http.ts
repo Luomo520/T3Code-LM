@@ -195,7 +195,7 @@ export const layer = HttpApiBuilder.group(
               const captures = getAndroidCaptureStore(stateDir);
               switch (input._tag) {
                 case "listen":
-                  return captures.listen(deviceId, input.name);
+                  return captures.listen(deviceId, input.name, input.delivery);
                 case "approve":
                   return captures.approve(deviceId, input.id);
                 case "status":

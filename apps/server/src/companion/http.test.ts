@@ -10,6 +10,7 @@ import {
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -28,6 +29,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import * as CompanionHttp from "./http.ts";
 import { createAndroidCaptureStore, getAndroidCaptureStore } from "./androidCaptureStore.ts";
 import { getCompanionStore } from "./store.ts";
+import { archivedCapturePath, captureArchiveDirectory } from "./captureArchive.ts";
 
 class CompanionTestApi extends HttpApi.make("environment").add(
   EnvironmentHttpApi.groups.companions,
@@ -347,6 +349,15 @@ it.effect("binds Android approval and uploads to the authenticated phone before 
     expect((yield* send(other, { _tag: "approve", id: job.id })).status).toBe(404);
     expect((yield* send(phone, { _tag: "approve", id: job.id })).status).toBe(200);
     expect((yield* send(other, complete)).status).toBe(404);
+    // 模拟媒体已落盘、SQLite 尚未记下完成状态时服务退出。
+    const archive = captureArchiveDirectory(config.stateDir, ThreadId.make("original"));
+    const archivePath = archivedCapturePath(archive, job.id, "png")!;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(archive, { recursive: true });
+    yield* fs.writeFileString(archivePath, "unrelated");
+    expect((yield* send(phone, complete)).status).toBe(409);
+    expect(yield* fs.readFileString(archivePath)).toBe("unrelated");
+    yield* fs.writeFile(archivePath, Buffer.from(complete.media, "base64"));
     expect((yield* send(phone, complete)).status).toBe(200);
     expect((yield* send(phone, complete)).status).toBe(200);
     expect(store.result("original", job.id)).toMatchObject({ status: "done" });
@@ -358,7 +369,47 @@ it.effect("binds Android approval and uploads to the authenticated phone before 
       const result = yield* send(phone, { _tag: "approve", id: pending.id });
       expect(yield* Effect.promise(() => result.json())).toEqual({ _tag: "inactive" });
     }
-  }),
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "retains a paired Android phone and its queued request while the app is in the background",
+  () =>
+    Effect.gen(function* () {
+      const { config } = yield* setup();
+      let time = 1_000_000;
+      const store = yield* Effect.acquireRelease(
+        Effect.sync(() => createAndroidCaptureStore(config.stateDir, () => time)),
+        (captures) => Effect.sync(() => captures.close()),
+      );
+      const device = "android:background-phone";
+      expect(store.listen(device, "Android", "background").job).toBeNull();
+      expect(store.list()).toEqual([]);
+      store.listen(device, "Android", "background-ready");
+      time += 60_000;
+      expect(store.list()).toEqual([
+        {
+          deviceId: device,
+          name: "Android",
+          online: false,
+          backgroundReady: true,
+          platform: "android",
+        },
+      ]);
+      const pending = store.enqueue("original", device, "record-screen", "handoff", 10);
+      time += 120_000;
+      expect(store.listen(device, "Android", "background").job?.id).toBe(pending.id);
+      expect(store.listen(device, "Android", "background").job?.id).toBe(pending.id);
+      expect(store.result("original", pending.id).status).toBe("queued");
+      expect(store.enqueue("original", device, "record-screen", "handoff", 10).id).toBe(pending.id);
+      expect(store.listen(device, "Android", "background-ready").job?.id).toBe(pending.id);
+      expect(store.approve(device, pending.id)._tag).toBe("active");
+      expect(store.listen(device, "Android", "background").job).toBeNull();
+      store.listen(device, "Android", "unavailable");
+      expect(store.list()).toEqual([]);
+      expect(store.result("original", pending.id)).toMatchObject({ status: "failed" });
+      expect(store.approve(device, pending.id)._tag).toBe("inactive");
+    }),
 );
 
 it.effect("expires Android requests before approval and during a capture", () =>

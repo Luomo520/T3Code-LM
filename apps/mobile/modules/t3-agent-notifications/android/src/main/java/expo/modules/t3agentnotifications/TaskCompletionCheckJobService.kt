@@ -51,16 +51,23 @@ internal object TaskCompletionBackgroundCheck {
   }
 
   fun hasWork(context: Context): Boolean =
-    read(context) != null && AgentNotifications.canPostAlerts(context)
+    (read(context) != null && AgentNotifications.canPostAlerts(context)) ||
+      CaptureRequestNotifications.hasWork(context)
+
+  @Synchronized
+  fun cancelIfIdle(context: Context) {
+    if (hasWork(context)) return
+    val scheduler = context.getSystemService(JobScheduler::class.java)
+    scheduler.cancel(JOB_ID)
+    scheduler.cancel(FOLLOW_UP_JOB_ID)
+  }
 
   @Synchronized
   fun update(context: Context, watch: String?, expiresAt: Long, background: Boolean) {
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
     if (watch == null) {
       prefs.edit().clear().apply()
-      val scheduler = context.getSystemService(JobScheduler::class.java)
-      scheduler.cancel(JOB_ID)
-      scheduler.cancel(FOLLOW_UP_JOB_ID)
+      cancelIfIdle(context)
       return
     }
     prefs.edit().putString("watch", watch).putLong("expiresAt", expiresAt).apply()

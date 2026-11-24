@@ -3090,7 +3090,9 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.fileHandoffRead]: (input) => {
-          if (input._tag === "inbox") return readFileHandoff(input, currentSession);
+          if (input._tag === "inbox" || input._tag === "androidPullInbox") {
+            return readFileHandoff(input, currentSession);
+          }
           return threadManagement.getThreadShell(input.threadId).pipe(
             Effect.filterOrFail(
               (thread) => thread !== null,

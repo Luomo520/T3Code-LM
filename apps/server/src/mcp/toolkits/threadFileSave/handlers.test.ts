@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import { McpSchema } from "effect/ai";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
+import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
@@ -42,7 +43,11 @@ import { archiveCapture } from "../../../companion/captureArchive.ts";
 import { createCompanionStore, getCompanionStore } from "../../../companion/store.ts";
 import { ServerConfig } from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
-import { readFileHandoff } from "../../../fileExchange/FileHandoff.ts";
+import {
+  openAndroidDirectoryPreview,
+  readFileHandoff,
+  startFileHandoff,
+} from "../../../fileExchange/FileHandoff.ts";
 import { layerFileHandoffRoutes } from "../../../http.ts";
 import { OrchestratorProjectionError } from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
@@ -446,6 +451,136 @@ it.live(
           expect((yield* decodeReceipt(retried.structuredContent)).id).toBe(id);
         });
 
+      const mobileFile = { _tag: "androidFile", device: "手机", name: "目录样例.txt" };
+      yield* turn("请把手机的授权目录里的「目录样例.txt」发到书房电脑");
+      expect((yield* save(mobileFile, "书房电脑")).isError).toBe(true);
+      const directoryRevision = "d246ddef-9223-429a-b021-781a119b2a98";
+      const listJobs = (revision = directoryRevision) =>
+        readFileHandoff(
+          {
+            _tag: "androidPullInbox",
+            sessionId: phoneSession.sessionId,
+            revision,
+          },
+          phoneSession,
+        );
+      expect(yield* listJobs()).toMatchObject({ jobs: [] });
+      expect((yield* save({ ...mobileFile, name: "其他.txt" }, "书房电脑")).isError).toBe(true);
+      const namedRequest = yield* save(mobileFile, "书房电脑");
+      expect(
+        namedRequest.isError,
+        namedRequest.content[0]?.type === "text" ? namedRequest.content[0].text : "请求从手机取件",
+      ).not.toBe(true);
+      const namedTransfer = yield* decodeReceipt(namedRequest.structuredContent);
+      expect(namedTransfer).toMatchObject({
+        status: "awaiting_source",
+        recipientLabel: "书房电脑",
+      });
+      expect(yield* listJobs()).toMatchObject({
+        jobs: [{ id: namedTransfer.id, threadId, name: mobileFile.name }],
+      });
+      expect(yield* readFileHandoff({ _tag: "inbox" }, computerSession)).toMatchObject({
+        transfers: [],
+      });
+      const contents = new TextEncoder().encode("目录文件的独立验证");
+      const namedSha256 = yield* digest.digestHex(Digest.sha256, contents);
+      const startDirectoryFile = (id: string, recipient = computerSession.sessionId) =>
+        startFileHandoff(
+          {
+            threadId,
+            id,
+            recipient,
+            directoryRevision,
+            name: mobileFile.name,
+            sizeBytes: contents.length,
+            sha256: namedSha256,
+          },
+          phoneSession,
+        );
+      const upload = yield* startDirectoryFile(namedTransfer.id);
+      const sendDirectoryFile = (url: string) =>
+        http.post(url, { body: HttpBody.uint8Array(contents, "application/octet-stream") });
+      expect(upload.offset).toBe(0);
+      expect((yield* sendDirectoryFile(upload.relativeUrl + "?offset=0")).status).toBe(204);
+      const incoming = yield* receiveLink(namedTransfer.id, computerSession);
+      const namedDownload = yield* http.get(incoming.relativeUrl);
+      expect(yield* namedDownload.text).toBe("目录文件的独立验证");
+      yield* readFileHandoff(
+        {
+          _tag: "confirmSaved",
+          threadId,
+          id: namedTransfer.id,
+          sizeBytes: contents.length,
+          sha256: namedSha256,
+          savedPath: "C:/Downloads/目录样例.txt",
+        },
+        computerSession,
+      );
+      expect(
+        (yield* call("t3_thread_file_save_status", { id: namedTransfer.id })).structuredContent,
+      ).toMatchObject({ status: "saved", savedPath: "C:/Downloads/目录样例.txt" });
+      expect(
+        (yield* call("t3_thread_android_file_preview", { id: namedTransfer.id })).isError,
+      ).toBe(true);
+
+      yield* turn("请预览手机的授权目录里的「目录样例.txt」", computerAlias, "desktop");
+      const view = () =>
+        call("t3_thread_android_file_preview", {
+          device: mobileFile.device,
+          name: mobileFile.name,
+        });
+      expect((yield* save(mobileFile, "书房电脑")).isError).toBe(true);
+      const viewQueued = yield* view();
+      expect(
+        viewQueued.isError,
+        viewQueued.content[0]?.type === "text" ? viewQueued.content[0].text : "phone preview queue",
+      ).not.toBe(true);
+      const previewed = yield* decodeReceipt(viewQueued.structuredContent);
+      const previewUpload = yield* startDirectoryFile(previewed.id);
+      expect((yield* sendDirectoryFile(previewUpload.relativeUrl + "?offset=0")).status).toBe(204);
+      expect(yield* readFileHandoff({ _tag: "inbox" }, computerSession)).toMatchObject({
+        transfers: [],
+      });
+      const viewResult = yield* call("t3_thread_android_file_preview", { id: previewed.id });
+      expect(
+        viewResult.isError,
+        viewResult.content[0]?.type === "text"
+          ? viewResult.content[0].text
+          : "phone preview result",
+      ).not.toBe(true);
+      expect(viewResult.structuredContent).toMatchObject({
+        status: "ready_for_preview",
+        previewText: "目录文件的独立验证",
+        previewTruncated: false,
+      });
+      expect(viewResult.structuredContent).not.toHaveProperty("previewUrl");
+      expect(
+        (yield* Effect.result(
+          readFileHandoff({ _tag: "receive", threadId, id: previewed.id }, computerSession),
+        ))._tag,
+      ).toBe("Failure");
+      const previewFile = yield* openAndroidDirectoryPreview(threadId, previewed.id);
+      expect(yield* fs.readFileString(previewFile.path!)).toBe("目录文件的独立验证");
+
+      yield* turn("请把手机的授权目录里的「目录样例.txt」发到书房电脑");
+      const pendingRevocation = yield* save(mobileFile);
+      expect(
+        pendingRevocation.isError,
+        pendingRevocation.content[0]?.type === "text"
+          ? pendingRevocation.content[0].text
+          : "phone revocation request",
+      ).not.toBe(true);
+      const revoked = yield* decodeReceipt(pendingRevocation.structuredContent);
+      const latest = yield* startDirectoryFile(revoked.id);
+      yield* readFileHandoff({ _tag: "androidPullInbox", revoke: true }, phoneSession);
+      expect((yield* sendDirectoryFile(latest.relativeUrl + "?offset=0")).status).toBe(404);
+      const revocation = yield* call("t3_thread_file_save_status", { id: revoked.id });
+      expect(revocation.structuredContent).toMatchObject({
+        status: "failed",
+        sourceFailure: "手机已撤销目录读取授权。",
+      });
+      expect(yield* listJobs("d246ddef-9223-429a-b021-781a119b2a99")).toMatchObject({ jobs: [] });
+
       const delivery = { _tag: "delivery", path: "交付/report.txt" };
       yield* turn("只给我看看交付报告，不要下载");
       expect((yield* save(delivery)).isError).toBe(true);
@@ -453,7 +588,7 @@ it.live(
         (yield* call("t3_thread_save_workspace_file", { path: "交付/report.txt" })).isError,
       ).toBe(true);
       expect(yield* readFileHandoff({ _tag: "list", threadId }, phoneSession)).toMatchObject({
-        transfers: [],
+        transfers: [{ id: namedTransfer.id, disposition: "saved" }],
       });
       yield* turn("把这个交付报告发到这台手机");
       yield* receive("交付/report.txt", delivery);
@@ -744,7 +879,7 @@ it.live(
       const pc = devices.enroll(devices.pair().code, "书房电脑", {});
       const sourceJob = devices.enqueue(threadId, pc.deviceId, "send-file", "apk-source");
       expect(devices.poll(pc.token, "书房电脑", {}).job?.id).toBe(sourceJob.id);
-      const fixtureApk = process.env.T3_HANDOFF_QA_APK;
+      const fixtureApk = yield* Config.String("T3_HANDOFF_QA_APK").pipe(Config.withDefault(""));
       const payload = fixtureApk
         ? Buffer.from(yield* fs.readFile(fixtureApk))
         : Buffer.from("测试 APK 的传输夹具");

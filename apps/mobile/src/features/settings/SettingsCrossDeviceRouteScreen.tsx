@@ -27,6 +27,8 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { environmentStatusText } from "../connection/environmentStatusText";
 import { LocalApkInstallSection } from "./components/LocalApkInstallSection";
 import { AutomaticFileHandoffSettings } from "./components/AutomaticFileHandoffSettings";
+import { AndroidFileAccessSettings } from "./components/AndroidFileAccessSettings";
+import { AndroidCapturePermissionsSettings } from "./components/AndroidCapturePermissionsSettings";
 import { AndroidUsbBindingSettings } from "./components/AndroidUsbBindingSettings";
 import { LinuxSshDeviceSettings } from "./components/LinuxSshDeviceSettings";
 import { SettingsRow } from "./components/SettingsRow";
@@ -193,6 +195,8 @@ function CrossDeviceAccess({ environmentId }: { readonly environmentId: Environm
           </SettingsSection>
         ) : null}
         {environment ? <AutomaticFileHandoffSettings environmentId={environmentId} /> : null}
+        {environment ? <AndroidFileAccessSettings environmentId={environmentId} /> : null}
+        {environment ? <AndroidCapturePermissionsSettings environmentId={environmentId} /> : null}
         {environment ? (
           <WindowsCompanionSettings environmentId={environmentId} connected={connected} />
         ) : null}

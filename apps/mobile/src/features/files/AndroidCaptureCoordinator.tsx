@@ -1,42 +1,45 @@
-import { executeConnectedEnvironmentHttpRequest } from "@t3tools/client-runtime/state/environmentHttpAuth";
-import { createEnvironmentCommand } from "@t3tools/client-runtime/state/runtime";
 import {
-  AndroidCaptureInput,
-  AndroidCaptureJob,
+  type AndroidCaptureInput,
   AuthOrchestrationOperateScope,
   COMPANION_MAX_IMAGE_BYTES,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import * as Device from "expo-device";
 import { File } from "expo-file-system";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef } from "react";
 import { Alert, ToastAndroid } from "react-native";
 
-import { connectionAtomRuntime } from "../../connection/runtime";
 import { isAppActive, useAppActive } from "../../lib/appState";
+import { rootNavigationRef } from "../../lib/rootNavigation";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
-import { localScreenCapture } from "./localScreenCapture";
+import {
+  canNotifyAndroidCaptureRequests,
+  noteAndroidCaptureBackgroundReady,
+} from "../agent-awareness/androidNotifications";
+import {
+  androidCapturePhoneName,
+  captureCommand,
+  type AndroidCaptureJobData,
+} from "./androidCaptureClient";
+import { readAndroidCapturePolicy } from "./androidCapturePolicy";
+import { localScreenCapture, type CaptureSharingChoice } from "./localScreenCapture";
 
-const captureCommand = createEnvironmentCommand(connectionAtomRuntime, {
-  label: "environment-data:android-capture",
-  execute: (payload: typeof AndroidCaptureInput.Type) =>
-    executeConnectedEnvironmentHttpRequest({
-      group: "companions",
-      method: "POST",
-      url: (urls) => urls.androidCapture(),
-      timeoutMs: payload._tag === "complete" ? 25_000 : 8_000,
-      requestInit: { redirect: "error" },
-      request: ({ client, headers }) => client.androidCapture({ headers, payload }),
-    }),
-});
-
-type Job = typeof AndroidCaptureJob.Type;
+type Job = AndroidCaptureJobData;
 type NativeCapture = NonNullable<typeof localScreenCapture>;
+type ScopedShare = { readonly threadId: Job["threadId"]; readonly routeKey: string };
+type ShareChoice = ScopedShare & { readonly choice: CaptureSharingChoice };
+
+function currentThreadRoute(environmentId: EnvironmentId, threadId: Job["threadId"]) {
+  if (!rootNavigationRef.isReady()) return null;
+  const route = rootNavigationRef.getCurrentRoute();
+  if (route?.name !== "Thread") return null;
+  const params = route.params as { environmentId?: string; threadId?: string } | undefined;
+  return params?.environmentId === environmentId && params.threadId === threadId ? route.key : null;
+}
 
 // 应用同一时间只有一个原生对话框。跨环境请求保留排队，等待本机继续处理。
-let pendingConfirmation: string | null = null;
+let captureOwner: string | null = null;
 
 function EnvironmentCaptureCoordinator({
   active,
@@ -58,25 +61,46 @@ function EnvironmentCaptureCoordinator({
   const backendApproved = useRef(false);
   const lockedRequest = useRef<string | null>(null);
   const busy = useRef(false);
+  const shared = useRef<ScopedShare | null>(null);
+  const endShare = useCallback(() => {
+    shared.current = null;
+    void native.endSharing?.(environmentId).catch(() => {});
+  }, [environmentId, native]);
   const request = (input: typeof AndroidCaptureInput.Type) => command({ environmentId, input });
 
   async function finish(
     input: Extract<typeof AndroidCaptureInput.Type, { _tag: "reject" | "complete" }>,
+    action?: Job["action"],
   ) {
     const response = await request(input);
     if (response._tag === "Success") return;
     // 传输结果已提交但未收到响应时，服务端接受相同结果的重试。
+    if (input._tag === "complete" && action) {
+      if (!(await native.isUnlocked())) {
+        await request({ _tag: "reject", id: input.id, reason: "locked" });
+        return;
+      }
+      if (readAndroidCapturePolicy(environmentId, action) === "deny") {
+        await request({ _tag: "reject", id: input.id, reason: "denied" });
+        return;
+      }
+    }
     await request(input);
   }
 
-  async function capture(job: Job) {
-    if (!available.current || current.current !== null || !native.captureApprovedRequest) return;
+  async function capture(job: Job, selection?: ShareChoice) {
+    if (!available.current || current.current !== null || captureOwner !== job.id) return;
     current.current = job.id;
     const stillCurrent = () => current.current === job.id;
     let file: File | undefined;
     try {
-      if (!isAppActive() || !(await native.isUnlocked())) {
-        await finish({ _tag: "reject", id: job.id, reason: "locked" });
+      if (!(await native.isUnlocked()) || !isAppActive()) {
+        presented.current = null;
+        return;
+      }
+      if (!stillCurrent()) return;
+      if (readAndroidCapturePolicy(environmentId, job.action) === "deny") {
+        await finish({ _tag: "reject", id: job.id, reason: "denied" });
         return;
       }
       const approved = await request({ _tag: "approve", id: job.id });
@@ -88,22 +112,62 @@ function EnvironmentCaptureCoordinator({
         await finish({ _tag: "reject", id: job.id, reason: "canceled" });
         return;
       }
+      if (readAndroidCapturePolicy(environmentId, job.action) === "deny") {
+        await finish({ _tag: "reject", id: job.id, reason: "denied" });
+        return;
+      }
+      if (
+        selection &&
+        (approved.value.job.threadId !== selection.threadId ||
+          approved.value.job.id !== job.id ||
+          currentThreadRoute(environmentId, selection.threadId) !== selection.routeKey)
+      ) {
+        endShare();
+        await finish({ _tag: "reject", id: job.id, reason: "canceled" });
+        return;
+      }
       backendApproved.current = true;
-      const result = await native.captureApprovedRequest(
-        job.action === "screenshot" ? "screenshot" : "recording",
-        job.id,
-        job.durationSeconds,
-      );
-      if (result.status !== "done") {
+      const kind = job.action === "screenshot" ? "screenshot" : "recording";
+      if (selection) shared.current = selection;
+      const result =
+        selection && native.captureScopedRequest
+          ? await native.captureScopedRequest(
+              kind,
+              job.id,
+              job.durationSeconds,
+              environmentId,
+              selection.threadId,
+              selection.routeKey,
+              selection.choice,
+            )
+          : native.captureEnvironmentRequest
+            ? await native.captureEnvironmentRequest(
+                kind,
+                job.id,
+                job.durationSeconds,
+                environmentId,
+              )
+            : await native.captureApprovedRequest?.(kind, job.id, job.durationSeconds);
+      backendApproved.current = false;
+      if (!result || result.status !== "done") {
+        if (selection) endShare();
         await finish({
           _tag: "reject",
           id: job.id,
-          reason: lockedRequest.current === job.id ? "locked" : result.status,
+          reason: lockedRequest.current === job.id ? "locked" : (result?.status ?? "failed"),
         });
         return;
       }
       file = new File(result.uri);
       if (!stillCurrent()) return;
+      if (
+        selection &&
+        currentThreadRoute(environmentId, selection.threadId) !== selection.routeKey
+      ) {
+        endShare();
+        await finish({ _tag: "reject", id: job.id, reason: "canceled" });
+        return;
+      }
       if (!(await native.isUnlocked())) {
         await finish({ _tag: "reject", id: job.id, reason: "locked" });
         return;
@@ -116,9 +180,20 @@ function EnvironmentCaptureCoordinator({
       if (!stillCurrent()) return;
       const unlocked = await native.isUnlocked();
       if (!stillCurrent()) return;
-      if (unlocked) await finish({ _tag: "complete", id: job.id, media });
+      if (
+        selection &&
+        (!isAppActive() ||
+          shared.current?.routeKey !== selection.routeKey ||
+          currentThreadRoute(environmentId, selection.threadId) !== selection.routeKey)
+      ) {
+        endShare();
+        await finish({ _tag: "reject", id: job.id, reason: "canceled" });
+      } else if (readAndroidCapturePolicy(environmentId, job.action) === "deny") {
+        await finish({ _tag: "reject", id: job.id, reason: "denied" });
+      } else if (unlocked) await finish({ _tag: "complete", id: job.id, media }, job.action);
       else await finish({ _tag: "reject", id: job.id, reason: "locked" });
     } catch {
+      if (selection) endShare();
       if (stillCurrent()) await finish({ _tag: "reject", id: job.id, reason: "failed" });
     } finally {
       if (file?.exists) {
@@ -133,6 +208,7 @@ function EnvironmentCaptureCoordinator({
         lockedRequest.current = null;
         current.current = null;
       }
+      if (captureOwner === job.id) captureOwner = null;
     }
   }
 
@@ -144,65 +220,119 @@ function EnvironmentCaptureCoordinator({
       if (running !== null) {
         if (!(await native.isUnlocked())) {
           lockedRequest.current = running;
+          if (shared.current) endShare();
           await native.cancelCapture(running);
           await finish({ _tag: "reject", id: running, reason: "locked" });
           return;
         }
         if (!backendApproved.current) return;
         const status = await request({ _tag: "status", id: running });
-        if (status._tag !== "Success" || status.value._tag === "inactive") {
+        if (
+          current.current === running &&
+          backendApproved.current &&
+          (status._tag !== "Success" || status.value._tag === "inactive")
+        ) {
+          if (shared.current) endShare();
           await native.cancelCapture(running);
         }
         return;
       }
-      const existing = offered.current;
-      if (existing && !(await native.isUnlocked())) {
-        offered.current = null;
-        if (pendingConfirmation === existing.id) pendingConfirmation = null;
-        await finish({ _tag: "reject", id: existing.id, reason: "locked" });
-        return;
-      }
       if (!active || !isAppActive() || !available.current || !(await native.isUnlocked())) return;
+      const canReceive =
+        readAndroidCapturePolicy(environmentId, "screenshot") !== "deny" ||
+        readAndroidCapturePolicy(environmentId, "record-screen") !== "deny";
       const response = await request({
         _tag: "listen",
-        name: (Device.deviceName?.trim() || Device.modelName?.trim() || "Android 手机").slice(
-          0,
-          128,
-        ),
+        name: androidCapturePhoneName(),
+        ...(!canReceive
+          ? { delivery: "unavailable" }
+          : canNotifyAndroidCaptureRequests()
+            ? { delivery: "background-ready" }
+            : {}),
       });
-      if (
-        !available.current ||
-        !isAppActive() ||
-        response._tag !== "Success" ||
-        response.value._tag !== "pending"
-      )
-        return;
+      if (response._tag !== "Success" || response.value._tag !== "pending") return;
+      if (response.value.backgroundReady) noteAndroidCaptureBackgroundReady();
+      if (!available.current || !isAppActive()) return;
       const job = response.value.job;
+      const existing = offered.current;
       if (existing && existing.id !== job?.id) {
         offered.current = null;
-        if (pendingConfirmation === existing.id) pendingConfirmation = null;
+        if (captureOwner === existing.id) captureOwner = null;
       }
-      if (!job || presented.current === job.id || pendingConfirmation) return;
-      offered.current = job;
+      if (!job || presented.current === job.id || captureOwner) return;
+      const policy = readAndroidCapturePolicy(environmentId, job.action);
       presented.current = job.id;
-      pendingConfirmation = job.id;
+      if (policy === "deny") {
+        await finish({ _tag: "reject", id: job.id, reason: "denied" });
+        return;
+      }
+      captureOwner = job.id;
+      offered.current = job;
+      const routeKey = native.captureScopedRequest
+        ? currentThreadRoute(environmentId, job.threadId)
+        : null;
+      const sharing = routeKey
+        ? await native.canReuseSharing?.(environmentId, job.threadId, routeKey).catch(() => false)
+        : false;
+      const offerHold =
+        routeKey && !sharing && policy === "ask"
+          ? await native.canKeepSharing?.().catch(() => false)
+          : false;
+      if (!available.current || !isAppActive() || offered.current?.id !== job.id) {
+        offered.current = null;
+        if (captureOwner === job.id) captureOwner = null;
+        presented.current = null;
+        return;
+      }
+      if (!sharing && policy === "system" && native.captureEnvironmentRequest) {
+        offered.current = null;
+        void capture(job);
+        return;
+      }
       const isRecording = job.action === "record-screen";
-      const decide = (approved: boolean) => {
+      const decide = (approved: boolean, choice?: CaptureSharingChoice) => {
         if (offered.current?.id !== job.id) return;
         offered.current = null;
-        if (pendingConfirmation === job.id) pendingConfirmation = null;
-        if (approved) void capture(job);
-        else void finish({ _tag: "reject", id: job.id, reason: "denied" });
+        if (!isAppActive()) {
+          if (captureOwner === job.id) captureOwner = null;
+          presented.current = null;
+          return;
+        }
+        if (approved) {
+          if (
+            choice &&
+            (!routeKey || currentThreadRoute(environmentId, job.threadId) !== routeKey)
+          ) {
+            if (captureOwner === job.id) captureOwner = null;
+            void finish({ _tag: "reject", id: job.id, reason: "canceled" });
+            return;
+          }
+          void capture(
+            job,
+            choice && routeKey ? { threadId: job.threadId, routeKey, choice } : undefined,
+          );
+        } else {
+          if (captureOwner === job.id) captureOwner = null;
+          void finish({ _tag: "reject", id: job.id, reason: "denied" });
+        }
       };
       // 使用独立的 Android 原生对话框承接这次明确授权。
       Alert.alert(
         isRecording ? "允许本次录屏？" : "允许本次截图？",
-        isRecording
+        (isRecording
           ? `「${environmentLabel}」的会话请求录屏，最长 ${job.durationSeconds} 秒。授权后，结果将发送回发起请求的会话。`
-          : `「${environmentLabel}」的会话请求截图。授权后，截图将发送回发起请求的会话。`,
+          : `「${environmentLabel}」的会话请求截图。授权后，截图将发送回发起请求的会话。`) +
+          (offerHold
+            ? " 共享 60 秒期间，此会话可继续请求截图或录屏。每次由你确认，可在通知栏结束共享。"
+            : sharing
+              ? " 将使用本会话已开启的屏幕共享。"
+              : ""),
         [
+          ...(offerHold ? [{ text: "共享 60 秒", onPress: () => decide(true, "hold") }] : []),
           { text: "拒绝", style: "cancel", onPress: () => decide(false) },
-          { text: "继续系统授权", onPress: () => decide(true) },
+          sharing
+            ? { text: "使用当前共享", onPress: () => decide(true, "reuse") }
+            : { text: "继续系统授权", onPress: () => decide(true) },
         ],
         { cancelable: true, onDismiss: () => decide(false) },
       );
@@ -217,19 +347,34 @@ function EnvironmentCaptureCoordinator({
   useEffect(() => {
     if (!canOperate) return;
     available.current = true;
-    void poll();
     const timer = setInterval(() => void poll(), 4_000);
+    const unsubscribe =
+      native.endSharing &&
+      rootNavigationRef.addListener("state", () => {
+        const scope = shared.current;
+        if (scope && currentThreadRoute(environmentId, scope.threadId) !== scope.routeKey) {
+          endShare();
+        }
+      });
     return () => {
       clearInterval(timer);
+      unsubscribe?.();
+      if (shared.current) endShare();
       available.current = false;
-      if (pendingConfirmation === offered.current?.id) pendingConfirmation = null;
-      offered.current = null;
       const job = current.current;
+      if (captureOwner === offered.current?.id || captureOwner === job) captureOwner = null;
+      offered.current = null;
+      presented.current = null;
       backendApproved.current = false;
       current.current = null;
       if (job) void native.cancelCapture(job).catch(() => {});
     };
-  }, [canOperate, native]);
+  }, [canOperate, endShare, environmentId, native]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 重新进入应用后立即检查排队请求。
+  useEffect(() => {
+    if (active && canOperate) void poll();
+  }, [active, canOperate]);
 
   return null;
 }
@@ -237,7 +382,12 @@ function EnvironmentCaptureCoordinator({
 export function AndroidCaptureCoordinator() {
   const active = useAppActive();
   const environments = useWorkspaceEnvironments();
-  if (!localScreenCapture?.captureApprovedRequest) return null;
+  if (
+    !localScreenCapture?.captureEnvironmentRequest &&
+    !localScreenCapture?.captureApprovedRequest
+  ) {
+    return null;
+  }
   const native = localScreenCapture;
   return environments.map(({ isEnabled, environmentId, environmentLabel, connectionState }) =>
     isEnabled && connectionState === "connected" ? (

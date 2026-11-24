@@ -5,13 +5,16 @@ import {
   type AuthClientSession,
   type ThreadId,
 } from "@t3tools/contracts";
+import { decodeFilePreviewText, filePreviewKind } from "@t3tools/shared/filePreview";
 import * as Digest from "effect/crypto/Digest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
-import type { OpenMediaFile } from "../../../assets/MediaFile.ts";
+import { issueAndroidDirectoryFilePreview } from "../../../assets/AssetAccess.ts";
+import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "../../../assets/MediaFile.ts";
 import { resolveAttachmentPath } from "../../../attachmentStore.ts";
 import { EnvironmentAuth } from "../../../auth/EnvironmentAuth.ts";
 import { SessionStore } from "../../../auth/SessionStore.ts";
@@ -20,6 +23,8 @@ import { getCompanionStore } from "../../../companion/store.ts";
 import { ServerConfig } from "../../../config.ts";
 import {
   manageThreadFileHandoff,
+  openAndroidDirectoryPreview,
+  stageAndroidDirectoryFile,
   readThreadFileHandoffStatus,
   stageThreadFileHandoff,
   stageThreadUrlDownload,
@@ -37,12 +42,16 @@ import {
   threadFileRedirectDestination,
   threadFileUrlRequest,
 } from "./intent.ts";
+import { androidDirectoryIntent } from "./androidDirectoryIntent.ts";
 import { ThreadFileSaveToolkit } from "./tools.ts";
 import { resolveWorkspaceOutput } from "./workspaceOutput.ts";
 
 const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
+const isMcpFailure = Schema.is(OrchestratorMcpFailure);
 const deviceChoiceId = "t3-file-save-target";
+// 预览文本会进入会话，限制单次读取大小，避免用整份大文件占满上下文。
+const ANDROID_DIRECTORY_TEXT_PREVIEW_BYTES = 64 * 1024;
 
 function selectedOption(value: unknown): string | undefined {
   if (typeof value === "string") return value;
@@ -64,7 +73,7 @@ const localThreadCaller = Effect.fn("ThreadFileSave.localThreadCaller")(function
   if (thread.subagent || callerLinkOrigin(caller) !== undefined) {
     return yield* invalid("请在原会话中保存文件。");
   }
-  return { thread, threads: caller.threads };
+  return { thread, threads: caller.threads, caller };
 });
 
 const waitForReceipt = Effect.fn("ThreadFileSave.waitForReceipt")(function* (
@@ -80,6 +89,7 @@ const waitForReceipt = Effect.fn("ThreadFileSave.waitForReceipt")(function* (
   let receipt = yield* read;
   // 保存和系统安装分别回报。明确查询安装结果时沿用同一个截止时间。
   const awaitingResult = (value: typeof receipt) =>
+    value.status === "awaiting_source" ||
     (value.status === "awaiting_save" && !value.urlFailure) ||
     (waitForInstall && value.status === "saved" && value.installRequested && !value.installation);
   while (awaitingResult(receipt)) {
@@ -96,6 +106,7 @@ const ONLINE_WORKSPACE_RECEIPT_WAIT_MS = 6_000;
 const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
   input: typeof ThreadFileSaveToolkit.tools.t3_thread_file_save.parametersSchema.Type,
   waitForOnlineReceipt = false,
+  previewAndroid = false,
 ) {
   const { action, source, id: requestedId, target } = input;
   if (
@@ -127,6 +138,16 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
   ) {
     return yield* invalid("请从已连接的客户端发出保存请求。");
   }
+  const androidFile = source?._tag === "androidFile" ? source : undefined;
+  const directoryIntent = androidFile ? androidDirectoryIntent(userMessage.text) : undefined;
+  if (
+    androidFile &&
+    (!directoryIntent ||
+      directoryIntent.name !== androidFile.name ||
+      directoryIntent.sourceDevice !== androidFile.device ||
+      previewAndroid !== (directoryIntent.target === undefined))
+  )
+    return yield* invalid("请在原会话准确写明配对手机名称、完整文件名，以及需要发送时的接收设备。");
   const apkInstallRequest =
     action === undefined && source?._tag !== "url"
       ? threadFileApkInstallRequest(userMessage.text)
@@ -142,7 +163,7 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
       return yield* invalid("请在原会话明确要求取消或改发这次文件传输。");
     }
   } else if (
-    !hasExplicitThreadFileSaveIntent(requestText) ||
+    (!androidFile && !hasExplicitThreadFileSaveIntent(requestText)) ||
     threadFileManagementIntent(userMessage.text)
   ) {
     return yield* invalid("请在当前会话明确说明要保存文件，或使用附件旁的保存操作。");
@@ -219,7 +240,11 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
     action === "redirect"
       ? threadFileRedirectDestination(userMessage.text)
       : threadFileDestination(requestText);
-  const requestedClients = destination.kind === "named" ? exactClients(destination.label) : [];
+  const requestedClients = directoryIntent?.target
+    ? exactClients(normalizedLabel(directoryIntent.target))
+    : destination.kind === "named"
+      ? exactClients(destination.label)
+      : [];
   const chosenClients =
     target === undefined
       ? []
@@ -255,10 +280,13 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
       return matched.length === 1 && normalizedLabel(matched[0]!.label) === displayedName;
     });
   }
-  const recipient =
-    requestedClients.length === 1
+  const recipient = previewAndroid
+    ? requester
+    : requestedClients.length === 1
       ? requestedClients[0]?.client
-      : (currentRecipient ?? (choseNamedDevice ? namedRecipient?.client : undefined));
+      : !androidFile
+        ? (currentRecipient ?? (choseNamedDevice ? namedRecipient?.client : undefined))
+        : undefined;
   if (!recipient) {
     return {
       status: "choose_target" as const,
@@ -286,6 +314,45 @@ const saveThreadFile = Effect.fn("ThreadFileSave.saveThreadFile")(function* (
     !(recipient.client.browser === undefined && recipient.client.os?.toLowerCase() === "android")
   ) {
     return yield* invalid("此设备无法确认 APK 安装，请选择已配对的 Android 客户端。");
+  }
+  if (source._tag === "androidFile") {
+    const phones = exactClients(normalizedLabel(source.device)).filter(
+      ({ client }) =>
+        client.client.os?.toLowerCase() === "android" && client.client.browser === undefined,
+    );
+    const phone = phones.length === 1 ? phones[0] : undefined;
+    if (!phone) return yield* invalid("未找到名称唯一的已配对 Android 手机。");
+    const recipientAlias = yield* originAlias(recipient);
+    const phoneAlias = yield* originAlias(phone.client);
+    const idHash = yield* digest.digestHex(
+      Digest.sha256,
+      new TextEncoder().encode(
+        [
+          threadId,
+          run.userMessageId,
+          "androidFile",
+          phoneAlias,
+          source.name,
+          recipientAlias,
+          String(previewAndroid),
+        ]
+          .map((field) => `${field.length}:${field}`)
+          .join(""),
+      ),
+    );
+    const id = `${idHash.slice(0, 8)}-${idHash.slice(8, 12)}-${idHash.slice(12, 16)}-${idHash.slice(16, 20)}-${idHash.slice(20, 32)}`;
+    return yield* stageAndroidDirectoryFile({
+      id,
+      threadId,
+      requester: requester.sessionId,
+      requesterAlias: clientAlias,
+      sourceOrdinal: run.ordinal,
+      sender: phone.client.sessionId,
+      recipient: recipient.sessionId,
+      name: source.name,
+      preview: previewAndroid,
+      ...(apkInstallRequest ? { installRequested: true as const } : {}),
+    }).pipe(Effect.mapError((error) => invalid(error.message)));
   }
   if (source._tag === "url") {
     const recipientAlias = yield* originAlias(recipient);
@@ -411,6 +478,61 @@ export const layer = McpToolAccess.toLayer(ThreadFileSaveToolkit, {
     ),
   ),
   t3_thread_file_save: McpToolAccess.actsAsCaller((input) => saveThreadFile(input)),
+  t3_thread_android_file_preview: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      if (input.id === undefined) {
+        if (input.device === undefined || input.name === undefined) {
+          return yield* invalid("请指定配对手机和完整文件名。");
+        }
+        const staged = yield* saveThreadFile(
+          { source: { _tag: "androidFile", device: input.device, name: input.name } },
+          false,
+          true,
+        );
+        if (staged.status === "choose_target") return yield* invalid(staged.reason);
+        return staged;
+      }
+      if (input.device !== undefined || input.name !== undefined) {
+        return yield* invalid("查询已有预览时只需文件请求编号。");
+      }
+      const { thread, caller } = yield* localThreadCaller();
+      const { receipt, path } = yield* openAndroidDirectoryPreview(thread.threadId, input.id).pipe(
+        Effect.mapError((error) => invalid(error.message)),
+      );
+      if (!path) return receipt;
+      const kind = filePreviewKind({ name: receipt.name });
+      if (["text", "markdown", "mermaid", "html"].includes(kind)) {
+        const preview = yield* Effect.gen(function* () {
+          const file = yield* openMediaFile(path);
+          if (!file) return yield* invalid("预览文件已不可用。");
+          const bytes = yield* readMediaFileHeader(path, file, ANDROID_DIRECTORY_TEXT_PREVIEW_BYTES);
+          return yield* Effect.try({
+            try: () => decodeFilePreviewText(bytes, file.info.size > BigInt(bytes.byteLength)),
+            catch: () => invalid("无法预览此文件，请确认它是 UTF-8 文本。"),
+          });
+        }).pipe(
+          Effect.scoped,
+          Effect.mapError((error) =>
+            isMcpFailure(error) ? error : invalid("无法读取预览文件。"),
+          ),
+        );
+        return { ...receipt, previewText: preview.text, previewTruncated: preview.truncated };
+      }
+      if (!["image", "audio", "video", "pdf"].includes(kind)) {
+        return yield* invalid("无法预览此文件类型。");
+      }
+      const asset = yield* issueAndroidDirectoryFilePreview(
+        thread.threadId,
+        path,
+        receipt.name,
+      ).pipe(Effect.mapError(() => invalid("无法预览此文件类型。")));
+      const origin = caller.scope.origin;
+      return {
+        ...receipt,
+        previewUrl: origin ? new URL(asset.relativeUrl, origin).href : asset.relativeUrl,
+      };
+    }),
+  ),
   t3_thread_file_save_status: McpToolAccess.readsAsCaller(({ id, waitMs = 0 }) =>
     Effect.gen(function* () {
       const { thread } = yield* localThreadCaller();

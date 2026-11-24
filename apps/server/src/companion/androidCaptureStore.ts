@@ -5,6 +5,7 @@ import {
   ThreadId,
   type AndroidCaptureAction,
   type AndroidCaptureFailure,
+  type AndroidCaptureInput,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -14,11 +15,15 @@ import { archivedCapturePath, captureArchiveDirectory } from "./captureArchive.t
 import { CompanionError, decodePng } from "./store.ts";
 
 const REQUEST_TTL = 45_000;
+// 后台检查的运行时机由 Android 决定，等待本机确认的请求需要独立的有效期。
+const BACKGROUND_REQUEST_TTL = 10 * 60_000;
+const BACKGROUND_DEVICE_TTL = 2 * 60 * 60_000;
 const CAPTURE_TTL = 90_000;
 const HEARTBEAT_TTL = 20_000;
 const HISTORY_TTL = 2 * 86_400_000;
 type Action = typeof AndroidCaptureAction.Type;
 type Failure = typeof AndroidCaptureFailure.Type;
+type Delivery = Extract<typeof AndroidCaptureInput.Type, { _tag: "listen" }>["delivery"];
 type Status = "queued" | "running" | "done" | "failed" | "canceled";
 
 type CaptureRow = {
@@ -104,8 +109,11 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
     CREATE UNIQUE INDEX IF NOT EXISTS android_capture_running ON tasks(device_id)
       WHERE status = 'running';
   `);
-  // 设备在线状态来自当前进程的前台心跳。重启后客户端需重新报告。
-  const devices = new Map<string, { name: string; until: number }>();
+  // 当前进程记录前台与后台的接收期限。重启后客户端会重新报告。
+  const devices = new Map<
+    string,
+    { name: string; foregroundUntil: number; backgroundUntil: number }
+  >();
 
   function sweep() {
     const time = now();
@@ -116,7 +124,9 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
     db.prepare(`
       DELETE FROM tasks WHERE updated_at <= ? AND status NOT IN ('queued', 'running')
     `).run(time - HISTORY_TTL);
-    for (const [id, device] of devices) if (device.until <= time) devices.delete(id);
+    for (const [id, device] of devices) {
+      if (Math.max(device.foregroundUntil, device.backgroundUntil) <= time) devices.delete(id);
+    }
     return time;
   }
   const byId = db.prepare("SELECT * FROM tasks WHERE id = ?");
@@ -134,12 +144,13 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
   const update = db.prepare(
     "UPDATE tasks SET status = ?, message = ?, updated_at = ? WHERE id = ?",
   );
-  const job = (task: CaptureRow) => ({
+  const job = (task: CaptureRow, time: number) => ({
     id: task.id,
     threadId: ThreadId.make(task.thread_id),
     action: task.action,
     durationSeconds: task.seconds,
     expiresAt: task.expires_at,
+    expiresInMs: task.expires_at - time,
   });
   function taskView(task: CaptureRow) {
     const archive =
@@ -164,18 +175,31 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
   return {
     close: () => db.close(),
     list() {
-      sweep();
+      const time = sweep();
       return [...devices.entries()].map(([deviceId, device]) => ({
         deviceId,
         name: device.name,
-        online: true,
+        online: device.foregroundUntil > time,
+        ...(device.backgroundUntil > time ? { backgroundReady: true as const } : {}),
         platform: "android" as const,
       }));
     },
-    listen(deviceId: string, name: string) {
+    listen(deviceId: string, name: string, delivery?: Delivery) {
       const time = sweep();
-      if (devices.size < 128 || devices.has(deviceId)) {
-        devices.set(deviceId, { name, until: time + HEARTBEAT_TTL });
+      if (delivery === "unavailable") {
+        devices.delete(deviceId);
+        // 两项授权均关闭时立即结束该配对设备的请求，让原会话收到结果。
+        db.prepare(`
+          UPDATE tasks SET status = 'failed', message = ?, updated_at = ?
+          WHERE device_id = ? AND status IN ('queued', 'running')
+        `).run(failureMessages.denied, time, deviceId);
+        return { _tag: "pending" as const, job: null };
+      } else if (delivery !== "background" && (devices.size < 128 || devices.has(deviceId))) {
+        devices.set(deviceId, {
+          name,
+          foregroundUntil: time + HEARTBEAT_TTL,
+          backgroundUntil: delivery === "background-ready" ? time + BACKGROUND_DEVICE_TTL : 0,
+        });
       }
       const task = db
         .prepare(`
@@ -184,7 +208,13 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
         ORDER BY updated_at, id LIMIT 1
       `)
         .get(deviceId, deviceId) as CaptureRow | undefined;
-      return { _tag: "pending" as const, job: task ? job(task) : null };
+      return {
+        _tag: "pending" as const,
+        job: task ? job(task, time) : null,
+        ...(delivery === "background-ready" && devices.has(deviceId)
+          ? { backgroundReady: true as const }
+          : {}),
+      };
     },
     enqueue(
       threadId: string,
@@ -208,7 +238,8 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
         return taskView(existing);
       }
       const device = devices.get(deviceId);
-      if (!device) throw new CompanionError(409, "请在目标手机解锁并打开已配对的 T3 App。");
+      if (!device)
+        throw new CompanionError(409, "请在目标手机打开已配对的 T3 App，刷新请求接收状态。");
       const pending = Number(
         db
           .prepare(`
@@ -230,7 +261,7 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
         requestId,
         action,
         seconds,
-        time + REQUEST_TTL,
+        time + (device.backgroundUntil > time ? BACKGROUND_REQUEST_TTL : REQUEST_TTL),
         time,
       );
       return taskView(inThread(threadId, id));
@@ -248,10 +279,10 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
       return this.status(deviceId, id);
     },
     status(deviceId: string, id: string) {
-      sweep();
+      const time = sweep();
       const task = owned(deviceId, id);
       return task.status === "running"
-        ? { _tag: "active" as const, job: job(task) }
+        ? { _tag: "active" as const, job: job(task, time) }
         : { _tag: "inactive" as const };
     },
     reject(deviceId: string, id: string, reason: Failure) {
@@ -276,15 +307,24 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
       const archive = captureArchiveDirectory(stateDir, ThreadId.make(task.thread_id));
       const file = archivedCapturePath(archive, id, task.action === "screenshot" ? "png" : "mp4")!;
       NodeFS.mkdirSync(archive, { mode: 0o700, recursive: true });
-      NodeFS.writeFileSync(file, data, { flag: "wx", mode: 0o600 });
+      // 临时文件完整写入后才出现正式文件名。服务重启后可复用同一份字节补记回执。
+      const temporary = NodePath.join(archive, `.${id}.${NodeCrypto.randomUUID()}.part`);
       try {
+        NodeFS.writeFileSync(temporary, data, { flag: "wx", mode: 0o600 });
+        try {
+          NodeFS.linkSync(temporary, file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          if (NodeFS.statSync(file).size !== data.length || !NodeFS.readFileSync(file).equals(data)) {
+            throw new CompanionError(409, "Existing Android capture differs from the upload.");
+          }
+        }
         db.prepare(`
           UPDATE tasks SET status = 'done', message = '手机已回传屏幕捕获结果。',
             updated_at = ?, digest = ? WHERE id = ? AND status = 'running'
         `).run(time, digest, id);
-      } catch (error) {
-        NodeFS.unlinkSync(file);
-        throw error;
+      } finally {
+        NodeFS.rmSync(temporary, { force: true });
       }
     },
     result(threadId: string, id: string) {

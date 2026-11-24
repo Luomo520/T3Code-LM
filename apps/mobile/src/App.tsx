@@ -82,6 +82,7 @@ import {
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 import { installUiRuntimeMemoryWarningGc } from "./lib/useUiRuntimeMemoryWarningGc";
 import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";
+import { AndroidDirectoryHandoffCoordinator } from "./features/files/AndroidDirectoryHandoffCoordinator";
 import { AndroidCaptureCoordinator } from "./features/files/AndroidCaptureCoordinator";
 import { AutomaticFileHandoff } from "./features/files/AutomaticFileHandoff";
 import { ConnectDeviceApprovalCoordinator } from "./features/connection/ConnectDeviceApprovalCoordinator";
@@ -312,6 +313,7 @@ function AppContent() {
       <ConnectDeviceApprovalCoordinator />
       <AutomaticFileHandoff />
       <AndroidCaptureCoordinator />
+      <AndroidDirectoryHandoffCoordinator />
       <GestureHandlerRootView className="flex-1">
         <KeyboardProvider statusBarTranslucent>
           <SafeAreaProvider>

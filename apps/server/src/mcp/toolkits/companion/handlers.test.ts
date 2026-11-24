@@ -252,10 +252,18 @@ it.effect(
       const { stateDir } = yield* ServerConfig;
       const store = getAndroidCaptureStore(stateDir);
       const deviceId = "android:companion-test-phone";
-      store.listen(deviceId, "Test Android");
+      store.listen(deviceId, "Test Android", "background-ready");
       const list = yield* call("t3_companion_list", {});
       expect(list.structuredContent).toMatchObject({
-        devices: [{ deviceId, name: "Test Android", online: true, platform: "android" }],
+        devices: [
+          {
+            deviceId,
+            name: "Test Android",
+            online: true,
+            backgroundReady: true,
+            platform: "android",
+          },
+        ],
       });
       const unsupported = yield* call("t3_companion_enqueue", {
         deviceId,

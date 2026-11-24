@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import {
+  AndroidDirectoryFileName,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   FILE_HANDOFF_CHUNK_BYTES,
@@ -58,6 +59,16 @@ const MAX_TRANSFERS_PER_THREAD = 50;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const THREAD_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const activeWrites = new Set<string>();
+const ANDROID_DIRECTORY_PRESENCE_MS = 45_000;
+const androidDirectories = new Map<string, { revision: string; expiresAt: number }>();
+const androidDirectoryKey = (root: string, sessionId: string) => JSON.stringify([root, sessionId]);
+const androidFileFailures = {
+  revoked: "手机已撤销目录读取授权。",
+  missing: "授权目录的直接子文件中没有这个文件。",
+  ambiguous: "授权目录存在同名文件，无法确定要读取哪一个。",
+  "too-large": "文件超过当前环境的附件大小限制。",
+  failed: "手机无法读取该文件。",
+};
 
 interface HandoffRecord {
   readonly id: string;
@@ -81,6 +92,13 @@ interface HandoffRecord {
   readonly installation?: FileHandoffInstallation;
   readonly requesterAlias?: string;
   readonly sourceOrdinal?: number;
+  readonly androidDirectory?: {
+    readonly revision: string;
+    readonly requester: string;
+    readonly maxBytes: number;
+    readonly preview?: true;
+    readonly failure?: string;
+  };
   readonly claimed?: true;
   readonly deliveryRevision?: string;
   readonly management?: { readonly requestId: string; readonly ordinal: number };
@@ -144,6 +162,24 @@ async function receivedBytes(directory: string, id: string) {
   }
 }
 
+function isUploadGrantCurrent(directory: string, record: HandoffRecord) {
+  if (!record.androidDirectory) return true;
+  return (
+    androidDirectories.get(androidDirectoryKey(NodePath.dirname(directory), record.sender))
+      ?.revision === record.androidDirectory.revision
+  );
+}
+
+// 调用方持有记录的写入锁。撤销后丢弃部分上传，并保留会话可查询的失败回执。
+async function failRevokedAndroidUpload(directory: string, record: HandoffRecord) {
+  if (!record.androidDirectory || record.sha256 || record.disposition) return;
+  await writeRecord(directory, {
+    ...record,
+    androidDirectory: { ...record.androidDirectory, failure: androidFileFailures.revoked },
+  });
+  await NodeFSP.rm(contentsPath(directory, record.id), { force: true });
+}
+
 async function complete(directory: string, record: HandoffRecord) {
   const path = contentsPath(directory, record.id);
   if (record.sizeBytes === 0) {
@@ -153,12 +189,16 @@ async function complete(directory: string, record: HandoffRecord) {
   const hash = NodeCrypto.createHash("sha256");
   for await (const chunk of NodeFS.createReadStream(path)) hash.update(chunk);
   const sha256 = hash.digest("hex");
+  if (!isUploadGrantCurrent(directory, record)) {
+    await failRevokedAndroidUpload(directory, record);
+    return 404;
+  }
   if (sha256 !== record.expectedSha256) {
     await NodeFSP.rm(path, { force: true });
-    return false;
+    return 422;
   }
   await writeRecord(directory, { ...record, sha256 });
-  return true;
+  return 204;
 }
 
 function label(session: AuthClientSession) {
@@ -182,6 +222,7 @@ function failure(message: string) {
 }
 
 const isHandoffError = Schema.is(FileHandoffError);
+const isAndroidDirectoryFileName = Schema.is(AndroidDirectoryFileName);
 
 function storage<T>(operation: () => Promise<T>) {
   return Effect.tryPromise({
@@ -234,10 +275,24 @@ async function sweepExpired(root: string, now: number) {
     const directory = NodePath.join(root, key);
     for (const record of await readRecords(directory)) {
       const marker = recordPath(directory, record.id);
-      if (activeWrites.has(marker) || (!record.disposition && record.expiresAt > now)) continue;
+      if (
+        activeWrites.has(marker) ||
+        (!record.disposition && !record.androidDirectory?.failure && record.expiresAt > now)
+      )
+        continue;
       activeWrites.add(marker);
       try {
         await NodeFSP.rm(contentsPath(directory, record.id), { force: true });
+        if (record.androidDirectory) {
+          await removeFromFileHandoffInbox(root, record.sender, key, record.id);
+          if (record.androidDirectory.preview) {
+            const extension = NodePath.extname(record.name);
+            const suffix = /^\.[a-z0-9]{1,12}$/iu.test(extension) ? extension : ".bin";
+            await NodeFSP.rm(NodePath.join(directory, record.id + suffix + ".preview" + suffix), {
+              force: true,
+            });
+          }
+        }
         if (record.serverStaged && record.autoReceive) {
           await removeFromFileHandoffInbox(root, record.recipient, key, record.id);
         }
@@ -274,7 +329,7 @@ export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
   if (
     !UUID_PATTERN.test(input.id) ||
     /^[. ]+$|[\\/\x00-\x1f\x7f]/u.test(input.name) ||
-    input.recipient === session.sessionId
+    (input.recipient === session.sessionId && !input.directoryRevision)
   ) {
     return yield* failure("文件名或设备选择无效。");
   }
@@ -302,6 +357,36 @@ export const startFileHandoff = Effect.fn("FileHandoff.start")(function* (
     try {
       await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
       const existing = await readRecord(directory, input.id);
+      if (input.directoryRevision || existing?.androidDirectory) {
+        if (
+          !existing?.androidDirectory ||
+          existing.androidDirectory.failure ||
+          existing.androidDirectory.revision !== input.directoryRevision ||
+          androidDirectories.get(androidDirectoryKey(root, session.sessionId))?.revision !==
+            input.directoryRevision ||
+          existing.sender !== session.sessionId ||
+          existing.recipient !== input.recipient ||
+          existing.name !== input.name ||
+          existing.disposition ||
+          existing.expiresAt <= now ||
+          input.sizeBytes > existing.androidDirectory.maxBytes ||
+          !eligible(sender, AuthOrchestrationOperateScope)
+        )
+          throw failure("手机取件任务已失效。");
+        if (existing.expectedSha256 !== "") {
+          if (existing.sizeBytes !== input.sizeBytes || existing.expectedSha256 !== input.sha256) {
+            throw failure("手机源文件已变化，请重新发起取件。");
+          }
+          return existing;
+        }
+        const updated = {
+          ...existing,
+          sizeBytes: input.sizeBytes,
+          expectedSha256: input.sha256,
+        };
+        await writeRecord(directory, updated);
+        return updated;
+      }
       if (existing) {
         if (
           existing.sender !== session.sessionId ||
@@ -670,7 +755,16 @@ function threadFileHandoffStatus(record: HandoffRecord) {
     id: record.id,
     name: record.name,
     recipientLabel: record.recipientLabel,
-    status: record.disposition ?? ("awaiting_save" as const),
+    status:
+      record.disposition ??
+      (record.androidDirectory?.failure
+        ? ("failed" as const)
+        : record.androidDirectory && !record.sha256
+          ? ("awaiting_source" as const)
+          : record.androidDirectory?.preview
+            ? ("ready_for_preview" as const)
+            : ("awaiting_save" as const)),
+    ...(record.androidDirectory?.failure ? { sourceFailure: record.androidDirectory.failure } : {}),
     ...(record.sourceUrl === undefined ? {} : { urlDownload: true as const }),
     ...(!record.disposition && record.urlFailure ? { urlFailure: record.urlFailure } : {}),
     ...(record.claimed && !record.disposition ? { claimed: true as const } : {}),
@@ -679,6 +773,144 @@ function threadFileHandoffStatus(record: HandoffRecord) {
     ...(record.installation === undefined ? {} : { installation: record.installation }),
   };
 }
+
+export const stageAndroidDirectoryFile = Effect.fn("FileHandoff.stageAndroidDirectoryFile")(
+  function* (input: {
+    readonly threadId: ThreadId;
+    readonly id: string;
+    readonly requester: AuthSessionId;
+    readonly requesterAlias: string;
+    readonly sourceOrdinal: number;
+    readonly sender: AuthSessionId;
+    readonly recipient: AuthSessionId;
+    readonly name: string;
+    readonly preview: boolean;
+    readonly installRequested?: true;
+  }) {
+    if (!UUID_PATTERN.test(input.id) || !isAndroidDirectoryFileName(input.name)) {
+      return yield* failure("请输入授权目录内的完整文件名。");
+    }
+    const clients = yield* authorizedClients;
+    const sender = clients.find(({ sessionId }) => sessionId === input.sender);
+    const requester = clients.find(({ sessionId }) => sessionId === input.requester);
+    const recipient = clients.find(({ sessionId }) => sessionId === input.recipient);
+    if (
+      !sender ||
+      !requester ||
+      !recipient ||
+      !isAndroidDirectoryClient(sender) ||
+      !eligible(requester, AuthOrchestrationOperateScope) ||
+      !eligible(recipient) ||
+      (!input.preview && input.recipient === input.sender)
+    ) {
+      return yield* failure("手机或接收设备的授权已失效。");
+    }
+    const now = yield* Clock.currentTimeMillis;
+    const root = yield* configuration;
+    const directory = transferDirectory(root, input.threadId);
+    const settings = yield* (yield* ServerSettingsService).getSettings.pipe(
+      Effect.mapError(() => failure("无法读取附件大小限制。")),
+    );
+    const maxBytes = settings.attachmentMaxFileSizeMiB * 1024 * 1024;
+    const record = yield* storage(async () => {
+      const marker = recordPath(directory, input.id);
+      if (activeWrites.has(marker)) throw failure("文件请求正在写入，请稍后重试。");
+      activeWrites.add(marker);
+      try {
+        const existing = await readRecord(directory, input.id);
+        if (existing) {
+          if (
+            existing.androidDirectory?.requester !== input.requester ||
+            existing.sender !== input.sender ||
+            existing.recipient !== input.recipient ||
+            existing.name !== input.name ||
+            existing.expiresAt <= now
+          ) {
+            throw failure("该次文件请求已失效，请重新发起。");
+          }
+          return existing;
+        }
+        const grant = androidDirectories.get(androidDirectoryKey(root, input.sender));
+        if (!grant || grant.expiresAt <= now) {
+          throw failure("请打开已配对手机的 T3Code-LM，并在该环境的设备授权中选择可取件目录。");
+        }
+        if (
+          (await readRecords(directory)).filter(
+            (entry) => entry.expiresAt > now && !entry.disposition,
+          ).length >= MAX_TRANSFERS_PER_THREAD
+        )
+          throw failure("此会话的文件传输记录已满。");
+        const created: HandoffRecord = {
+          id: input.id,
+          sender: input.sender,
+          recipient: input.recipient,
+          senderLabel: label(sender),
+          recipientLabel: input.preview ? "原会话" : label(recipient),
+          name: input.name,
+          sizeBytes: 0,
+          expiresAt: now + RETENTION_MS,
+          expectedSha256: "",
+          sha256: null,
+          serverStaged: true,
+          ...(input.preview ? {} : { autoReceive: true }),
+          ...(input.installRequested ? { installRequested: true } : {}),
+          requesterAlias: input.requesterAlias,
+          sourceOrdinal: input.sourceOrdinal,
+          androidDirectory: {
+            revision: grant.revision,
+            requester: input.requester,
+            maxBytes,
+            ...(input.preview ? { preview: true } : {}),
+          },
+        };
+        await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
+        const entry = { threadId: input.threadId, id: input.id, expiresAt: created.expiresAt };
+        const threadKey = NodePath.basename(directory);
+        // 索引先于任务落盘。创建中断后的孤立索引不会公开任务，重试可补全记录。
+        await indexFileHandoff(root, input.sender, threadKey, entry);
+        if (!input.preview) await indexFileHandoff(root, input.recipient, threadKey, entry);
+        await writeRecord(directory, created);
+        return created;
+      } finally {
+        activeWrites.delete(marker);
+      }
+    });
+    return threadFileHandoffStatus(record);
+  },
+);
+
+function isAndroidDirectoryClient(client: AuthClientSession) {
+  return (
+    client.client.os?.toLowerCase() === "android" &&
+    client.client.browser === undefined &&
+    eligible(client, AuthOrchestrationOperateScope)
+  );
+}
+
+export const openAndroidDirectoryPreview = Effect.fn("FileHandoff.openAndroidDirectoryPreview")(
+  function* (threadId: ThreadId, id: string) {
+    if (!UUID_PATTERN.test(id)) return yield* failure("文件请求编号无效。");
+    const now = yield* Clock.currentTimeMillis;
+    const directory = transferDirectory(yield* configuration, threadId);
+    return yield* storage(async () => {
+      const record = await readRecord(directory, id);
+      if (!record?.androidDirectory?.preview || record.expiresAt <= now || record.disposition) {
+        throw failure("该文件不属于本会话的预览请求或已过期。");
+      }
+      if (!record.sha256) return { receipt: threadFileHandoffStatus(record) };
+      // 使用原扩展名，让较常见的图片、音频、视频和文档继续走已有的预览规则。
+      const extension = NodePath.extname(record.name);
+      const suffix = /^\.[a-z0-9]{1,12}$/iu.test(extension) ? extension : ".bin";
+      const path = NodePath.join(directory, record.id + suffix + ".preview" + suffix);
+      try {
+        await NodeFSP.link(contentsPath(directory, record.id), path);
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+      }
+      return { receipt: threadFileHandoffStatus(record), path };
+    });
+  },
+);
 
 export const readThreadFileHandoffStatus = Effect.fn("FileHandoff.threadFileStatus")(function* (
   threadId: ThreadId,
@@ -732,6 +964,7 @@ export const manageThreadFileHandoff = Effect.fn("FileHandoff.manageThreadFile")
     const records = (await readRecords(directory)).filter(
       (record) =>
         record.serverStaged &&
+        !record.androidDirectory?.preview &&
         record.expiresAt > now &&
         (record.sourceOrdinal === undefined || record.sourceOrdinal < input.ordinal) &&
         (record.sender === input.requester || record.requesterAlias === input.requesterAlias),
@@ -834,6 +1067,96 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
 ) {
   const root = yield* configuration;
   const now = yield* Clock.currentTimeMillis;
+  if (input._tag === "androidPullInbox" || input._tag === "androidPullFailed") {
+    const client = (yield* authorizedClients).find(
+      ({ sessionId }) => sessionId === session.sessionId,
+    );
+    if (!client || !isAndroidDirectoryClient(client))
+      return yield* failure("手机的取件权限已失效。");
+    if (input._tag === "androidPullInbox") {
+      const key = androidDirectoryKey(root, session.sessionId);
+      for (const [id, grant] of androidDirectories) {
+        if (grant.expiresAt <= now) androidDirectories.delete(id);
+      }
+      const revision =
+        !input.revoke && input.sessionId === session.sessionId ? input.revision : undefined;
+      if (revision)
+        androidDirectories.set(key, { revision, expiresAt: now + ANDROID_DIRECTORY_PRESENCE_MS });
+      else if (input.revoke) androidDirectories.delete(key);
+      else return { _tag: "androidPullInbox", sessionId: session.sessionId, jobs: [] } as const;
+      const jobs = yield* storage(async () => {
+        const candidates = await indexedFileHandoffs(root, session.sessionId, now);
+        const jobs = [];
+        for (const { threadId, id } of candidates) {
+          const directory = transferDirectory(root, threadId);
+          const record = await readRecord(directory, id);
+          const grant = record?.androidDirectory;
+          if (
+            !grant ||
+            record.sender !== session.sessionId ||
+            grant.failure ||
+            record.disposition ||
+            record.sha256 ||
+            record.expiresAt <= now
+          )
+            continue;
+          if (grant.revision !== revision) {
+            const marker = recordPath(directory, record.id);
+            if (activeWrites.has(marker)) continue;
+            activeWrites.add(marker);
+            try {
+              const current = await readRecord(directory, record.id);
+              if (current) await failRevokedAndroidUpload(directory, current);
+            } finally {
+              activeWrites.delete(marker);
+            }
+            continue;
+          }
+          jobs.push({
+            threadId,
+            id,
+            recipient: record.recipient as AuthSessionId,
+            name: record.name,
+            maxBytes: grant.maxBytes,
+          });
+          if (jobs.length === MAX_INBOX_RESULTS) break;
+        }
+        return jobs;
+      });
+      return {
+        _tag: "androidPullInbox",
+        sessionId: session.sessionId,
+        jobs,
+      } satisfies FileHandoffReply;
+    }
+    if (!UUID_PATTERN.test(input.id)) return yield* failure("文件请求编号无效。");
+    const directory = transferDirectory(root, input.threadId);
+    yield* storage(async () => {
+      const marker = recordPath(directory, input.id);
+      if (activeWrites.has(marker)) throw failure("取件记录正在写入，请稍后重试。");
+      activeWrites.add(marker);
+      try {
+        const record = await readRecord(directory, input.id);
+        const grant = record?.androidDirectory;
+        if (
+          record?.sender !== session.sessionId ||
+          grant?.revision !== input.revision ||
+          record.expiresAt <= now ||
+          record.disposition
+        )
+          throw failure("该取件请求不属于当前授权。");
+        if (record.sha256 || grant.failure) return;
+        await writeRecord(directory, {
+          ...record,
+          androidDirectory: { ...grant, failure: androidFileFailures[input.reason] },
+        });
+        await NodeFSP.rm(contentsPath(directory, record.id), { force: true });
+      } finally {
+        activeWrites.delete(marker);
+      }
+    });
+    return { _tag: "androidPullFailed" } as const;
+  }
   if (input._tag === "inbox") {
     if (!session.scopes.includes(AuthOrchestrationReadScope)) {
       return yield* failure("当前设备没有读取收件箱的权限。");
@@ -899,6 +1222,8 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
         .filter(
           (entry) =>
             entry.expiresAt > now &&
+            !entry.androidDirectory?.preview &&
+            !entry.androidDirectory?.failure &&
             (entry.sender === session.sessionId ||
               (entry.recipient === session.sessionId &&
                 entry.disposition !== "cancelled" &&
@@ -966,6 +1291,7 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
     const outgoing = record?.sender === session.sessionId;
     if (
       !record ||
+      record.androidDirectory ||
       record.expiresAt <= now ||
       !person ||
       !(outgoing || record.recipient === session.sessionId) ||
@@ -1069,6 +1395,7 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
             throw failure("只有发送设备可以取消传输。");
           }
         } else if (
+          record.androidDirectory?.preview ||
           record.recipient !== session.sessionId ||
           (record.deliveryRevision !== undefined && !record.claimed) ||
           record.sizeBytes !== input.sizeBytes ||
@@ -1117,6 +1444,7 @@ export const readFileHandoff = Effect.fn("FileHandoff.read")(function* (
       : yield* storage(() => readRecord(directory, input.id));
   if (
     !record ||
+    record.androidDirectory?.preview ||
     record.recipient !== session.sessionId ||
     !record.sha256 ||
     record.disposition !== undefined ||
@@ -1156,7 +1484,8 @@ export const resolveFileHandoff = Effect.fn("FileHandoff.resolve")(function* (
   }
   const directory = NodePath.join(yield* configuration, threadKey);
   const record = yield* storage(() => readRecord(directory, id));
-  if (!record || record.disposition || record.expiresAt <= now) return null;
+  if (!record || record.disposition || record.androidDirectory?.failure || record.expiresAt <= now)
+    return null;
   const signer = yield* AssetSigner.AssetSigner;
   const payload = `handoff.${mode}.${threadKey}.${id}.${expiry}`;
   const verified = yield* signer
@@ -1167,8 +1496,11 @@ export const resolveFileHandoff = Effect.fn("FileHandoff.resolve")(function* (
       signature,
     )
     .pipe(Effect.mapError(() => failure("无法验证文件传输链接。")));
-  if (!verified) return null;
-  if (mode === "upload") closeDirectHandoff(recordPath(directory, id));
+  if (!verified || (mode === "receive" && record.androidDirectory?.preview)) return null;
+  if (mode === "upload") {
+    if (!isUploadGrantCurrent(directory, record)) return null;
+    closeDirectHandoff(recordPath(directory, id));
+  }
   const sessionId = mode === "upload" ? record.sender : record.recipient;
   const client = (yield* authorizedClients).find((item) => item.sessionId === sessionId);
   if (
@@ -1230,7 +1562,12 @@ export const receiveFileHandoffChunk = Effect.fn("FileHandoff.receiveChunk")(fun
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const current = yield* storage(() => readRecord(directory, record.id));
-        if (!current || current.disposition || current.expiresAt <= now) {
+        if (
+          !current ||
+          current.disposition ||
+          current.androidDirectory?.failure ||
+          current.expiresAt <= now
+        ) {
           return HttpServerResponse.empty({ status: 404 });
         }
         if (current.sha256 !== null) return HttpServerResponse.empty({ status: 204 });
@@ -1252,8 +1589,12 @@ export const receiveFileHandoffChunk = Effect.fn("FileHandoff.receiveChunk")(fun
           Stream.runDrain,
         );
         if (length !== expectedBytes) return HttpServerResponse.empty({ status: 400 });
-        const completed = yield* Effect.uninterruptible(
+        const status = yield* Effect.uninterruptible(
           storage(async () => {
+            if (!isUploadGrantCurrent(directory, current)) {
+              await failRevokedAndroidUpload(directory, current);
+              return 404;
+            }
             if (length > 0) {
               const file = await NodeFSP.open(path, "a", 0o600);
               try {
@@ -1263,10 +1604,15 @@ export const receiveFileHandoffChunk = Effect.fn("FileHandoff.receiveChunk")(fun
                 await file.close();
               }
             }
-            return offset + expectedBytes < record.sizeBytes || complete(directory, current);
+            if (offset + expectedBytes === record.sizeBytes) return complete(directory, current);
+            if (!isUploadGrantCurrent(directory, current)) {
+              await failRevokedAndroidUpload(directory, current);
+              return 404;
+            }
+            return 204;
           }),
         );
-        return HttpServerResponse.empty({ status: completed ? 204 : 422 });
+        return HttpServerResponse.empty({ status });
       }),
     () =>
       Effect.sync(() => {

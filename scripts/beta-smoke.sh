@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 # 在已有开发环境中重跑 Beta 的会话图片、用量、设备接口和更新逻辑检查。
 set -euo pipefail
+# 多端收发可在隔离测试数据上单独回归。实机复验使用同一份源码生成的包。
+if [[ ${1:-} == --handoff ]]; then
+  cd -- "$(dirname -- "$0")/../apps/mobile"
+  T3_MOBILE_TEST_PLATFORM=android ../../node_modules/.bin/vp test run \
+    src/features/files/AndroidCaptureCoordinator.test.tsx \
+    src/features/files/AutomaticFileHandoff.test.tsx \
+    src/features/files/automatic-file-handoff.test.ts \
+    src/features/files/androidCaptureBackground.test.ts \
+    src/features/files/androidCapturePolicy.test.ts \
+    src/features/settings/SettingsCrossDeviceRouteScreen.test.tsx \
+    src/persistence/mobile-database.test.ts
+  cd ../server
+  ../../node_modules/.bin/vp test run \
+    src/companion/http.test.ts src/companion/store.test.ts \
+    src/fileExchange/FileHandoff.test.ts src/fileExchange/FileHandoffInbox.test.ts \
+    src/mcp/toolkits/threadFileSave/handlers.test.ts src/mcp/toolkits/companion/handlers.test.ts
+  exit
+fi
 cd -- "$(dirname -- "$0")/../apps/web"
 if [[ -z ${PLAYWRIGHT_BROWSERS_PATH:-} && -d /vol1/1000/DATA/software/playwright-browsers ]]; then
   export PLAYWRIGHT_BROWSERS_PATH=/vol1/1000/DATA/software/playwright-browsers

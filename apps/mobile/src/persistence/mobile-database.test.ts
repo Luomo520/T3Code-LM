@@ -6,8 +6,11 @@ import { vi } from "vite-plus/test";
 const openDatabaseAsync = vi.hoisted(() => vi.fn());
 
 vi.mock("expo-sqlite", () => ({ openDatabaseAsync }));
+vi.mock("expo-secure-store", () => ({}));
 
 import * as MobileDatabase from "./mobile-database";
+import * as MobilePreferences from "./mobile-preferences";
+import { MobileSecureStorage } from "./mobile-secure-storage";
 import { createHeaderUsageHistoryStore } from "../features/usage/headerUsageHistoryStore";
 import { presentHeaderUsageHistory } from "../features/usage/headerUsageHistory";
 
@@ -164,11 +167,25 @@ describe("offline pull request cache", () => {
       ),
   );
 
-  it.effect("keeps usage ranges isolated and prunes old cached windows for each environment", () =>
+  it.effect("keeps the selected usage range when clearing an environment's cached windows", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* Effect.promise(() => sqliteDatabase());
         const database = yield* MobileDatabase.make;
+        const preferences = yield* MobilePreferences.MobilePreferencesStore.pipe(
+          Effect.provide(MobilePreferences.layer),
+          Effect.provideService(MobileDatabase.MobileDatabase, database),
+          Effect.provideService(
+            MobileSecureStorage,
+            MobileSecureStorage.of({
+              getItem: () => Effect.succeed(null),
+              removeItem: () => Effect.void,
+              setItem: () => Effect.void,
+            }),
+          ),
+        );
+        expect(yield* preferences.load).toEqual({});
+        yield* preferences.savePatch({ usageWindowDays: 90 });
         yield* database.saveCache(otherEnvironment, "usage-summary", "UTC:30", 1, "other");
         yield* database.saveCache(environmentId, "usage-summary", "UTC:30", 1, "30 days");
         yield* database.saveCache(environmentId, "usage-summary", "UTC:90", 1, "90 days");
@@ -187,6 +204,7 @@ describe("offline pull request cache", () => {
         expect(yield* database.listCache("usage-summary")).toHaveLength(17);
         yield* database.clearEnvironmentCache(environmentId);
         expect(yield* database.listCache("usage-summary")).toEqual(["other"]);
+        expect(yield* preferences.load).toEqual({ usageWindowDays: 90 });
       }),
     ),
   );

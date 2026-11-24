@@ -56,7 +56,7 @@ internal sealed class CompanionWindow : Form
     private Uri origin;
     private bool accepting, working, editing, quitting;
     private int acceptanceVersion;
-    private bool remoteInputPaused, approvingRemoteInput;
+    private bool remoteInputPaused, desktopRequestActive;
     private int remoteInputVersion;
     private string currentJob;
     private InstallerOffer installerOffer;
@@ -82,6 +82,7 @@ internal sealed class CompanionWindow : Form
     private CancellationTokenSource frameCancel;
     private bool framePending;
     private Form captureDialog;
+    private Form desktopChoiceDialog;
     private bool pickingLocalCapture;
     private const int RemoteRecordingMaximum = 30;
     private static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(45);
@@ -272,7 +273,7 @@ internal sealed class CompanionWindow : Form
         allowButton.Visible = refuseButton.Visible = approval != null;
         installButton.Visible = installerOffer != null;
         installButton.Enabled = installerOffer != null && accepting && !working &&
-            !editing && !installerBusy && recording == null;
+            !editing && !installerBusy && installerReports.Count == 0 && !PendingInstallation.Exists && recording == null;
         screenshotButton.Enabled = recording == null && !working && !pickingLocalCapture;
         recordButton.Enabled = recording != null || (!working && !pickingLocalCapture);
         recordButton.Text = recording == null ? "开始录制" : "停止录制";
@@ -359,6 +360,9 @@ internal sealed class CompanionWindow : Form
         try { PendingRecording.Clear(); }
         catch (IOException) { lastStatus += " · 本地录像回执清理失败"; }
         catch (UnauthorizedAccessException) { lastStatus += " · 本地录像回执清理失败"; }
+        try { PendingInstallation.Clear(); }
+        catch (IOException) { lastStatus += " · 本地安装回执清理失败"; }
+        catch (UnauthorizedAccessException) { lastStatus += " · 本地安装回执清理失败"; }
         try { Pairing.Clear(); }
         catch (IOException) { lastStatus += " · 本地配对记录删除失败"; }
         catch (UnauthorizedAccessException) { lastStatus += " · 本地配对记录删除失败"; }
@@ -390,6 +394,7 @@ internal sealed class CompanionWindow : Form
         pollTimer.Stop();
         SetApproval(false);
         if (captureDialog != null) captureDialog.Close();
+        if (desktopChoiceDialog != null) desktopChoiceDialog.Close();
         if (inProgress != null) inProgress.Cancel();
         if (remoteRecording != null) FinishRecording("接收已暂停，录像仅保存在本机。");
         lastStatus = text;
@@ -401,7 +406,12 @@ internal sealed class CompanionWindow : Form
         if (paired == null || !accepting || editing) return;
         remoteInputPaused = !remoteInputPaused;
         remoteInputVersion++;
-        if (remoteInputPaused && approvingRemoteInput) SetApproval(false);
+        if (remoteInputPaused && desktopRequestActive)
+        {
+            SetApproval(false);
+            if (desktopChoiceDialog != null) desktopChoiceDialog.Close();
+            if (inProgress != null) inProgress.Cancel();
+        }
         UpdateView();
         await ReportDesktopState(false);
     }
@@ -602,7 +612,7 @@ internal sealed class CompanionWindow : Form
                 try { await CompanionApi.Post(target, "result", installerReports.Peek(), current.Token, lifetime.Token); }
                 catch (ApiFailure ex)
                 {
-                    if (ex.Status != HttpStatusCode.BadRequest && ex.Status != HttpStatusCode.Conflict) throw;
+                    if (!IsTerminalInstallationReply(ex)) throw;
                     activityText = "服务端无法接收这次安装回执，原文件保存在本机。";
                 }
                 if (paired != current) return;
@@ -610,6 +620,8 @@ internal sealed class CompanionWindow : Form
                 if (!accepting || started != acceptanceVersion) return;
             }
             if (installerBusy) return;
+            await SendPendingInstallation(target, current);
+            if (!accepting || paired != current || started != acceptanceVersion) return;
             var response = await CompanionApi.Post(target, "poll", new { name = current.Name, info = DeviceInfo.WithDesktopState(info, accepting, remoteInputPaused), recordingReceiptV1 = true }, current.Token, lifetime.Token);
             polled = true;
             if (paired != current) return;
@@ -626,7 +638,10 @@ internal sealed class CompanionWindow : Form
             var job = Json.Map(response, "job");
             if (job != null)
             {
-                if (Json.String(job, "action") == "record-screen")
+                string action = Json.String(job, "action");
+                int startedInput = remoteInputVersion;
+                desktopRequestActive = IsDesktopAction(action);
+                if (action == "record-screen")
                 {
                     watchedRecordingId = Json.String(job, "id");
                     recordingStopRequested = false;
@@ -634,19 +649,20 @@ internal sealed class CompanionWindow : Form
                 }
                 try
                 {
-                    var outcome = await RunJob(job, started);
+                    var outcome = await RunJob(job, started, startedInput);
                     if (paired == current && !quitting)
                     {
                         if (outcome == null) await SendPendingRecording(target, current, started);
                         else
                         {
-                            await SendOutcome(target, current.Token, outcome, started);
+                            await SendOutcome(target, current.Token, outcome, action, started, startedInput);
                             RememberInstaller(job, outcome, current);
                         }
                     }
                 }
                 finally
                 {
+                    desktopRequestActive = false;
                     recordingStopTimer.Stop();
                     watchedRecordingId = null;
                     recordingStopRequested = false;
@@ -691,10 +707,12 @@ internal sealed class CompanionWindow : Form
         var offer = installerOffer;
         var current = paired;
         int started = acceptanceVersion;
-        if (offer == null || current == null || !accepting || working || editing || installerBusy || recording != null) return;
+        if (offer == null || current == null || !accepting || working || editing || installerBusy ||
+            installerReports.Count != 0 || PendingInstallation.Exists || recording != null) return;
         installerBusy = true;
         UpdateView();
         int attempt = ++offer.Attempt;
+        PendingInstallation pending = null;
         try
         {
             WindowsDesktop.RequireDesktop();
@@ -711,30 +729,42 @@ internal sealed class CompanionWindow : Form
                 return;
             }
 
-            var result = await CompanionInstaller.Install(offer.Path, offer.Sha256, () =>
+            string result = await CompanionInstaller.Install(offer.Path, offer.Sha256,
+                (stageId, product, version, package, previouslyDifferent) =>
             {
                 if (paired != current || !accepting || started != acceptanceVersion || quitting)
                     throw new InvalidOperationException("连接已暂停或配对已变化。");
                 WindowsDesktop.RequireDesktop();
-            }, () =>
+                var record = new PendingInstallation
+                {
+                    Id = offer.Id, Attempt = attempt, Sha256 = offer.Sha256, StageId = stageId,
+                    ProductCode = product, Version = version, PackageCode = package,
+                    PreviouslyDifferent = previouslyDifferent, State = "prepared"
+                };
+                record.Save(current);
+                pending = record;
+            }, process =>
             {
+                pending.MarkOpened(process);
+                bool recorded = TrySaveInstallation(pending, current);
                 ReportInstallation(offer, current, attempt, "opened");
-                activityText = "Windows 安装器已启动，请在本机继续。";
+                activityText = recorded ? "Windows 安装器已启动，请在本机继续。" :
+                    "Windows 安装器已启动，但未能保存最新安装状态。";
                 UpdateView();
             });
-            ReportInstallation(offer, current, attempt, result.Item1, result.Item2, result.Item3);
-            activityText = result.Item1 == "verified" ? "已核实安装版本 " + result.Item3 :
-                result.Item1 == "canceled" ? "Windows 已取消安装，文件仍保存在本机。" : "尚未核实安装结果，文件仍保存在本机。";
+            activityText = result == "verified" ? "已核实安装版本 " + pending.Version :
+                result == "canceled" ? "Windows 已取消安装，文件仍保存在本机。" : "尚未核实安装结果，文件仍保存在本机。";
+            FinishInstallation(offer, current, attempt, pending, result);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
-            ReportInstallation(offer, current, attempt, ex.NativeErrorCode == 1223 ? "canceled" : "unverified");
             activityText = ex.NativeErrorCode == 1223 ? "Windows 已取消安装，文件仍保存在本机。" : "Windows 无法启动安装器。";
+            FinishInstallation(offer, current, attempt, pending, ex.NativeErrorCode == 1223 ? "canceled" : "unverified");
         }
         catch (Exception ex)
         {
-            ReportInstallation(offer, current, attempt, "unverified");
             activityText = "尚未核实安装结果 · " + FriendlyError(ex);
+            FinishInstallation(offer, current, attempt, pending, "unverified");
         }
         finally
         {
@@ -744,16 +774,31 @@ internal sealed class CompanionWindow : Form
         await Poll();
     }
 
-    private void ReportInstallation(InstallerOffer offer, Pairing current, int attempt, string state,
-        string productCode = null, string version = null)
+    private void FinishInstallation(InstallerOffer offer, Pairing current, int attempt, PendingInstallation pending, string state)
+    {
+        if (pending == null)
+        {
+            ReportInstallation(offer, current, attempt, state);
+            return;
+        }
+        pending.State = state;
+        if (!TrySaveInstallation(pending, current) && paired == current && !quitting)
+            activityText += " · 本机未能保存最新安装状态";
+    }
+
+    private bool TrySaveInstallation(PendingInstallation pending, Pairing current)
+    {
+        if (paired != current || quitting) return false;
+        try { pending.Save(current); return true; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (CryptographicException) { return false; }
+    }
+
+    private void ReportInstallation(InstallerOffer offer, Pairing current, int attempt, string state)
     {
         if (paired != current || quitting) return;
         var result = new Dictionary<string, object> { { "attempt", attempt }, { "status", state } };
-        if (state == "verified")
-        {
-            result["productCode"] = productCode;
-            result["version"] = version;
-        }
         installerReports.Enqueue(new
         {
             id = offer.Id,
@@ -761,6 +806,48 @@ internal sealed class CompanionWindow : Form
             message = "",
             windowsInstallation = new { sha256 = offer.Sha256, result }
         });
+    }
+
+    private static bool IsTerminalInstallationReply(ApiFailure error)
+    {
+        return error.Status == HttpStatusCode.BadRequest || error.Status == HttpStatusCode.NotFound ||
+            error.Status == HttpStatusCode.Conflict;
+    }
+
+    private async Task SendPendingInstallation(Uri target, Pairing current)
+    {
+        PendingInstallation pending;
+        try { pending = PendingInstallation.Load(current); }
+        catch (CryptographicException)
+        {
+            PendingInstallation.Clear();
+            activityText = "无法核对本机安装记录，原文件保存在本机。";
+            return;
+        }
+        catch (InvalidDataException)
+        {
+            PendingInstallation.Clear();
+            activityText = "无法核对本机安装记录，原文件保存在本机。";
+            return;
+        }
+        if (pending == null) return;
+        bool canClearStage;
+        string state = pending.Recover(out canClearStage);
+        if (state == null) return;
+        if (pending.State != state)
+        {
+            // 进程已结束时可先删除暂存副本，避免保存回执后中断而留下副本。
+            if (canClearStage) CompanionInstaller.ClearStage(pending.StageId);
+            pending.State = state;
+            pending.Save(current);
+        }
+        try { await CompanionApi.Post(target, "result", pending.Report(), current.Token, lifetime.Token); }
+        catch (ApiFailure ex)
+        {
+            if (!IsTerminalInstallationReply(ex)) throw;
+            if (paired == current) activityText = "服务端无法接收这次安装回执，原文件保存在本机。";
+        }
+        if (paired == current) PendingInstallation.Clear();
     }
 
     private async Task SendPendingRecording(Uri target, Pairing current, int started)
@@ -836,15 +923,19 @@ internal sealed class CompanionWindow : Form
         }
     }
 
-    private async Task SendOutcome(Uri target, string token, Dictionary<string, object> outcome, int started)
+    private async Task SendOutcome(Uri target, string token, Dictionary<string, object> outcome, string action,
+        int started, int startedInput)
     {
         bool hasFile = outcome.ContainsKey("file");
-        if (!hasFile && !outcome.ContainsKey("imageBase64"))
+        bool hasEditorText = (action == "read-notepad" || action == "write-notepad") &&
+            Json.String(outcome, "status") == "done";
+        if (!hasFile && !outcome.ContainsKey("imageBase64") && !hasEditorText)
         {
             await CompanionApi.Post(target, "result", outcome, token, lifetime.Token);
             return;
         }
-        if (started != acceptanceVersion)
+        if (started != acceptanceVersion || (hasEditorText &&
+            (startedInput != remoteInputVersion || remoteInputPaused || !WindowsDesktop.DesktopAvailable())))
         {
             outcome.Remove("imageBase64");
             outcome.Remove("file");
@@ -868,13 +959,17 @@ internal sealed class CompanionWindow : Form
         }
     }
 
-    private async Task<Dictionary<string, object>> RunJob(Dictionary<string, object> job, int started)
+    private static bool IsDesktopAction(string action)
+    {
+        return action == "open-t3" || action == "open-notepad" || action == "close-window" ||
+            action == "write-notepad" || action == "read-notepad";
+    }
+
+    private async Task<Dictionary<string, object>> RunJob(Dictionary<string, object> job, int started, int startedInput)
     {
         string id = Json.String(job, "id");
         string action = Json.String(job, "action");
-        bool remoteInput = action == "open-t3" || action == "open-notepad" || action == "close-window" ||
-            action == "write-notepad" || action == "read-notepad";
-        int startedInput = remoteInputVersion;
+        bool remoteInput = IsDesktopAction(action);
         var arguments = Json.Map(job, "params");
         var outcome = new Dictionary<string, object> { { "id", id }, { "status", "failed" } };
         string label;
@@ -882,13 +977,13 @@ internal sealed class CompanionWindow : Form
         {
             case "screenshot": label = "选择目标截图并发回原会话"; break;
             case "record-screen": label = "选择目标录制并发回原会话"; break;
-            case "open-t3": label = "打开 T3Code-LM"; break;
-            case "open-notepad": label = "打开记事本"; break;
+            case "open-t3": label = "打开或激活 T3Code-LM"; break;
+            case "open-notepad": label = "打开或激活记事本"; break;
             case "close-window": label = "关闭受控端打开的窗口"; break;
             case "send-file": label = "选择一个本机文件并发送至原会话"; break;
             case "receive-file": label = "保存会话文件 «" + Json.String(arguments, "fileName") + "»"; break;
-            case "write-notepad": label = "替换本受控端打开的记事本中的文字"; break;
-            case "read-notepad": label = "读取本受控端打开的记事本文字并发回会话"; break;
+            case "write-notepad": label = "选择记事本窗口并替换编辑区文字"; break;
+            case "read-notepad": label = "选择记事本窗口并将编辑区文字发回会话"; break;
             default:
                 outcome["message"] = "受控端不支持此操作。";
                 return outcome;
@@ -910,7 +1005,6 @@ internal sealed class CompanionWindow : Form
             }
             activityText = "请求 · " + label;
             currentJob = "会话 " + Json.String(job, "threadId") + " · " + label;
-            approvingRemoteInput = remoteInput;
             approval = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             Reveal();
             tray.ShowBalloonTip(4000, Title, activityText, ToolTipIcon.Info);
@@ -918,7 +1012,6 @@ internal sealed class CompanionWindow : Form
             Task finished = await Task.WhenAny(approval.Task, Task.Delay(TimeSpan.FromSeconds(45), lifetime.Token));
             bool allowed = finished == approval.Task && await approval.Task;
             approval = null;
-            approvingRemoteInput = false;
             UpdateView();
             if (action == "record-screen" && recordingStopRequested)
                 throw new InvalidOperationException("原会话已停止录屏请求，录制尚未开始。");
@@ -926,14 +1019,9 @@ internal sealed class CompanionWindow : Form
                 throw new InvalidOperationException("本机已接手，本次远程输入已取消。");
             if (!allowed || !accepting || started != acceptanceVersion)
                 throw new InvalidOperationException("Windows 用户拒绝了请求，或请求等待超时。");
-            if (action == "write-notepad" &&
-                MessageBox.Show(this, "替换记事本内容为以下文字？" + Environment.NewLine + Environment.NewLine +
-                    Json.String(arguments, "text"), "确认写入记事本", MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
-                throw new InvalidOperationException("Windows 用户取消了填写。");
             if (!accepting || started != acceptanceVersion || requestAge.Elapsed.TotalSeconds >= 50)
                 throw new InvalidOperationException("接收已暂停或请求已过期。");
-            if (action != "screenshot" && action != "record-screen")
+            if (!remoteInput && action != "screenshot" && action != "record-screen")
                 await CheckJobBeforeAction(id, started, requestAge);
             if (remoteInput && (remoteInputPaused || startedInput != remoteInputVersion))
                 throw new InvalidOperationException("本机已接手，本次远程输入已取消。");
@@ -997,25 +1085,18 @@ internal sealed class CompanionWindow : Form
                     finally { inProgress = null; }
                 }
             }
-            else if (action == "write-notepad" || action == "read-notepad")
+            else if (remoteInput)
             {
-                outcome["message"] = await desktop.NotepadText(
-                    action == "write-notepad" ? Json.String(arguments, "text") : null,
-                    Handle, () =>
-                    {
-                        if (remoteInputPaused || startedInput != remoteInputVersion)
-                            throw new InvalidOperationException("本机已接手，本次远程输入已取消。");
-                        if (!accepting || started != acceptanceVersion || requestAge.Elapsed.TotalSeconds >= 50)
-                            throw new InvalidOperationException("接收已暂停或请求已过期。");
-                    }, lifetime.Token);
+                Action verifyRequest = () =>
+                {
+                    if (remoteInputPaused || startedInput != remoteInputVersion)
+                        throw new InvalidOperationException("本机已接手，本次远程输入已取消。");
+                    if (!accepting || started != acceptanceVersion || requestAge.Elapsed.TotalSeconds >= 50)
+                        throw new InvalidOperationException("接收已暂停或请求已过期。");
+                };
+                await RunDesktopAction(action, arguments, outcome, verifyRequest,
+                    () => CheckJobBeforeAction(id, started, requestAge), requestAge);
             }
-            else if (action == "close-window")
-            {
-                await WaitForWindowClose(desktop.RequestClose(), id, Json.String(arguments, "closeProgressV1") == "true");
-                outcome["message"] = "已确认本受控端打开的应用进程退出。";
-                if (Json.String(arguments, "closeProgressV1") == "true") outcome["closeState"] = "exited";
-            }
-            else outcome["message"] = await desktop.Open(action, lifetime.Token);
             outcome["status"] = "done";
         }
         catch (Exception ex)
@@ -1028,6 +1109,49 @@ internal sealed class CompanionWindow : Form
         activityText = label + " · " + outcome["message"];
         UpdateView();
         return outcome;
+    }
+
+    private async Task RunDesktopAction(string action, Dictionary<string, object> arguments,
+        Dictionary<string, object> outcome, Action verifyRequest, Func<Task> verifyJob, Stopwatch requestAge)
+    {
+        verifyRequest();
+        var close = action == "close-window";
+        var launch = action == "open-t3" || action == "open-notepad";
+        var notepad = action != "open-t3";
+        var replacement = action == "write-notepad" ? Json.String(arguments, "text") : null;
+        WindowsDesktop.Window selected = null;
+        if (!close)
+        {
+            var windows = WindowsDesktop.ListWindows(notepad);
+            if (windows.Count != 0 || !launch)
+                selected = DesktopWindowChoice.Ask(this, windows,
+                    launch ? (notepad ? "打开或激活记事本" : "打开或激活 T3Code-LM") : "选择记事本窗口",
+                    launch ? "继续" : replacement == null ? "读取并发送" : "确认替换文字",
+                    launch, replacement, requestAge, dialog => desktopChoiceDialog = dialog);
+        }
+
+        Process closingProcess = null;
+        using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
+        {
+            inProgress = cancel;
+            try
+            {
+                if (close)
+                    closingProcess = await desktop.RequestClose(Handle, verifyRequest, verifyJob, cancel.Token);
+                else if (launch)
+                    outcome["message"] = await desktop.Open(notepad, selected, Handle, verifyRequest, verifyJob, cancel.Token);
+                else
+                    outcome["message"] = await desktop.NotepadText(selected, replacement, Handle, verifyRequest, verifyJob, cancel.Token);
+            }
+            finally { inProgress = null; }
+        }
+        if (closingProcess != null)
+        {
+            bool reportProgress = Json.String(arguments, "closeProgressV1") == "true";
+            await WaitForWindowClose(closingProcess, (string)outcome["id"], reportProgress);
+            outcome["message"] = "已确认本受控端打开的应用进程退出。";
+            if (reportProgress) outcome["closeState"] = "exited";
+        }
     }
 
     private async Task WaitForWindowClose(Process process, string id, bool reportProgress)

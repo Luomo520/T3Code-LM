@@ -7,7 +7,7 @@ import {
 } from "@t3tools/client-runtime/state/fileHandoff";
 import { AuthOrchestrationReadScope, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useRef } from "react";
-import { ToastAndroid } from "react-native";
+import { Alert, ToastAndroid } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { AppText } from "../../components/ui/AppText";
 import * as Dialog from "../../components/ui/Dialog";
@@ -28,6 +28,8 @@ import { ReceivedApkInstallAction } from "./ReceivedApkInstallAction";
 
 const atoms = createFileHandoffAtoms(connectionAtomRuntime);
 const quiet = { reportFailure: false, reportDefect: false };
+// Android 同时只显示一条下载确认。多个环境的请求由各自的收件箱继续检查。
+let activeDownloadDialog: object | null = null;
 function EnvironmentAutomaticFileHandoff({
   environmentId,
 }: {
@@ -47,7 +49,7 @@ function EnvironmentAutomaticFileHandoff({
   const current = useRef(false);
   const running = useRef(false);
   const acknowledged = useRef(new Set<string>());
-  const offeredDownload = useRef<string | null>(null);
+  const offeredDownload = useRef<object | null>(null);
   const retryAfter = useRef(new Map<string, number>());
   const processInbox = useEffectEvent(async () => {
     if (running.current || connection._tag !== "Some" || query.data?._tag !== "inbox") return;
@@ -60,70 +62,83 @@ function EnvironmentAutomaticFileHandoff({
         explicitlyApproved: false,
       }));
       const urlDownloads = query.data.urlDownloads ?? [];
-      if (!offeredDownload.current && active()) {
+      if (!activeDownloadDialog && active()) {
         const pending = urlDownloads.find(
           (item) => !item.ready && !acknowledged.current.has(item.id),
         );
         if (pending) {
           const { id, threadId } = pending;
-          offeredDownload.current = id;
-          const respond = async (action: "approveUrl" | "cancel") => {
-            if (!active()) {
-              offeredDownload.current = null;
-              return;
-            }
-            try {
-              if (action === "approveUrl")
-                ToastAndroid.show("正在获取来源文件…", ToastAndroid.SHORT);
-              const reply = unwrapFileHandoff(
-                await receive({ environmentId, input: { _tag: action, id, threadId } }),
-              );
-              if (action === "approveUrl" ? reply._tag !== "receive" : reply._tag !== "finished")
-                throw new Error("无法处理下载请求。");
-              if (action === "cancel") acknowledged.current.add(id);
-            } catch (error) {
-              if (!active()) {
-                offeredDownload.current = null;
+          // 按钮只提交当前显示的请求。弹框关闭后的旧回调不能继续操作。
+          const release = (dialog: object) => {
+            if (activeDownloadDialog === dialog) activeDownloadDialog = null;
+            if (offeredDownload.current === dialog) offeredDownload.current = null;
+          };
+          const present = (
+            title: string,
+            description: string,
+            action: "approveUrl" | "cancel",
+            confirmText: string,
+          ) => {
+            const dialog = {};
+            activeDownloadDialog = dialog;
+            offeredDownload.current = dialog;
+            let responding = false;
+            const respond = async (decision: "approveUrl" | "cancel") => {
+              if (responding || activeDownloadDialog !== dialog) return;
+              if (decision === "approveUrl" && !active()) {
+                release(dialog);
                 return;
               }
-              Dialog.alert(
-                "无法处理下载请求",
-                error instanceof Error ? error.message : "请检查来源网址后重试。",
-                [
-                  { text: "取消请求", onPress: () => void respond("cancel") },
-                  { text: "重试", onPress: () => void respond(action) },
-                ],
-                {
-                  onDismiss: () => {
-                    offeredDownload.current = null;
-                  },
+              responding = true;
+              try {
+                if (decision === "approveUrl")
+                  ToastAndroid.show("正在获取来源文件…", ToastAndroid.SHORT);
+                const reply = unwrapFileHandoff(
+                  await receive({ environmentId, input: { _tag: decision, id, threadId } }),
+                );
+                if (
+                  decision === "approveUrl" ? reply._tag !== "receive" : reply._tag !== "finished"
+                )
+                  throw new Error("无法处理下载请求。");
+                if (decision === "cancel") acknowledged.current.add(id);
+                release(dialog);
+                query.refresh();
+              } catch (error) {
+                if (!active() || activeDownloadDialog !== dialog) {
+                  release(dialog);
+                  return;
+                }
+                present(
+                  "无法处理下载请求",
+                  error instanceof Error ? error.message : "请检查来源网址后重试。",
+                  decision,
+                  "重试",
+                );
+              }
+            };
+            Alert.alert(
+              title,
+              description,
+              action === "cancel"
+                ? [{ text: confirmText, onPress: () => void respond("cancel") }]
+                : [
+                    { text: "取消请求", style: "cancel", onPress: () => void respond("cancel") },
+                    { text: confirmText, onPress: () => void respond("approveUrl") },
+                  ],
+              {
+                onDismiss: () => {
+                  if (!responding) release(dialog);
                 },
-              );
-              return;
-            }
-            offeredDownload.current = null;
-            query.refresh();
-          };
-          Dialog.alert(
-            "下载到这台设备",
-            `${pending.senderLabel} 请求下载 ${pending.name}。
-
-${pending.sourceUrl}${
-              pending.failure
-                ? `
-
-${pending.failure}`
-                : ""
-            }`,
-            [
-              { text: "取消请求", onPress: () => void respond("cancel") },
-              { text: "确认下载", onPress: () => void respond("approveUrl") },
-            ],
-            {
-              onDismiss: () => {
-                offeredDownload.current = null;
               },
-            },
+            );
+          };
+          present(
+            "下载到这台设备",
+            `${pending.senderLabel} 请求下载 ${pending.name}。\n\n${pending.sourceUrl}${
+              pending.failure ? `\n\n${pending.failure}` : ""
+            }`,
+            "approveUrl",
+            "确认下载",
           );
         }
       }
@@ -180,6 +195,8 @@ ${pending.failure}`
     current.current = ready;
     return () => {
       current.current = false;
+      if (activeDownloadDialog === offeredDownload.current) activeDownloadDialog = null;
+      offeredDownload.current = null;
     };
   }, [ready]);
   const refresh = query.refresh;

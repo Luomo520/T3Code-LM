@@ -9,7 +9,10 @@ import { environmentCatalog } from "../../connection/catalog";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentShell } from "../../state/shell";
 import { flattenQueuedThreadMessages, threadOutboxManager } from "../../state/thread-outbox";
+import { checkAndroidCaptureRequestsInBackground } from "../files/androidCaptureBackground";
 import {
+  supportsAndroidCaptureRequestNotifications,
+  syncAndroidCaptureBackgroundWatch,
   postAndroidTaskCompletion,
   readAndroidTaskCompletionWatch,
   setAndroidTaskCompletionWatch,
@@ -36,7 +39,10 @@ const hasQueuedOnlineTaskAtom = Atom.make((get) => {
 
 /** Observes the same authoritative shell used by the UI, including replay after a socket loss. */
 export function installAndroidTaskCompletion(): () => void {
-  if (!supportsAndroidLocalTaskCompletion()) return () => undefined;
+  const taskCompletionSupported = supportsAndroidLocalTaskCompletion();
+  if (!taskCompletionSupported && !supportsAndroidCaptureRequestNotifications()) {
+    return () => undefined;
+  }
 
   let savedWatch = readAndroidTaskCompletionWatch();
   const restored = Option.getOrNull(decodeWatch(savedWatch));
@@ -52,25 +58,34 @@ export function installAndroidTaskCompletion(): () => void {
     onCompletion: postAndroidTaskCompletion,
   });
 
-  AppRegistry.registerHeadlessTask(
-    "T3TaskCompletionCheck",
-    () => () =>
-      new Promise<void>((resolve) => {
-        if (!background || readAndroidTaskCompletionWatch() === null) {
-          resolve();
-          return;
-        }
+  function checkTaskCompletionInBackground(): Promise<void> {
+    if (!background || readAndroidTaskCompletionWatch() === null) return Promise.resolve();
 
-        finishCheck?.();
-        const finish = () => {
-          clearTimeout(timer);
-          finishCheck = null;
-          resolve();
-        };
-        const timer = setTimeout(finish, CHECK_WINDOW_MS);
-        finishCheck = finish;
-      }),
-  );
+    return new Promise<void>((resolve) => {
+      finishCheck?.();
+      const finish = () => {
+        clearTimeout(timer);
+        finishCheck = null;
+        resolve();
+      };
+      const timer = setTimeout(finish, CHECK_WINDOW_MS);
+      finishCheck = finish;
+    });
+  }
+
+  AppRegistry.registerHeadlessTask("T3TaskCompletionCheck", () => async () => {
+    await Promise.all([
+      taskCompletionSupported ? checkTaskCompletionInBackground() : Promise.resolve(),
+      checkAndroidCaptureRequestsInBackground(),
+    ]);
+  });
+
+  if (!taskCompletionSupported) {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "inactive") syncAndroidCaptureBackgroundWatch(state === "background");
+    });
+    return () => subscription.remove();
+  }
 
   const syncWatch = () => {
     const now = Date.now();
@@ -88,6 +103,7 @@ export function installAndroidTaskCompletion(): () => void {
     const next = state === "background";
     if (next === background) return;
     background = next;
+    syncAndroidCaptureBackgroundWatch(background);
     tracker.setBackground(background);
     if (background) {
       const now = Date.now();

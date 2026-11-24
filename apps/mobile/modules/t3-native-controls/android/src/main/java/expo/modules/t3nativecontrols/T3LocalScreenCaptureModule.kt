@@ -34,11 +34,16 @@ internal fun captureDisplay(activity: Activity): T3CaptureDisplay {
   return T3CaptureDisplay(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
 }
 
+internal data class T3CaptureScope(val environment: String, val thread: String, val route: String)
+
 internal class T3CaptureRequest(
   val owner: String,
   val mode: T3CaptureMode,
   val id: String,
   val remoteDurationSeconds: Int?,
+  val environment: String? = null,
+  val sharedScope: T3CaptureScope? = null,
+  val canShareInForeground: (() -> Boolean)? = null,
 ) {
   val result = CompletableDeferred<Map<String, String>>()
   var onStarted: (() -> Unit)? = null
@@ -65,6 +70,7 @@ internal class T3CaptureRequest(
 /** 仅在主线程保存当前请求，Android 投屏令牌只交给同进程前台服务一次。 */
 internal object T3CaptureRequests {
   var current: T3CaptureRequest? = null
+  var sharedService: T3LocalScreenCaptureService? = null
 
   fun stop(owner: String, keepResult: Boolean, requestId: String? = null) {
     val request = current?.takeIf { it.owner == owner && (requestId == null || it.id == requestId) } ?: return
@@ -88,6 +94,55 @@ class T3LocalScreenCaptureModule : Module() {
       localCaptureUnlocked(context)
     }.runOnQueue(Queues.MAIN)
 
+    Function("getEnvironmentPolicy") { environment: String, kind: String ->
+      val context = appContext.reactContext
+      if (context == null) "deny" else T3CapturePolicy.read(context, environment, kind)
+    }
+
+    AsyncFunction("setEnvironmentPolicy").Coroutine { environment: String, kind: String, value: String ->
+      require(value in setOf("ask", "system", "deny"))
+      val context = checkNotNull(appContext.reactContext)
+      withContext(Dispatchers.IO) {
+        T3CapturePolicy.write(context, environment, kind, value)
+      }
+      withContext(Dispatchers.Main) {
+        T3CaptureRequests.sharedService?.stopShare(owner, environment, "revoked")
+        val current = T3CaptureRequests.current
+        if (current != null && current.environment == environment &&
+          current.mode == (if (kind == "screenshot") T3CaptureMode.SCREENSHOT else T3CaptureMode.RECORDING)) {
+          T3CaptureRequests.stop(owner, false, current.id)
+        }
+      }
+    }
+
+    AsyncFunction("captureEnvironmentRequest").Coroutine { kind: String, requestId: String, seconds: Int, environment: String ->
+      require(seconds in 1..30)
+      capture(kind, requestId, seconds, environment)
+    }
+
+    AsyncFunction("canKeepSharing") {
+      val context = appContext.reactContext
+      context != null && T3LocalScreenCaptureService.shareNotificationAvailable(context)
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("canReuseSharing") { environment: String, thread: String, route: String ->
+      T3CaptureRequests.sharedService?.canReuse(owner, T3CaptureScope(environment, thread, route)) == true
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("endSharing") { environment: String ->
+      val pending = T3CaptureRequests.current
+      if (pending?.owner == owner && pending.sharedScope?.environment == environment) {
+        T3CaptureRequests.stop(owner, false, pending.id)
+      }
+      T3CaptureRequests.sharedService?.stopShare(owner, environment, "revoked")
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("captureScopedRequest").Coroutine {
+      kind: String, requestId: String, seconds: Int, environment: String, thread: String, route: String, choice: String ->
+      require(seconds in 1..30 && choice in setOf("hold", "reuse"))
+      capture(kind, requestId, seconds, environment, T3CaptureScope(environment, thread, route), choice == "reuse")
+    }
+
     AsyncFunction("capture").Coroutine { kind: String, requestId: String ->
       val result = capture(kind, requestId, null)
       result.takeIf { it["status"] == "done" }
@@ -105,15 +160,36 @@ class T3LocalScreenCaptureModule : Module() {
     }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("cancelCapture") { requestId: String ->
+      val pending = T3CaptureRequests.current
+      if (pending?.owner == owner && pending.id == requestId && pending.sharedScope != null) {
+        T3CaptureRequests.sharedService?.stopShare(owner, pending.environment, "revoked")
+      }
       T3CaptureRequests.stop(owner, false, requestId)
     }.runOnQueue(Queues.MAIN)
 
+    OnActivityEntersBackground {
+      // 系统选择器会暂停主界面。只有已回到原界面并建立投屏后才监听离开。
+      android.os.Handler(android.os.Looper.getMainLooper()).post {
+        T3CaptureRequests.sharedService?.onHostPaused(owner)
+      }
+    }
+
     OnDestroy {
-      android.os.Handler(android.os.Looper.getMainLooper()).post { T3CaptureRequests.stop(owner, false) }
+      android.os.Handler(android.os.Looper.getMainLooper()).post {
+        T3CaptureRequests.sharedService?.stopShare(owner, null, "revoked")
+        T3CaptureRequests.stop(owner, false)
+      }
     }
   }
 
-  private suspend fun capture(kind: String, requestId: String, remoteDurationSeconds: Int?): Map<String, String> =
+  private suspend fun capture(
+    kind: String,
+    requestId: String,
+    remoteDurationSeconds: Int?,
+    environment: String? = null,
+    sharedScope: T3CaptureScope? = null,
+    reuse: Boolean = false,
+  ): Map<String, String> =
     withContext(Dispatchers.Main) {
       val mode = when (kind) {
         "screenshot" -> T3CaptureMode.SCREENSHOT
@@ -123,15 +199,40 @@ class T3LocalScreenCaptureModule : Module() {
       check(Build.VERSION.SDK_INT >= 29) { "此 Android 版本不支持会话屏幕捕获。" }
       val activity = appContext.currentActivity ?: error("请回到会话后重试。")
       if (!localCaptureUnlocked(activity)) return@withContext mapOf("status" to "locked")
-      val visible = if (remoteDurationSeconds == null) activity.hasWindowFocus()
-        else (activity as? LifecycleOwner)?.lifecycle?.currentState == Lifecycle.State.RESUMED
+      val inForeground = {
+        appContext.currentActivity === activity &&
+          (activity as? LifecycleOwner)?.lifecycle?.currentState == Lifecycle.State.RESUMED
+      }
+      val visible = if (remoteDurationSeconds == null) activity.hasWindowFocus() else inForeground()
       check(visible) { "请回到会话后再确认本次屏幕捕获。" }
       check(T3CaptureRequests.current == null) { "已有屏幕捕获请求，请先结束它。" }
-      val request = T3CaptureRequest(owner, mode, requestId, remoteDurationSeconds)
+      val setting = environment?.let { T3CapturePolicy.read(activity, it, kind) } ?: "ask"
+      if (setting !in setOf("ask", "system")) return@withContext mapOf("status" to "denied")
+      if (sharedScope != null && !T3LocalScreenCaptureService.shareNotificationAvailable(activity)) {
+        T3CaptureRequests.sharedService?.stopShare(owner, environment, "revoked")
+        return@withContext mapOf("status" to "revoked")
+      }
+      val existing = T3CaptureRequests.sharedService
+      if (reuse && (sharedScope == null || existing?.canReuse(owner, sharedScope) != true)) {
+        return@withContext mapOf("status" to "revoked")
+      }
+      if (!reuse) existing?.stopShare(owner, null, "canceled")
+      val request = T3CaptureRequest(
+        owner, mode, requestId, remoteDurationSeconds, environment, sharedScope,
+        inForeground.takeIf { sharedScope != null },
+      )
       T3CaptureRequests.current = request
       request.onStarted = { sendEvent("onRecordingStarted", mapOf("requestId" to requestId)) }
       try {
-        val access = if (mode == T3CaptureMode.SCREENSHOT) T3ShizukuApkInstaller.accessStatus() else null
+        if (reuse) {
+          checkNotNull(existing).startSharedRequest(request)
+          return@withContext request.result.await()
+        }
+        if (sharedScope != null) {
+          T3ProjectionConsentActivity.launch(activity, request.id)
+          return@withContext request.result.await()
+        }
+        val access = if (setting == "ask" && mode == T3CaptureMode.SCREENSHOT) T3ShizukuApkInstaller.accessStatus() else null
         val method = if (access == "root" || access == "adb") T3DeviceScreenshot.choose(activity, access) else "system"
         if (T3CaptureRequests.current === request) {
           when (method) {

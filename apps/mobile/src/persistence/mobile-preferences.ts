@@ -84,6 +84,9 @@ const isEnvironmentId = Schema.is(EnvironmentId);
 const isThreadListFilters = Schema.is(ThreadListFilters);
 const isWorkspaceSelections = Schema.is(WorkspaceSelections);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
+const UsageWindowDays = Schema.Literals([1, 7, 30, 90]);
+export type UsageWindowDays = typeof UsageWindowDays.Type;
+const isUsageWindowDays = Schema.is(UsageWindowDays);
 const ThreadProject = Schema.Struct({
   environmentId: Schema.NonEmptyString,
   projectId: Schema.NonEmptyString,
@@ -95,6 +98,7 @@ export interface Preferences {
   readonly hiddenNavigationTabs?: readonly string[];
   readonly pullRequestHideTestFiles?: boolean;
   readonly pullRequestMergeMethod?: PullRequestMergeMethod;
+  readonly usageWindowDays?: UsageWindowDays;
   readonly liveActivitiesEnabled?: boolean;
   readonly automaticFileHandoffDisabledEnvironments?: ReadonlyArray<EnvironmentId>;
   readonly themeId?: MobileThemeId;
@@ -188,6 +192,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     hiddenNavigationTabs?: readonly string[];
     pullRequestHideTestFiles?: boolean;
     pullRequestMergeMethod?: PullRequestMergeMethod;
+    usageWindowDays?: UsageWindowDays;
     liveActivitiesEnabled?: boolean;
     automaticFileHandoffDisabledEnvironments?: ReadonlyArray<EnvironmentId>;
     themeId?: MobileThemeId;
@@ -245,6 +250,10 @@ function sanitizePreferences(parsed: Preferences): Preferences {
 
   if (isPullRequestMergeMethod(parsed.pullRequestMergeMethod)) {
     preferences.pullRequestMergeMethod = parsed.pullRequestMergeMethod;
+  }
+
+  if (isUsageWindowDays(parsed.usageWindowDays)) {
+    preferences.usageWindowDays = parsed.usageWindowDays;
   }
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {

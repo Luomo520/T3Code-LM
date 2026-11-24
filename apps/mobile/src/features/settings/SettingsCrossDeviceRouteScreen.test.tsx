@@ -59,7 +59,17 @@ vi.mock("@react-navigation/native", () => ({
 vi.mock("../layout/workspace/useSelectWorkspaceDetail", () => ({
   useSelectWorkspaceDetail: () => harness.selectDetail,
 }));
-vi.mock("react-native", () => ({ AppState: { currentState: "active" } }));
+vi.mock("../files/androidDirectory", () => ({ androidDirectory: null }));
+vi.mock("../files/android-directory-handoff", () => ({
+  androidDirectoryHandoff: { receive: "android-file" },
+  androidDirectoryQuiet: {},
+}));
+vi.mock("./components/AndroidCapturePermissionsSettings", () => ({
+  AndroidCapturePermissionsSettings: () => null,
+}));
+vi.mock("react-native", () => ({
+  AppState: { currentState: "active", addEventListener: () => ({ remove: () => {} }) },
+}));
 function serverConfig() {
   return {
     environment: {

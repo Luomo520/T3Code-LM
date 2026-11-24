@@ -47,7 +47,7 @@ const task = Schema.Struct({
 
 const list = Tool.make("t3_companion_list", {
   description:
-    "List paired Windows companions and foreground Android clients available for locally confirmed screen capture.",
+    "List paired devices available for locally confirmed actions. Android clients with backgroundReady can accept queued screen capture requests when offline.",
   parameters: Schema.Struct({ deviceId: Schema.optionalKey(identifier) }),
   success: Schema.Struct({
     devices: Schema.Array(
@@ -55,6 +55,7 @@ const list = Tool.make("t3_companion_list", {
         deviceId: identifier,
         name: Schema.String,
         online: Schema.Boolean,
+        backgroundReady: Schema.optionalKey(Schema.Literal(true)),
         platform: Schema.Literals(["windows", "android"]),
       }),
     ),
@@ -67,7 +68,7 @@ const list = Tool.make("t3_companion_list", {
 
 const enqueue = Tool.make("t3_companion_enqueue", {
   description:
-    "Request one approved action on a paired device. Android accepts only screenshot and record-screen, and the phone user confirms the individual request in the foreground before Android asks for screen-sharing consent. The Windows device user also approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. For screenshots and recordings, the device user chooses the actual capture surface. On Windows, captureKind may suggest its category. durationSeconds sets a recording maximum from 1 to 30 seconds (default 10). Windows shows the recording and can stop it. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. write-notepad replaces the text in the companion's own foreground Notepad with the approved text; read-notepad returns that document's text. Read the original thread result with t3_companion_result.",
+    "Request one approved action on a paired device. Android accepts only screenshot and record-screen, and requires the phone user to grant Android screen-sharing consent in the foreground for each request. The Windows device user also approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. For screenshots and recordings, the device user chooses the actual capture surface. On Windows, captureKind may suggest its category. durationSeconds sets a recording maximum from 1 to 30 seconds (default 10). Windows shows the recording and can stop it. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. open-t3 and open-notepad let the Windows user launch the fixed app or choose its visible window on a companion that supports window selection. read-notepad returns the text from the editor the Windows user approves. write-notepad replaces its text with the text shown during approval. Older companions require a Notepad they opened. close-window applies only to an original window opened by the companion. Read the original thread result with t3_companion_result.",
   parameters: Schema.Struct({
     deviceId: identifier,
     action,

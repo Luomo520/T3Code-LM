@@ -1193,16 +1193,25 @@ export const AndroidCaptureJob = Schema.Struct({
     }),
   ),
   expiresAt: Schema.Number,
+  expiresInMs: Schema.optionalKey(Schema.Number),
 });
 export const AndroidCaptureInput = Schema.Union([
-  Schema.TaggedStruct("listen", { name: CompanionName }),
+  Schema.TaggedStruct("listen", {
+    name: CompanionName,
+    delivery: Schema.optionalKey(
+      Schema.Literals(["background-ready", "background", "unavailable"]),
+    ),
+  }),
   Schema.TaggedStruct("approve", { id: CompanionIdentifier }),
   Schema.TaggedStruct("status", { id: CompanionIdentifier }),
   Schema.TaggedStruct("reject", { id: CompanionIdentifier, reason: AndroidCaptureFailure }),
   Schema.TaggedStruct("complete", { id: CompanionIdentifier, media: CompanionFileBase64 }),
 ]);
 export const AndroidCaptureReply = Schema.Union([
-  Schema.TaggedStruct("pending", { job: Schema.NullOr(AndroidCaptureJob) }),
+  Schema.TaggedStruct("pending", {
+    job: Schema.NullOr(AndroidCaptureJob),
+    backgroundReady: Schema.optionalKey(Schema.Literal(true)),
+  }),
   Schema.TaggedStruct("active", { job: AndroidCaptureJob }),
   Schema.TaggedStruct("inactive", {}),
   Schema.TaggedStruct("accepted", {}),

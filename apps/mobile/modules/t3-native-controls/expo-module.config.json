@@ -18,7 +18,8 @@
       "expo.modules.t3nativecontrols.T3SecretInputModule",
       "expo.modules.t3nativecontrols.T3LocalApkInstallModule",
       "expo.modules.t3nativecontrols.T3LocalScreenCaptureModule",
-      "expo.modules.t3nativecontrols.T3LocalFileMoveModule"
+      "expo.modules.t3nativecontrols.T3LocalFileMoveModule",
+      "expo.modules.t3nativecontrols.T3LocalDirectoryModule"
     ]
   }
 }

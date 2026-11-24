@@ -12,6 +12,28 @@ const sizeBytes = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const sha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
 const directSdp = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(24_000));
 const savedPath = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048));
+export const AndroidDirectoryFileName = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(240),
+  Schema.isPattern(/^(?![. ]+$)[^\\/\x00-\x1f\x7f]+$/u),
+);
+const directoryRevision = Schema.String.check(Schema.isPattern(/^[0-9a-f-]{36}$/u));
+export const AndroidDirectoryFileFailure = Schema.Literals([
+  "revoked",
+  "missing",
+  "ambiguous",
+  "too-large",
+  "failed",
+]);
+const androidFileJob = Schema.Struct({
+  threadId: ThreadId,
+  id: transferId,
+  recipient: AuthSessionId,
+  name: AndroidDirectoryFileName,
+  maxBytes: sizeBytes,
+});
+export type AndroidDirectoryFileJob = typeof androidFileJob.Type;
+
 const handoffDisposition = Schema.Literals(["saved", "cancelled"]);
 
 export const FileHandoffInstallation = Schema.Union([
@@ -31,6 +53,17 @@ export type FileHandoffInstallation = typeof FileHandoffInstallation.Type;
 
 export const FileHandoffRequest = Schema.Union([
   Schema.TaggedStruct("inbox", {}),
+  Schema.TaggedStruct("androidPullInbox", {
+    revision: Schema.optionalKey(directoryRevision),
+    sessionId: Schema.optionalKey(AuthSessionId),
+    revoke: Schema.optionalKey(Schema.Literal(true)),
+  }),
+  Schema.TaggedStruct("androidPullFailed", {
+    threadId: ThreadId,
+    id: transferId,
+    revision: directoryRevision,
+    reason: AndroidDirectoryFileFailure,
+  }),
   Schema.TaggedStruct("list", { threadId: ThreadId }),
   Schema.TaggedStruct("directStatus", { threadId: ThreadId, id: transferId }),
   Schema.TaggedStruct("directOffer", { threadId: ThreadId, id: transferId, sdp: directSdp }),
@@ -63,6 +96,7 @@ export const FileHandoffStart = Schema.Struct({
   sizeBytes,
   sha256,
   direct: Schema.optionalKey(Schema.Boolean),
+  directoryRevision: Schema.optionalKey(directoryRevision),
 });
 export type FileHandoffStart = typeof FileHandoffStart.Type;
 
@@ -118,6 +152,11 @@ export const FileHandoffUrlDownload = Schema.Struct({
 export type FileHandoffUrlDownload = typeof FileHandoffUrlDownload.Type;
 
 export const FileHandoffReply = Schema.Union([
+  Schema.TaggedStruct("androidPullInbox", {
+    sessionId: AuthSessionId,
+    jobs: Schema.Array(androidFileJob),
+  }),
+  Schema.TaggedStruct("androidPullFailed", {}),
   Schema.TaggedStruct("inbox", {
     transfers: Schema.Array(FileHandoffInboxTransfer),
     urlDownloads: Schema.optionalKey(Schema.Array(FileHandoffUrlDownload)),

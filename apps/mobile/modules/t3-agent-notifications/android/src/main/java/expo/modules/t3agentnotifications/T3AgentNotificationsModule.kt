@@ -4,6 +4,8 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import com.facebook.react.bridge.ReactContext
+import com.facebook.react.common.LifecycleState
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -34,7 +36,10 @@ class T3AgentNotificationsModule : Module() {
       AgentNotifications.setThreadOnScreen(path)
     }
 
-    OnActivityEntersForeground { AgentNotifications.setActivityForeground(true) }
+    OnActivityEntersForeground {
+      AgentNotifications.setActivityForeground(true)
+      appContext.reactContext?.let(CaptureRequestNotifications::clearPosted)
+    }
     OnActivityEntersBackground { AgentNotifications.setActivityForeground(false) }
 
     Function("supportsLocalTaskCompletion") {
@@ -64,6 +69,35 @@ class T3AgentNotificationsModule : Module() {
       ->
       appContext.reactContext?.let {
         AgentNotifications.postTaskCompletion(it, scheme, path, runId, title, failed)
+      }
+    }
+
+    Function("canNotifyCaptureRequests") {
+      appContext.reactContext?.let(CaptureRequestNotifications::canPost) ?: false
+    }
+
+    Function("readCaptureRequestWatch") {
+      appContext.reactContext?.let(CaptureRequestNotifications::watchUntil)?.toDouble() ?: 0.0
+    }
+
+    Function("setCaptureRequestWatch") { until: Double ->
+      appContext.reactContext?.let { CaptureRequestNotifications.updateWatch(it, until.toLong()) }
+    }
+
+    Function("postCaptureRequest") {
+        scheme: String,
+        path: String,
+        environmentId: String,
+        jobId: String,
+        name: String,
+        recording: Boolean,
+        expiresInMs: Double
+      ->
+      val context = appContext.reactContext
+      if (context is ReactContext && context.lifecycleState != LifecycleState.RESUMED) {
+        CaptureRequestNotifications.post(
+          context, scheme, path, environmentId, jobId, name, recording, expiresInMs.toLong()
+        )
       }
     }
 

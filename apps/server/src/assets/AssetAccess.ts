@@ -691,6 +691,28 @@ export const issueCompanionFileDownload = Effect.fn("AssetAccess.issueCompanionF
   },
 );
 
+export const issueAndroidDirectoryFilePreview = Effect.fn(
+  "AssetAccess.issueAndroidDirectoryFilePreview",
+)(function* (threadId: ThreadId, source: string, name: string) {
+  const expiresAt = (yield* Clock.currentTimeMillis) + ASSET_TOKEN_TTL_MS;
+  const resource = { _tag: "media-file", threadId, path: source } as const;
+  const { claims } = yield* finalizeAbsoluteMediaFileAsset({
+    requestedPath: source,
+    expectedCanonicalPath: source,
+    workspaceRoot: undefined,
+    resource,
+    expiresAt,
+  });
+  const signer = yield* AssetSigner.AssetSigner;
+  const payload = base64UrlEncode(encodeAssetClaims({ ...claims, fileName: name }));
+  const signature = yield* signer
+    .sign(payload)
+    .pipe(Effect.mapError((cause) => new AssetSigningKeyLoadError({ resource, cause })));
+  return {
+    relativeUrl: `${ASSET_ROUTE_PREFIX}/${payload}.${signature}/${encodeURIComponent(name)}`,
+  };
+});
+
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;

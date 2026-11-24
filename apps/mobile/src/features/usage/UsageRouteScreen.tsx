@@ -1,7 +1,13 @@
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { ChatGptUsageSummary } from "./ChatGptUsageSummary";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
-import { EnvironmentId, USAGE_CONTRACT_VERSION, type UsageProviderKind } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  USAGE_CONTRACT_VERSION,
+  type UsageProviderKind,
+  type UsageSummaryInput,
+} from "@t3tools/contracts";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { type RouteProp, useIsFocused, useRoute } from "@react-navigation/native";
 import {
   updatingProvidersLabel,
@@ -28,6 +34,7 @@ import {
   usageSourceMessages,
 } from "@t3tools/shared/usageFormat";
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import { AsyncResult } from "effect/reactivity";
 import { View } from "react-native";
 import { RefreshControl } from "../../components/ui/RefreshControl";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
@@ -39,6 +46,8 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
 import { cn } from "../../lib/cn";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
+import type { UsageWindowDays } from "../../persistence/mobile-preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { UsageDailyChart } from "./UsageDailyChart";
@@ -92,19 +101,28 @@ function UsageScreen(props: {
   // A workspace pane knows its width in the render that resizes it; measuring lags a frame.
   const width = useWorkspaceSettledContentWidth() ?? measuredWidth;
   const wide = width >= WIDE_WIDTH;
-  const [windowSelection, setWindowSelection] = useState(() => ({
-    days: 30,
-    window: makeWindow(30),
-  }));
-  const { days: windowDays, window } = windowSelection;
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const updatePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferencesReady = AsyncResult.isSuccess(preferences);
+  const windowDays = preferencesReady ? (preferences.value.usageWindowDays ?? 30) : 30;
   const isPast24Hours = windowDays === 1;
+  const initialWindow = useMemo(
+    () => makeWindow(windowDays, undefined, windowDays === 1 ? "hour" : "day"),
+    [windowDays],
+  );
+  const [refreshedWindow, setRefreshedWindow] = useState<{
+    days: UsageWindowDays;
+    window: UsageSummaryInput;
+  } | null>(null);
+  const window = refreshedWindow?.days === windowDays ? refreshedWindow.window : initialWindow;
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
   const showingLimits = view === "limits";
   const { merged, environments, selectedEnvironments, isPending, refresh } = useUsage(
     window,
     selectedEnvironmentIds,
-    !showingLimits,
+    // 等本机偏好读完再查询，避免先扫描默认的 30 天。
+    preferencesReady && !showingLimits,
   );
   const isFocused = useIsFocused();
   const limits = useRefreshLimits(selectedEnvironmentIds, isFocused && showingLimits);
@@ -146,15 +164,13 @@ function UsageScreen(props: {
     refreshing: refreshingUsage,
     providerLabel,
   });
-  const selectWindow = (days: number) => {
-    if (days === windowDays) return;
-    setWindowSelection({
-      days,
-      window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
-    });
+  const selectWindow = (days: UsageWindowDays) => {
+    if (preferencesReady && days === windowDays) return;
+    setRefreshedWindow(null);
+    updatePreferences({ usageWindowDays: days });
   };
   const refreshWindow = () => {
-    if (refreshingRef.current) return;
+    if (!preferencesReady || refreshingRef.current) return;
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
     if (
       nextWindow.sinceDay !== window.sinceDay ||
@@ -162,7 +178,7 @@ function UsageScreen(props: {
       nextWindow.sinceTime !== window.sinceTime ||
       nextWindow.untilTime !== window.untilTime
     ) {
-      setWindowSelection({ days: windowDays, window: nextWindow });
+      setRefreshedWindow({ days: windowDays, window: nextWindow });
     }
     refreshingRef.current = true;
     setRefreshingUsage(true);
@@ -301,7 +317,7 @@ function UsageScreen(props: {
                     {merged.duplicateSources.join(", ")}
                   </Text>
                 ) : null}
-                {isPending ? (
+                {!preferencesReady || isPending ? (
                   <Text className="py-16 text-center text-base text-foreground-muted">
                     Scanning provider transcripts…
                   </Text>

@@ -21,14 +21,26 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
+import android.view.Surface
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.UUID
 
-/** 单次系统投屏。只有应用内发起并仍有效的请求可建立投屏会话。 */
+/** 系统投屏只在机主确认后启动。短时共享空闲时不连接截图或录像输出。 */
 class T3LocalScreenCaptureService : Service() {
   private val handler = Handler(Looper.getMainLooper())
+  private val captureHandler = Handler(Looper.getMainLooper())
+  private data class Share(
+    val owner: String,
+    val scope: T3CaptureScope,
+    val canUseForeground: () -> Boolean,
+    val expiresAt: Long,
+  )
+  private var share: Share? = null
+  private var shareAction: String? = null
+  private var sourceSize: T3CaptureDisplay? = null
   private var active: T3CaptureRequest? = null
   private var projection: MediaProjection? = null
   private var display: VirtualDisplay? = null
@@ -40,58 +52,175 @@ class T3LocalScreenCaptureService : Service() {
   private var screenObserverRegistered = false
   private val screenObserver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-      if (intent.action == Intent.ACTION_SCREEN_OFF) finish(false, "locked")
+      if (intent.action == Intent.ACTION_SCREEN_OFF) shutdown("locked")
     }
   }
   private val projectionCallback = object : MediaProjection.Callback() {
-    override fun onStop() = finish(false, "revoked")
+    override fun onStop() = shutdown("revoked")
+
+    override fun onCapturedContentResize(width: Int, height: Int) {
+      if (width > 0 && height > 0) {
+        sourceSize = sourceSize?.copy(width = width, height = height)
+      }
+    }
   }
   private var recordingAction: String? = null
+
+  private fun shareFailure(session: Share): String? = when {
+    !localCaptureUnlocked(this) -> "locked"
+    SystemClock.elapsedRealtime() >= session.expiresAt -> "revoked"
+    !shareNotificationAvailable(this) || !shareNotificationPosted() || !session.canUseForeground() -> "revoked"
+    else -> null
+  }
+
+  internal fun canReuse(owner: String, scope: T3CaptureScope): Boolean {
+    val session = share ?: return false
+    val failure = shareFailure(session)
+    if (failure != null) shutdown(failure)
+    return failure == null && session.owner == owner && session.scope == scope && active == null
+  }
+
+  internal fun stopShare(owner: String, environment: String?, reason: String) {
+    val session = share ?: return
+    if (session.owner == owner && (environment == null || session.scope.environment == environment)) {
+      shutdown(reason)
+    }
+  }
+
+  internal fun onHostPaused(owner: String) {
+    val session = share ?: return
+    if (session.owner == owner && !session.canUseForeground()) shutdown("revoked")
+  }
+
+  private fun shareNotificationPosted(): Boolean =
+    getSystemService(NotificationManager::class.java).activeNotifications.any {
+      it.id == NOTIFICATION_ID && it.notification.channelId == SHARE_CHANNEL_ID
+    }
+
+  internal fun startSharedRequest(request: T3CaptureRequest) {
+    val scope = request.sharedScope
+    if (scope == null || !canReuse(request.owner, scope)) {
+      request.resolve(null, "revoked")
+      return
+    }
+    val needed = (request.remoteDurationSeconds ?: 0) * 1_000L
+    if (request.mode == T3CaptureMode.RECORDING && share!!.expiresAt - SystemClock.elapsedRealtime() < needed + 500L) {
+      shutdown("revoked")
+      request.resolve(null, "revoked")
+      return
+    }
+    accept(request)
+    startCapture(request)
+  }
+
+  private val watchShare = object : Runnable {
+    override fun run() {
+      val session = share ?: return
+      val failure = shareFailure(session)
+      if (failure != null) shutdown(failure)
+      else handler.postDelayed(this, 250)
+    }
+  }
 
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val action = intent?.action
     if (action != null) {
-      if (action == recordingAction) finish(true)
-      else if (active == null) stopSelf()
+      if (action == shareAction) shutdown("revoked")
+      else if (action == recordingAction) finishCapture(true)
+      else if (active == null && share == null) stopSelf()
       return START_NOT_STICKY
     }
-    if (active != null) return START_NOT_STICKY
+    if (active != null || share != null) return START_NOT_STICKY
     val request = T3CaptureRequests.current
     val authorization = request?.authorization
     if (request == null || authorization == null || Build.VERSION.SDK_INT < 29) {
       stopSelf()
       return START_NOT_STICKY
     }
-    active = request
+    accept(request)
     request.authorization = null
-    request.finish = { keepResult, failure -> finish(keepResult, failure) }
     try {
+      if (request.sharedScope != null && !shareNotificationAvailable(this)) {
+        shutdown("revoked")
+        return START_NOT_STICKY
+      }
       startForeground(
-        NOTIFICATION_ID, notification(request.mode), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        NOTIFICATION_ID, notification(request.mode, request.sharedScope != null),
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
       )
       ContextCompat.registerReceiver(
         this, screenObserver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED
       )
       screenObserverRegistered = true
       if (!localCaptureUnlocked(this)) {
-        finish(false, "locked")
+        shutdown("locked")
         return START_NOT_STICKY
       }
       val manager = getSystemService(MediaProjectionManager::class.java)
       val session = checkNotNull(manager.getMediaProjection(request.resultCode, authorization))
       projection = session
       session.registerCallback(projectionCallback, handler)
-      val size = checkNotNull(request.display)
-      when (request.mode) {
-        T3CaptureMode.SCREENSHOT -> screenshot(session, size)
-        T3CaptureMode.RECORDING -> record(session, request, size)
-      }
+      sourceSize = checkNotNull(request.display)
+      val scope = request.sharedScope
+      if (scope == null) startCapture(request)
+      else waitForHost(request, scope, SystemClock.elapsedRealtime() + 5_000L)
     } catch (_: Exception) {
-      finish(false)
+      shutdown("failed")
     }
     return START_NOT_STICKY
+  }
+
+  private fun accept(request: T3CaptureRequest) {
+    active = request
+    request.finish = { keepResult, failure ->
+      if (keepResult) finishCapture(true, failure) else shutdown(failure)
+    }
+  }
+
+  private fun waitForHost(request: T3CaptureRequest, scope: T3CaptureScope, deadline: Long) {
+    val canUseForeground = checkNotNull(request.canShareInForeground)
+    if (!localCaptureUnlocked(this)) {
+      shutdown("locked")
+    } else if (SystemClock.elapsedRealtime() >= deadline || !shareNotificationAvailable(this)) {
+      shutdown("revoked")
+    } else if (canUseForeground() && shareNotificationPosted()) {
+      share = Share(request.owner, scope, canUseForeground, SystemClock.elapsedRealtime() + SHARE_MS)
+      T3CaptureRequests.sharedService = this
+      handler.post(watchShare)
+      handler.postDelayed({ shutdown("revoked") }, SHARE_MS)
+      startCapture(request)
+    } else {
+      handler.postDelayed({ waitForHost(request, scope, deadline) }, 100)
+    }
+  }
+
+  private fun startCapture(request: T3CaptureRequest) {
+    try {
+      val size = checkNotNull(sourceSize)
+      when (request.mode) {
+        T3CaptureMode.SCREENSHOT -> screenshot(size)
+        T3CaptureMode.RECORDING -> record(request, size)
+      }
+    } catch (_: Exception) {
+      shutdown("failed")
+    }
+  }
+
+  private fun connectSurface(surface: Surface, width: Int, height: Int, density: Int) {
+    // 同一次系统投屏只创建一次虚拟显示。后续请求调整尺寸并接上该次请求的 Surface。
+    val current = display
+    if (current == null) {
+      display = checkNotNull(projection).createVirtualDisplay(
+        "T3 屏幕捕获", width, height, density, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+        surface, null, handler,
+      )
+      checkNotNull(display)
+    } else {
+      current.resize(width, height, density)
+      current.setSurface(surface)
+    }
   }
 
   private fun captureSize(size: T3CaptureDisplay, maxEdge: Int): Pair<Int, Int> {
@@ -110,14 +239,15 @@ class T3LocalScreenCaptureService : Service() {
     return File.createTempFile(prefix, extension, directory).also { output = it }
   }
 
-  private fun screenshot(session: MediaProjection, size: T3CaptureDisplay) {
+  private fun screenshot(size: T3CaptureDisplay) {
     // 等系统分享窗口淡出再建立显示，静止画面也只需要收到第一帧。
-    handler.postDelayed({
+    captureHandler.postDelayed({
       try {
-        val (width, height) = size
+        val (width, height) = sourceSize ?: size
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         images = reader
         reader.setOnImageAvailableListener({ source ->
+          if (images !== source) return@setOnImageAvailableListener
           val saved = runCatching {
             val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             image.use {
@@ -145,15 +275,14 @@ class T3LocalScreenCaptureService : Service() {
               }
             }
           }.isSuccess
-          finish(saved)
+          finishCapture(saved)
         }, handler)
-        display = session.createVirtualDisplay("T3 截图", width, height, size.densityDpi,
-          DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.surface, null, handler)
+        connectSurface(reader.surface, width, height, size.densityDpi)
       } catch (_: RuntimeException) {
-        finish(false)
+        shutdown("failed")
       }
     }, 300)
-    handler.postDelayed({ finish(false) }, 8_000)
+    captureHandler.postDelayed({ shutdown("failed") }, 8_000)
   }
 
   private val drainVideo = object : Runnable {
@@ -161,14 +290,14 @@ class T3LocalScreenCaptureService : Service() {
       if (!recording) return
       try {
         recorder?.drain()
-        handler.postDelayed(this, 12)
+        captureHandler.postDelayed(this, 12)
       } catch (_: Exception) {
-        finish(false)
+        shutdown("failed")
       }
     }
   }
 
-  private fun record(session: MediaProjection, request: T3CaptureRequest, size: T3CaptureDisplay) {
+  private fun record(request: T3CaptureRequest, size: T3CaptureDisplay) {
     val file = outputFile("录屏-", ".mp4")
     // 会话媒体最多 5 MiB，按请求时长预留封装及码率波动空间。
     val budget = request.remoteDurationSeconds?.let { 4 * 1024 * 1024 * 8 / it.coerceAtLeast(1) }
@@ -189,78 +318,129 @@ class T3LocalScreenCaptureService : Service() {
       }
     }
     val video = checkNotNull(recorder)
-    display = session.createVirtualDisplay("T3 录屏", width, height, size.densityDpi,
-      DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, video.surface, null, handler)
+    connectSurface(video.surface, width, height, size.densityDpi)
     recordingStartedMs = android.os.SystemClock.elapsedRealtime()
     recording = true
-    handler.post(drainVideo)
+    captureHandler.post(drainVideo)
     request.onStarted?.invoke()
-    handler.postDelayed({ finish(true) }, (request.remoteDurationSeconds ?: 30) * 1_000L)
+    captureHandler.postDelayed({ finishCapture(true) }, (request.remoteDurationSeconds ?: 30) * 1_000L)
   }
 
-  private fun finish(keepResult: Boolean, failure: String = "failed", stopService: Boolean = true) {
+  private fun finishCapture(keepResult: Boolean, failure: String = "failed") {
+    if (active == null) return
+    val session = share
+    val invalid = session?.let(::shareFailure)
+    if (invalid != null) {
+      shutdown(invalid)
+      return
+    }
+    finishOutput(keepResult, failure)
+    if (session == null) shutdown(failure)
+  }
+
+  private fun finishOutput(keepResult: Boolean, failure: String) {
     val request = active ?: return
     active = null
-    recordingAction = null
-    handler.removeCallbacksAndMessages(null)
-    // 保留录像时先完成 MP4 封装。锁屏或撤销时直接释放输入并删除临时文件。
+    captureHandler.removeCallbacksAndMessages(null)
+    // 空闲时断开输出，新的截图或录屏请求才会再次获得屏幕内容。
+    runCatching { display?.setSurface(null) }
     val unlocked = localCaptureUnlocked(this)
-    val elapsedUs = (android.os.SystemClock.elapsedRealtime() - recordingStartedMs) * 1_000L
+    val elapsedUs = (SystemClock.elapsedRealtime() - recordingStartedMs) * 1_000L
     val videoComplete = !recording || (
       keepResult && unlocked && runCatching { recorder?.finish(elapsedUs) }.isSuccess
     )
-    display?.release()
-    display = null
+    images?.setOnImageAvailableListener(null, null)
     images?.close()
     images = null
     recorder?.release()
     recorder = null
     recording = false
+    val file = output
+    output = null
+    val stillValid = share?.let(::shareFailure) == null
+    val saved = file?.takeIf {
+      keepResult && unlocked && stillValid && localCaptureUnlocked(this) && videoComplete && it.length() > 0
+    }
+    if (saved == null) file?.delete()
+    request.resolve(saved, if (unlocked && localCaptureUnlocked(this)) failure else "locked")
+  }
+
+  private fun shutdown(failure: String, stopService: Boolean = true) {
+    if (T3CaptureRequests.sharedService === this) T3CaptureRequests.sharedService = null
+    share = null
+    shareAction = null
+    recordingAction = null
+    handler.removeCallbacksAndMessages(null)
+    finishOutput(false, failure)
+    display?.release()
+    display = null
     projection?.unregisterCallback(projectionCallback)
     projection?.stop()
     projection = null
+    sourceSize = null
     if (screenObserverRegistered) {
       unregisterReceiver(screenObserver)
       screenObserverRegistered = false
     }
-    val file = output
-    output = null
-    val saved = file?.takeIf {
-      keepResult && unlocked && localCaptureUnlocked(this) && videoComplete && it.length() > 0
-    }
-    if (saved == null) file?.delete()
-    request.resolve(saved, if (unlocked && localCaptureUnlocked(this)) failure else "locked")
     stopForeground(STOP_FOREGROUND_REMOVE)
     if (stopService) stopSelf()
   }
 
-  private fun notification(mode: T3CaptureMode): Notification {
-    getSystemService(NotificationManager::class.java).createNotificationChannel(
-      NotificationChannel(CHANNEL_ID, "T3 屏幕捕获", NotificationManager.IMPORTANCE_LOW)
-    )
-    val builder = Notification.Builder(this, CHANNEL_ID)
+  private fun notification(mode: T3CaptureMode, holding: Boolean): Notification {
+    val channel = if (holding) SHARE_CHANNEL_ID else CHANNEL_ID
+    createCaptureChannel(this, channel)
+    val builder = Notification.Builder(this, channel)
       .setSmallIcon(android.R.drawable.ic_menu_camera)
-      .setContentTitle(if (mode == T3CaptureMode.SCREENSHOT) "T3 正在截图" else "T3 正在录屏")
+      .setContentTitle(when {
+        holding -> "T3 会话正在共享屏幕"
+        mode == T3CaptureMode.SCREENSHOT -> "T3 正在截图"
+        else -> "T3 正在录屏"
+      })
       .setVisibility(Notification.VISIBILITY_PRIVATE)
       .setOnlyAlertOnce(true)
       .setOngoing(true)
-    if (mode == T3CaptureMode.RECORDING) {
+    if (holding || mode == T3CaptureMode.RECORDING) {
       val action = UUID.randomUUID().toString()
-      recordingAction = action
+      if (holding) shareAction = action else recordingAction = action
       val stop = PendingIntent.getService(this, 0, Intent(this, javaClass).setAction(action),
         PendingIntent.FLAG_IMMUTABLE)
-      builder.addAction(Notification.Action.Builder(null, "停止录屏", stop).build())
+      builder.addAction(Notification.Action.Builder(null, if (holding) "结束共享" else "停止录屏", stop).build())
+      if (holding) {
+        if (Build.VERSION.SDK_INT >= 31) {
+          builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+        builder.setContentText("仅用于原会话，最多 60 秒")
+        // 通知被机主从通知栏清除时也必须停止共享。
+        builder.setDeleteIntent(stop)
+      }
     }
     return builder.build()
   }
 
   override fun onDestroy() {
-    finish(false, stopService = false)
+    shutdown("revoked", stopService = false)
     super.onDestroy()
   }
 
-  private companion object {
-    const val CHANNEL_ID = "t3-screen-capture"
-    const val NOTIFICATION_ID = 7419
+  internal companion object {
+    private const val CHANNEL_ID = "t3-screen-capture"
+    private const val SHARE_CHANNEL_ID = "t3-screen-sharing"
+    private const val NOTIFICATION_ID = 7419
+    private const val SHARE_MS = 60_000L
+
+    private fun createCaptureChannel(context: Context, channel: String) {
+      val title = if (channel == SHARE_CHANNEL_ID) "T3 屏幕共享" else "T3 屏幕捕获"
+      context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+        NotificationChannel(channel, title, NotificationManager.IMPORTANCE_LOW)
+      )
+    }
+
+    fun shareNotificationAvailable(context: Context): Boolean {
+      val manager = context.getSystemService(NotificationManager::class.java)
+      if (!manager.areNotificationsEnabled()) return false
+      createCaptureChannel(context, SHARE_CHANNEL_ID)
+      return (manager.getNotificationChannel(SHARE_CHANNEL_ID)?.importance ?: 0) >
+        NotificationManager.IMPORTANCE_NONE
+    }
   }
 }

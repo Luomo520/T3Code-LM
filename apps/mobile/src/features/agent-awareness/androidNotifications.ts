@@ -1,6 +1,6 @@
 import Constants from "expo-constants";
 import { requireOptionalNativeModule } from "expo";
-import { Linking, Platform } from "react-native";
+import { AppState, Linking, Platform } from "react-native";
 
 interface AndroidAgentNotifications {
   configure(deviceId: string, userId: string, scheme: string, ongoingEnabled: boolean): void;
@@ -11,6 +11,18 @@ interface AndroidAgentNotifications {
   supportsLocalTaskCompletion?(): boolean;
   readTaskCompletionWatch?(): string | null;
   setTaskCompletionWatch?(watch: string | null, expiresAt: number, background: boolean): void;
+  canNotifyCaptureRequests?(): boolean;
+  readCaptureRequestWatch?(): number;
+  setCaptureRequestWatch?(until: number): void;
+  postCaptureRequest?(
+    scheme: string,
+    path: string,
+    environmentId: string,
+    jobId: string,
+    name: string,
+    recording: boolean,
+    expiresInMs: number,
+  ): void;
   postTaskCompletion?(
     scheme: string,
     path: string,
@@ -84,6 +96,52 @@ export function postAndroidTaskCompletion(completion: {
     completion.runId,
     completion.title,
     completion.failed,
+  );
+}
+
+let captureBackgroundReadyUntil = 0;
+const CAPTURE_BACKGROUND_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+export function supportsAndroidCaptureRequestNotifications(): boolean {
+  return typeof native?.canNotifyCaptureRequests === "function";
+}
+
+export function canNotifyAndroidCaptureRequests(): boolean {
+  return native?.canNotifyCaptureRequests?.() === true;
+}
+
+export function noteAndroidCaptureBackgroundReady(): void {
+  captureBackgroundReadyUntil = Date.now() + CAPTURE_BACKGROUND_WINDOW_MS;
+  if (AppState.currentState === "background") syncAndroidCaptureBackgroundWatch(true);
+}
+
+export function syncAndroidCaptureBackgroundWatch(background: boolean): void {
+  native?.setCaptureRequestWatch?.(
+    background && canNotifyAndroidCaptureRequests() ? captureBackgroundReadyUntil : 0,
+  );
+}
+
+export function readAndroidCaptureBackgroundWatch(): number {
+  return native?.readCaptureRequestWatch?.() ?? 0;
+}
+
+export function postAndroidCaptureRequest(request: {
+  readonly environmentId: string;
+  readonly environmentLabel: string;
+  readonly threadId: string;
+  readonly jobId: string;
+  readonly recording: boolean;
+  readonly expiresInMs: number;
+}): void {
+  const path = `/threads/${encodeURIComponent(request.environmentId)}/${encodeURIComponent(request.threadId)}`;
+  native?.postCaptureRequest?.(
+    appScheme(),
+    path,
+    request.environmentId,
+    request.jobId,
+    request.environmentLabel,
+    request.recording,
+    request.expiresInMs,
   );
 }
 

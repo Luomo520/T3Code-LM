@@ -16,6 +16,7 @@ const reactTests = [
   "src/features/files/useFileTreeEntries.test.tsx",
   "src/features/files/FileHandoffPanel.recovery.test.tsx",
   "src/features/files/AndroidCaptureCoordinator.test.tsx",
+  "src/features/files/AutomaticFileHandoff.test.tsx",
   "src/features/files/thread-file-navigator-pane.test.tsx",
   "src/features/files/source-file-document.test.ts",
   "src/features/projects/AddProjectScreen.test.ts",

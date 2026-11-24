@@ -6,6 +6,12 @@ With Firebase configured, the Android app receives Firebase Cloud Messaging (FCM
 
 On builds without Firebase configuration, Android schedules short, network-constrained checks for tasks observed when the app is backgrounded. The checks use the saved connection and the same live thread state as the app. Android controls when these checks run, so Doze, app standby or a dropped connection can delay an alert until the app reconnects. The background checks expire two hours after leaving the app. Test this path with a real run, then press Home and lock the screen. The task should produce a single completion alert without a persistent monitoring notification. Tapping the alert should reopen the original thread.
 
+## Android screenshot and recording requests
+
+Once the paired phone has opened T3 Code, the server can accept a queued screen capture request for up to two hours after the app goes to the background. A queued request has up to ten minutes for the phone user to respond. When notifications are allowed, Android's scheduled checks can show one notification for each pending request. Timing depends on system scheduling and network availability. Opening the app manually also checks for pending requests. Force stop suspends Android's scheduled checks until the app is opened again.
+
+The notification opens the requesting thread. The phone must be unlocked, and the Android screen-sharing prompt must be accepted before any capture begins. The app uses the same paired environment to return the result to the request's original thread.
+
 ## Android compatibility and automated checks
 
 The app's minimum is Android 7.0 (API 24), declared in `app.config.ts` and enforced by the relay's device-registration schema. Compile/target SDK versions follow the locked Expo/React Native toolchain (currently API 36). Notification channels begin at API 26; the notification permission prompt begins at API 33. Live Update promotion requires API 36 and remains subject to system settings and device support. Alerts and ordinary activity cards work below API 36.
