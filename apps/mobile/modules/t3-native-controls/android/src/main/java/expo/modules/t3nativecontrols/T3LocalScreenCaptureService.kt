@@ -321,6 +321,11 @@ class T3LocalScreenCaptureService : Service() {
     connectSurface(video.surface, width, height, size.densityDpi)
     recordingStartedMs = android.os.SystemClock.elapsedRealtime()
     recording = true
+    if (share != null) {
+      // 每段录像有自己的停止按钮，上一段的旧通知不能截断下一段。
+      recordingAction = UUID.randomUUID().toString()
+      updateSharedRecordingNotification()
+    }
     captureHandler.post(drainVideo)
     request.onStarted?.invoke()
     captureHandler.postDelayed({ finishCapture(true) }, (request.remoteDurationSeconds ?: 30) * 1_000L)
@@ -336,6 +341,7 @@ class T3LocalScreenCaptureService : Service() {
     }
     finishOutput(keepResult, failure)
     if (session == null) shutdown(failure)
+    else if (session.scope.mode == T3CaptureMode.RECORDING) updateSharedRecordingNotification()
   }
 
   private fun finishOutput(keepResult: Boolean, failure: String) {
@@ -355,6 +361,7 @@ class T3LocalScreenCaptureService : Service() {
     recorder?.release()
     recorder = null
     recording = false
+    recordingAction = null
     val file = output
     output = null
     val stillValid = share?.let(::shareFailure) == null
@@ -399,23 +406,33 @@ class T3LocalScreenCaptureService : Service() {
       .setVisibility(Notification.VISIBILITY_PRIVATE)
       .setOnlyAlertOnce(true)
       .setOngoing(true)
-    if (holding || mode == T3CaptureMode.RECORDING) {
-      val action = UUID.randomUUID().toString()
-      if (holding) shareAction = action else recordingAction = action
-      val stop = PendingIntent.getService(this, 0, Intent(this, javaClass).setAction(action),
-        PendingIntent.FLAG_IMMUTABLE)
-      builder.addAction(Notification.Action.Builder(null, if (holding) "结束共享" else "停止录屏", stop).build())
-      if (holding) {
-        if (Build.VERSION.SDK_INT >= 31) {
-          builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-        }
-        val kind = if (mode == T3CaptureMode.SCREENSHOT) "截图" else "录屏"
-        builder.setContentText("原会话的${kind}请求会自动处理，最多 60 秒")
-        // 通知被机主从通知栏清除时也必须停止共享。
-        builder.setDeleteIntent(stop)
+    fun actionIntent(action: String): PendingIntent = PendingIntent.getService(
+      this, 0, Intent(this, javaClass).setAction(action), PendingIntent.FLAG_IMMUTABLE
+    )
+    if (holding) {
+      // 更新通知时沿用同一共享的撤销入口，即使机主点的是尚未刷新的旧通知也有效。
+      val end = actionIntent(shareAction ?: UUID.randomUUID().toString().also { shareAction = it })
+      recordingAction?.let {
+        builder.addAction(Notification.Action.Builder(null, "停止并回传", actionIntent(it)).build())
       }
+      builder.addAction(Notification.Action.Builder(null, "结束共享", end).build())
+      if (Build.VERSION.SDK_INT >= 31) {
+        builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+      }
+      val kind = if (mode == T3CaptureMode.SCREENSHOT) "截图" else "录屏"
+      builder.setContentText(if (recording) "正在录屏，可提前回传到原会话" else "原会话的${kind}请求会自动处理，最多 60 秒")
+      builder.setDeleteIntent(end)
+    } else if (mode == T3CaptureMode.RECORDING) {
+      val action = UUID.randomUUID().toString().also { recordingAction = it }
+      builder.addAction(Notification.Action.Builder(null, "停止录屏", actionIntent(action)).build())
     }
     return builder.build()
+  }
+
+  private fun updateSharedRecordingNotification() {
+    getSystemService(NotificationManager::class.java).notify(
+      NOTIFICATION_ID, notification(T3CaptureMode.RECORDING, true)
+    )
   }
 
   override fun onDestroy() {
