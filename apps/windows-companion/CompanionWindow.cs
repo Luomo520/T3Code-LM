@@ -36,6 +36,7 @@ internal sealed class CompanionWindow : Form
     private readonly Button screenshotButton = ButtonFor("截取画面");
     private readonly Button pickButton = ButtonFor("选择文件");
     private readonly Button installButton = ButtonFor("打开安装器");
+    private readonly Button scriptsButton = ButtonFor("本机脚本…");
     private readonly NotifyIcon tray;
     private readonly ToolStripMenuItem pauseMenu;
     private readonly ToolStripMenuItem inputPauseMenu;
@@ -148,6 +149,7 @@ internal sealed class CompanionWindow : Form
         screenshotButton.Click += async delegate { await TakeLocalScreenshot(); };
         pickButton.Click += delegate { SelectFile(); };
         installButton.Click += async delegate { await InstallReceivedPackage(); };
+        scriptsButton.Click += delegate { ManageApprovedScripts(); };
         pollTimer.Tick += async delegate { await Poll(); };
         recordTimer.Tick += async delegate { await RecordFrame(); };
         Resize += delegate
@@ -186,6 +188,7 @@ internal sealed class CompanionWindow : Form
         AddAcross(content, Commands(allowButton, refuseButton, installButton), 13);
         AddAcross(content, recordingStatus, 3);
         AddAcross(content, Commands(screenshotButton, recordButton, pickButton), 0);
+        AddAcross(content, Commands(scriptsButton), 0);
     }
 
     private static void AddAcross(TableLayoutPanel parent, Control control, int bottom)
@@ -275,6 +278,7 @@ internal sealed class CompanionWindow : Form
         installButton.Enabled = installerOffer != null && accepting && !working &&
             !editing && !installerBusy && installerReports.Count == 0 && !PendingInstallation.Exists && recording == null;
         screenshotButton.Enabled = recording == null && !working && !pickingLocalCapture;
+        scriptsButton.Enabled = recording == null && !working && !editing && !installerBusy && !pickingLocalCapture;
         recordButton.Enabled = recording != null || (!working && !pickingLocalCapture);
         recordButton.Text = recording == null ? "开始录制" : "停止录制";
         recordMenu.Enabled = recording != null;
@@ -927,14 +931,15 @@ internal sealed class CompanionWindow : Form
         int started, int startedInput)
     {
         bool hasFile = outcome.ContainsKey("file");
-        bool hasEditorText = (action == "read-notepad" || action == "write-notepad") &&
+        bool hasDesktopText = (action == "read-notepad" || action == "write-notepad" ||
+            action == "inspect-window-controls") &&
             Json.String(outcome, "status") == "done";
-        if (!hasFile && !outcome.ContainsKey("imageBase64") && !hasEditorText)
+        if (!hasFile && !outcome.ContainsKey("imageBase64") && !hasDesktopText)
         {
             await CompanionApi.Post(target, "result", outcome, token, lifetime.Token);
             return;
         }
-        if (started != acceptanceVersion || (hasEditorText &&
+        if (started != acceptanceVersion || (hasDesktopText &&
             (startedInput != remoteInputVersion || remoteInputPaused || !WindowsDesktop.DesktopAvailable())))
         {
             outcome.Remove("imageBase64");
@@ -962,7 +967,12 @@ internal sealed class CompanionWindow : Form
     private static bool IsDesktopAction(string action)
     {
         return action == "open-t3" || action == "open-notepad" || action == "close-window" ||
-            action == "write-notepad" || action == "read-notepad";
+            action == "write-notepad" || action == "read-notepad" || IsLocalToolAction(action);
+    }
+
+    private static bool IsLocalToolAction(string action)
+    {
+        return action == "inspect-window-controls" || action == "run-approved-script" || action == "open-ssh-profile";
     }
 
     private async Task<Dictionary<string, object>> RunJob(Dictionary<string, object> job, int started, int startedInput)
@@ -984,12 +994,19 @@ internal sealed class CompanionWindow : Form
             case "receive-file": label = "保存会话文件 «" + Json.String(arguments, "fileName") + "»"; break;
             case "write-notepad": label = "选择记事本窗口并替换编辑区文字"; break;
             case "read-notepad": label = "选择记事本窗口并将编辑区文字发回会话"; break;
+            case "inspect-window-controls": label = "选择窗口并确认回传控件名称"; break;
+            case "run-approved-script": label = "选择并运行已批准的本机脚本"; break;
+            case "open-ssh-profile": label = "选择本机 SSH 配置并打开终端"; break;
             default:
                 outcome["message"] = "受控端不支持此操作。";
                 return outcome;
         }
         try
         {
+            object rawArguments;
+            if (IsLocalToolAction(action) && job.TryGetValue("params", out rawArguments) &&
+                (arguments == null || arguments.Count != 0))
+                throw new InvalidOperationException("此操作不接受来自会话的参数。");
             if (!accepting || started != acceptanceVersion) throw new InvalidOperationException("Windows 已暂停接收请求。");
             if (remoteInput && remoteInputPaused) throw new InvalidOperationException("本机已暂停远程输入。");
             WindowsDesktop.RequireDesktop();
@@ -1115,6 +1132,11 @@ internal sealed class CompanionWindow : Form
         Dictionary<string, object> outcome, Action verifyRequest, Func<Task> verifyJob, Stopwatch requestAge)
     {
         verifyRequest();
+        if (IsLocalToolAction(action))
+        {
+            outcome["message"] = await RunLocalTool(action, verifyRequest, verifyJob, requestAge);
+            return;
+        }
         var close = action == "close-window";
         var launch = action == "open-t3" || action == "open-notepad";
         var notepad = action != "open-t3";
@@ -1151,6 +1173,62 @@ internal sealed class CompanionWindow : Form
             await WaitForWindowClose(closingProcess, (string)outcome["id"], reportProgress);
             outcome["message"] = "已确认本受控端打开的应用进程退出。";
             if (reportProgress) outcome["closeState"] = "exited";
+        }
+    }
+
+    private async Task<string> RunLocalTool(string action, Action verifyRequest, Func<Task> verifyJob, Stopwatch requestAge)
+    {
+        Action<Form> setDialog = dialog => desktopChoiceDialog = dialog;
+        using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
+        {
+            inProgress = cancel;
+            try
+            {
+                if (action == "inspect-window-controls")
+                {
+                    var candidates = WindowsDesktop.ListInspectableWindows();
+                    if (candidates.Count == 0)
+                        throw new InvalidOperationException("未找到可检查的可见记事本、计算器或画图窗口。");
+                    var window = DesktopActionChoice.Pick(this, candidates, "检查窗口控件",
+                        "请选择本次查看的窗口。下一步可勾选允许回传的控件名称。", "查看控件",
+                        requestAge, setDialog);
+                    await WindowsDesktop.CheckBeforeWindowAction(window, Handle, verifyRequest, verifyJob, cancel.Token);
+                    var items = await WindowControlSummary.Read(window, cancel.Token);
+                    WindowsDesktop.VerifyBeforeWindowAction(window, Handle, verifyRequest, cancel.Token);
+                    if (items.Count == 0) return "所选窗口没有可回传的控件名称。";
+                    var approved = DesktopActionChoice.ShareControls(this, items, requestAge, setDialog);
+                    await WindowsDesktop.CheckBeforeWindowAction(window, Handle, verifyRequest, verifyJob, cancel.Token);
+                    if (approved.Count == 0) throw new InvalidOperationException("未勾选可回传的控件。");
+                    return "已确认的控件：" + Environment.NewLine + String.Join(Environment.NewLine, approved);
+                }
+
+                if (action == "run-approved-script")
+                {
+                    var choices = new List<object>();
+                    choices.AddRange(ApprovedScripts.Load());
+                    choices.AddRange(ApprovedDiagnostics.Presets());
+                    var choice = DesktopActionChoice.Pick(this, choices, "运行本机脚本",
+                        "请选择一项已批准脚本或预设检查。脚本以当前用户权限运行，原会话只收到状态。",
+                        "确认运行", requestAge, setDialog);
+                    await WindowsDesktop.CheckBeforeWindowAction(null, Handle, verifyRequest, verifyJob, cancel.Token);
+                    Action verifyStart = () => WindowsDesktop.VerifyBeforeWindowAction(null, Handle, verifyRequest, cancel.Token);
+                    var script = choice as ApprovedScripts.Entry;
+                    if (script != null) return await ApprovedScripts.Run(script, verifyStart, verifyRequest, cancel.Token);
+                    return await ((ApprovedDiagnostics)choice).Run(verifyStart, verifyRequest, cancel.Token);
+                }
+
+                var profiles = LocalSshProfiles.Load();
+                var aliases = profiles.Aliases;
+                if (aliases.Count == 0) throw new InvalidOperationException("本机 .ssh 配置中没有可用的主机别名。");
+                var alias = DesktopActionChoice.Pick(this, aliases, "打开 SSH 终端",
+                    "选一个本机主机别名。随后在新终端中核对主机并登录。", "打开 SSH 终端", requestAge, setDialog);
+                await WindowsDesktop.CheckBeforeWindowAction(null, Handle, verifyRequest, verifyJob, cancel.Token);
+                var handle = Handle;
+                profiles.Open(alias, () => WindowsDesktop.VerifyBeforeWindowAction(null, handle, verifyRequest, cancel.Token),
+                    cancel.Token);
+                return "已在 Windows 打开 SSH 终端，请在本机完成主机核对和登录。";
+            }
+            finally { inProgress = null; }
         }
     }
 
@@ -1292,6 +1370,28 @@ internal sealed class CompanionWindow : Form
         Show();
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Activate();
+    }
+
+    private void ManageApprovedScripts()
+    {
+        if (working || editing || installerBusy || recording != null || pickingLocalCapture) return;
+        editing = true;
+        UpdateView();
+        try
+        {
+            WindowsDesktop.RequireDesktop();
+            ApprovedScriptManager.Show(this, FriendlyError);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, FriendlyError(ex), "无法打开本机脚本",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            editing = false;
+            UpdateView();
+        }
     }
 
     private void SelectFile()

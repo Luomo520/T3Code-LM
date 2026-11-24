@@ -46,15 +46,23 @@ export function windowsCompanionAvailability(device: CompanionDevice, enabled: b
 
 export function windowsCompanionCapabilities(device: CompanionDevice, enabled: boolean) {
   const availability = windowsCompanionAvailability(device, enabled);
+  const desktopInput =
+    availability === "confirmOnDevice" && device.info.desktopState === "input-paused"
+      ? "inputPaused"
+      : availability;
   return {
     sendFile: availability,
     receiveFile: availability,
     screenshot: availability,
     screenRecording: availability,
-    desktopInput:
-      availability === "confirmOnDevice" && device.info.desktopState === "input-paused"
-        ? "inputPaused"
-        : availability,
+    desktopInput,
+    ...(device.info.localToolsV1 === "true"
+      ? ({
+          inspectControls: desktopInput,
+          localScript: desktopInput,
+          sshProfile: desktopInput,
+        } as const)
+      : {}),
     stopRecording:
       device.info.recordingStop !== "true"
         ? "stopLocally"
@@ -67,4 +75,12 @@ export function windowsCompanionCapabilities(device: CompanionDevice, enabled: b
           : availability,
     installApp: "unsupported",
   } as const;
+}
+
+export function windowsCompanionCapabilityEntries(device: CompanionDevice, enabled: boolean) {
+  const capabilities = windowsCompanionCapabilities(device, enabled);
+  type Key = keyof typeof capabilities;
+  type State = NonNullable<(typeof capabilities)[Key]>;
+  // 旧受控端不会生成扩展能力的条目。
+  return Object.entries(capabilities) as [Key, State][];
 }

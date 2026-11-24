@@ -2,7 +2,7 @@ import { AuthAccessWriteScope, type CompanionDevice, type EnvironmentId } from "
 import {
   lookupWindowsCompanionMac,
   windowsCompanionAvailability,
-  windowsCompanionCapabilities,
+  windowsCompanionCapabilityEntries,
   windowsCompanionNetworkAdapters,
 } from "@t3tools/client-runtime/device/windows-companion";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -349,6 +349,9 @@ function CompanionDeviceRow({
     "send-file": gt("Send files"),
     "receive-file": gt("Receive files"),
     "write-notepad": gt("Write to Notepad"),
+    "inspect-window-controls": gt("Inspect window controls"),
+    "run-approved-script": gt("Run a local diagnostic or approved script"),
+    "open-ssh-profile": gt("Open a local SSH profile"),
     "read-notepad": gt("Read Notepad"),
   };
   const availability = windowsCompanionAvailability(device, enabled);
@@ -529,13 +532,16 @@ function CompanionDeviceDetails({
       value,
     })),
   ].filter(({ value }) => value);
-  const capabilities = windowsCompanionCapabilities(device, enabled);
+  const capabilities = windowsCompanionCapabilityEntries(device, enabled);
   const capabilityLabels = {
     sendFile: gt("Send files"),
     receiveFile: gt("Receive files"),
     screenshot: gt("Screenshot"),
     screenRecording: gt("Start screen recording"),
     desktopInput: gt("Open T3 Code or use Notepad"),
+    inspectControls: gt("Inspect window controls"),
+    localScript: gt("Run a local diagnostic or approved script"),
+    sshProfile: gt("Open a local SSH profile"),
     stopRecording: gt("Stop screen recording"),
     installApp: gt("Install apps"),
   };
@@ -561,10 +567,10 @@ function CompanionDeviceDetails({
         })}
       </p>
       <dl className="grid gap-x-3 gap-y-1 pt-2 sm:grid-cols-[max-content_minmax(0,1fr)]">
-        {(Object.keys(capabilities) as (keyof typeof capabilities)[]).map((key) => (
+        {capabilities.map(([key, state]) => (
           <div key={key} className="contents">
             <dt className="text-foreground">{capabilityLabels[key]}</dt>
-            <dd>{capabilityReasons[capabilities[key]]}</dd>
+            <dd>{capabilityReasons[state]}</dd>
           </div>
         ))}
       </dl>

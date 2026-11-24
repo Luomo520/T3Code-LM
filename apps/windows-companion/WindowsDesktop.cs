@@ -95,9 +95,19 @@ internal sealed class WindowsDesktop : IDisposable
 
     internal static List<Window> ListWindows(bool notepad)
     {
+        var paths = notepad ? null : new HashSet<string>(T3Paths(), StringComparer.OrdinalIgnoreCase);
+        return ListWindows(process => notepad ? IsNotepad(process) : paths.Contains(process.MainModule.FileName));
+    }
+
+    internal static List<Window> ListInspectableWindows()
+    {
+        return ListWindows(IsInspectableProcess);
+    }
+
+    private static List<Window> ListWindows(Func<Process, bool> allowed)
+    {
         RequireDesktop();
         var windows = new List<Window>();
-        var paths = notepad ? null : new HashSet<string>(T3Paths(), StringComparer.OrdinalIgnoreCase);
         EnumWindows(delegate(IntPtr handle, IntPtr ignored)
         {
             uint id;
@@ -106,7 +116,7 @@ internal sealed class WindowsDesktop : IDisposable
             string title = ReadTitle(handle);
             if (title.Length == 0) return true;
             var candidate = InspectProcess(id, process =>
-                (notepad ? IsNotepad(process) : paths.Contains(process.MainModule.FileName))
+                allowed(process)
                     ? new Window(handle, id, thread, process.StartTime, title, windows.Count + 1)
                     : null);
             if (candidate != null) windows.Add(candidate);
@@ -149,10 +159,29 @@ internal sealed class WindowsDesktop : IDisposable
                 StringComparison.OrdinalIgnoreCase))
             return true;
         if (!String.Equals(Path.GetFileName(path), "notepad.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        return PackageFamily(process) == "Microsoft.WindowsNotepad_8wekyb3d8bbwe";
+    }
+
+    private static string PackageFamily(Process process)
+    {
         var family = new StringBuilder(128);
         uint size = (uint)family.Capacity;
-        return GetPackageFamilyName(process.Handle, ref size, family) == 0 &&
-            family.ToString() == "Microsoft.WindowsNotepad_8wekyb3d8bbwe";
+        return GetPackageFamilyName(process.Handle, ref size, family) == 0 ? family.ToString() : "";
+    }
+
+    private static bool IsInspectableProcess(Process process)
+    {
+        // 普通应用使用白名单。终端、浏览器、T3 和凭据窗口不参与控件读取。
+        if (IsNotepad(process)) return true;
+        string path = process.MainModule.FileName;
+        string name = Path.GetFileName(path);
+        if (!String.Equals(name, "mspaint.exe", StringComparison.OrdinalIgnoreCase) &&
+            !String.Equals(name, "calc.exe", StringComparison.OrdinalIgnoreCase) &&
+            !String.Equals(name, "CalculatorApp.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        if (String.Equals(path, Path.Combine(Environment.SystemDirectory, name),
+            StringComparison.OrdinalIgnoreCase)) return true;
+        string family = PackageFamily(process);
+        return family == "Microsoft.Paint_8wekyb3d8bbwe" || family == "Microsoft.WindowsCalculator_8wekyb3d8bbwe";
     }
 
     private static IEnumerable<string> T3Paths()
@@ -219,7 +248,7 @@ internal sealed class WindowsDesktop : IDisposable
         finally { if (ownedWindow != next) next.Dispose(); }
     }
 
-    private static async Task CheckBeforeWindowAction(Window selected, IntPtr approvingWindow, Action verifyRequest,
+    internal static async Task CheckBeforeWindowAction(Window selected, IntPtr approvingWindow, Action verifyRequest,
         Func<Task> verifyJob, CancellationToken cancel)
     {
         await WindowsMcp.RequireIdleAsync(() => VerifyBeforeWindowAction(selected, approvingWindow, verifyRequest, cancel), cancel);
@@ -227,7 +256,7 @@ internal sealed class WindowsDesktop : IDisposable
         VerifyBeforeWindowAction(selected, approvingWindow, verifyRequest, cancel);
     }
 
-    private static void VerifyBeforeWindowAction(Window selected, IntPtr approvingWindow, Action verifyRequest,
+    internal static void VerifyBeforeWindowAction(Window selected, IntPtr approvingWindow, Action verifyRequest,
         CancellationToken cancel)
     {
         cancel.ThrowIfCancellationRequested();

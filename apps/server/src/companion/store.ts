@@ -39,6 +39,17 @@ const TOKEN_FORMAT = /^[A-Za-z0-9_-]{43}$/;
 const MEDIA_NAME_FORMAT = /^[0-9a-f-]{36}\.(png|avi|bin)$/;
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
+export const LOCAL_WINDOWS_ACTIONS = [
+  "inspect-window-controls",
+  "run-approved-script",
+  "open-ssh-profile",
+] as const;
+const LOCAL_WINDOWS_TOOLS_UPGRADE = "此 Windows 受控端不支持该操作，请升级受控端后重试。";
+
+export function isLocalWindowsAction(action: string): boolean {
+  return LOCAL_WINDOWS_ACTIONS.some((candidate) => candidate === action);
+}
+
 const actions = [
   "screenshot",
   "record-screen",
@@ -49,6 +60,7 @@ const actions = [
   "receive-file",
   "write-notepad",
   "read-notepad",
+  ...LOCAL_WINDOWS_ACTIONS,
 ] as const;
 type Action = (typeof actions)[number];
 type TaskStatus = CompanionDevice["recentTasks"][number]["status"];
@@ -610,14 +622,17 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
           .get(device.id) as TaskRow | undefined;
         if (task === undefined) return { name: device.name, job: null };
         const params = JSON.parse(task.params) as Strings;
-        if (!supportsCaptureOptions(params, info)) {
+        // 领取时使用当前设备上报的能力，避免已排队的请求交给降级后的旧客户端。
+        const unsupported =
+          isLocalWindowsAction(task.action) && info.localToolsV1 !== "true"
+            ? LOCAL_WINDOWS_TOOLS_UPGRADE
+            : !supportsCaptureOptions(params, info)
+              ? "The Windows companion no longer supports the requested capture options."
+              : undefined;
+        if (unsupported !== undefined) {
           db.prepare(`
             UPDATE tasks SET status = 'failed', message = ?, updated_at = ? WHERE id = ?
-          `).run(
-            "The Windows companion no longer supports the requested capture options.",
-            time,
-            task.id,
-          );
+          `).run(unsupported, time, task.id);
           return { name: device.name, job: null };
         }
         // 已领取但未收到回执的任务在超时后结案，避免重做桌面操作。
@@ -1025,6 +1040,10 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       if (!actions.includes(action as Action)) {
         throw new CompanionError(400, "Unsupported Windows companion action.");
       }
+      const localAction = isLocalWindowsAction(action);
+      if (localAction && Object.keys(params).length !== 0) {
+        throw new CompanionError(400, "该 Windows 操作不接受参数，请在受控端选择。");
+      }
       const thread = label(threadId, 512);
       const request = label(clientRequestId, 128);
       const encodedParams = encodeStrings(params);
@@ -1046,7 +1065,11 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         }
         const device = db.prepare("SELECT name, info FROM devices WHERE id = ?").get(deviceId);
         if (device === undefined) throw new CompanionError(404, "Windows companion not found.");
-        if (!supportsCaptureOptions(params, JSON.parse(String(device.info)) as Strings)) {
+        const info = JSON.parse(String(device.info)) as Strings;
+        if (localAction && info.localToolsV1 !== "true") {
+          throw new CompanionError(409, LOCAL_WINDOWS_TOOLS_UPGRADE);
+        }
+        if (!supportsCaptureOptions(params, info)) {
           throw new CompanionError(409, "This Windows companion does not support capture options.");
         }
         const pending = db

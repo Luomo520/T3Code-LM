@@ -55,16 +55,16 @@ internal object CaptureRequestNotifications {
     name: String,
     recording: Boolean,
     expiresInMs: Long
-  ) {
+  ): Boolean {
     if (expiresInMs <= 0 || !canPost(context) ||
       !path.startsWith("/threads/") || path.contains('?') || path.contains('#')
-    ) return
+    ) return false
 
     val tag = "$TAG_PREFIX$environmentId"
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
-    if (prefs.getString(tag, null) == jobId) return
+    if (prefs.getString(tag, null) == jobId) return true
 
-    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
+    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return false
     intent.setAction(Intent.ACTION_VIEW).setData(Uri.parse("$scheme:/$path"))
       .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     val tap = PendingIntent.getActivity(
@@ -90,11 +90,13 @@ internal object CaptureRequestNotifications {
       .setAutoCancel(true)
       .setTimeoutAfter(expiresInMs)
       .build()
-    try {
+    return try {
       manager.notify(tag, NOTIFICATION_ID, alert)
       prefs.edit().putString(tag, jobId).apply()
+      true
     } catch (_: SecurityException) {
-      // 通知权限可能刚刚被用户关闭。
+      // 系统可能在排队后撤销通知权限，留给下一次调度重试。
+      false
     }
   }
 }

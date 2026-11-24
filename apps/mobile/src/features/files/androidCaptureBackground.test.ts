@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   foreground: null as null | (() => void),
   policy: "ask",
   listen: vi.fn(),
-  post: vi.fn(),
+  post: vi.fn(() => true),
 }));
 
 vi.mock("react-native", () => ({
@@ -99,7 +99,7 @@ it("posts only the original paired request and honors a policy revoked before de
 it("rechecks the queue after an empty response or network failure without posting twice", async () => {
   vi.useFakeTimers();
   mocks.listen.mockReset();
-  mocks.post.mockReset();
+  mocks.post.mockReset().mockReturnValue(true);
   mocks.policy = "ask";
   const pending = {
     _tag: "Success",
@@ -144,6 +144,34 @@ it("rechecks the queue after an empty response or network failure without postin
     await vi.advanceTimersByTimeAsync(20_000);
     expect(mocks.post).toHaveBeenCalledOnce();
     expect(mocks.listen).toHaveBeenCalledTimes(5);
+  } finally {
+    mocks.foreground?.();
+    vi.useRealTimers();
+  }
+});
+
+it("retries the same queued request if Android did not accept the notification", async () => {
+  vi.useFakeTimers();
+  mocks.policy = "ask";
+  mocks.post.mockReset().mockReturnValueOnce(false).mockReturnValue(true);
+  mocks.listen.mockReset().mockResolvedValue({
+    _tag: "Success",
+    value: {
+      _tag: "pending",
+      job: {
+        id: "delivery-retry",
+        threadId: "original",
+        action: "record-screen",
+        expiresInMs: 90_000,
+      },
+    },
+  });
+  try {
+    const check = checkAndroidCaptureRequestsInBackground();
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    mocks.foreground?.();
+    await check;
   } finally {
     mocks.foreground?.();
     vi.useRealTimers();

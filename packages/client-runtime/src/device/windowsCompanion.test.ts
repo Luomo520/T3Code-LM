@@ -80,3 +80,17 @@ it("explains target desktop conditions and distinguishes stopping a recording fr
   ).toBe("paused");
   expect(windowsCompanionCapabilities(desktop, false).screenRecording).toBe("disabled");
 });
+
+it("shows local tools only on an advertising companion and respects pause", () => {
+  expect(windowsCompanionCapabilities(desktop, true)).not.toHaveProperty("inspectControls");
+  const device = {
+    ...desktop,
+    info: { ...desktop.info, localToolsV1: "true", desktopState: "input-paused" },
+  };
+  expect(windowsCompanionCapabilities(device, true)).toMatchObject({
+    inspectControls: "inputPaused",
+    localScript: "inputPaused",
+    sshProfile: "inputPaused",
+  });
+  expect(windowsCompanionCapabilities(device, false).localScript).toBe("disabled");
+});

@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import { AssetSigner } from "../../../assets/AssetSigner.ts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
+import { LOCAL_WINDOWS_ACTIONS } from "../../../companion/store.ts";
 import { ServerConfig } from "../../../config.ts";
 import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
 import { ServerSettingsService } from "../../../serverSettings.ts";
@@ -34,6 +35,7 @@ const action = Schema.Literals([
   "receive-file",
   "write-notepad",
   "read-notepad",
+  ...LOCAL_WINDOWS_ACTIONS,
 ]);
 const task = Schema.Struct({
   id: identifier,
@@ -68,17 +70,22 @@ const list = Tool.make("t3_companion_list", {
 
 const enqueue = Tool.make("t3_companion_enqueue", {
   description:
-    "Request one approved action on a paired device. Android accepts only screenshot and record-screen, and requires the phone user to grant Android screen-sharing consent in the foreground for each request. The Windows device user also approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. For screenshots and recordings, the device user chooses the actual capture surface. On Windows, captureKind may suggest its category. durationSeconds sets a recording maximum from 1 to 30 seconds (default 10). Windows shows the recording and can stop it. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. open-t3 and open-notepad let the Windows user launch the fixed app or choose its visible window on a companion that supports window selection. read-notepad returns the text from the editor the Windows user approves. write-notepad replaces its text with the text shown during approval. Older companions require a Notepad they opened. close-window applies only to an original window opened by the companion. Read the original thread result with t3_companion_result.",
+    "Request one approved action on a paired device. Android accepts only screenshot and record-screen, and requires the phone user to grant Android screen-sharing consent in the foreground for each request. The Windows device user also approves each request. Reuse clientRequestId for retries. Use record-screen only when the user explicitly asks to record this device. For screenshots and recordings, the device user chooses the actual capture surface. On Windows, captureKind may suggest its category. durationSeconds sets a recording maximum from 1 to 30 seconds (default 10). Windows shows the recording and can stop it. Use send-file when the Windows user should choose a local file to return, or receive-file with the attachmentId of a file in this thread to save on Windows. open-t3 and open-notepad let the Windows user launch the fixed app or choose its visible window on a companion that supports window selection. read-notepad returns the text from the editor the Windows user approves. write-notepad replaces its text with the text shown during approval. Older companions require a Notepad they opened. close-window applies only to an original window opened by the companion. inspect-window-controls, run-approved-script, and open-ssh-profile accept no action parameters. The Windows user chooses the visible window, locally approved script, or local SSH profile. Read the original thread result with t3_companion_result.",
   parameters: Schema.Struct({
     deviceId: identifier,
     action,
     clientRequestId: identifier,
-    attachmentId: Schema.optionalKey(identifier),
-    captureKind: Schema.optionalKey(CompanionCaptureKind),
+    // 保留显式传入的 null，以便无参数的动作能拒绝提供了这些字段的请求。
+    attachmentId: Schema.optionalKey(Schema.NullOr(identifier)),
+    captureKind: Schema.optionalKey(Schema.NullOr(CompanionCaptureKind)),
     durationSeconds: Schema.optionalKey(
-      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: COMPANION_MAX_RECORDING_SECONDS })),
+      Schema.NullOr(
+        Schema.Int.check(
+          Schema.isBetween({ minimum: 1, maximum: COMPANION_MAX_RECORDING_SECONDS }),
+        ),
+      ),
     ),
-    text: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+    text: Schema.optionalKey(Schema.NullOr(Schema.String.check(Schema.isMaxLength(512)))),
   }),
   success: task,
   failure: OrchestratorMcpFailure,

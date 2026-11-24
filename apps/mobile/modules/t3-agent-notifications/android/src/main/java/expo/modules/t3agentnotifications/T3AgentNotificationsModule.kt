@@ -98,7 +98,7 @@ class T3AgentNotificationsModule : Module() {
         CaptureRequestNotifications.post(
           context, scheme, path, environmentId, jobId, name, recording, expiresInMs.toLong()
         )
-      }
+      } else false
     }
 
     Function("openLiveUpdateSettings") {

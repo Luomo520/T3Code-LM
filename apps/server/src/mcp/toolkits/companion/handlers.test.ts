@@ -75,7 +75,7 @@ const setup = Effect.fnUntraced(function* () {
   yield* Effect.addFinalizer(() => Effect.sync(() => store.close()));
   const { code } = store.pair();
   const identity = store.enroll(code, deviceName, info);
-  const call = (name: string, args: Record<string, string>, invocation = scope) =>
+  const call = (name: string, args: Record<string, unknown>, invocation = scope) =>
     server
       .callTool({ name, arguments: args })
       .pipe(
@@ -242,6 +242,63 @@ it.effect("queues the explicit Notepad text only for its paired device", () =>
     const result = yield* call("t3_companion_result", { id });
     expect(result.structuredContent).toMatchObject({ status: "done", message: "可见的测试文字" });
   }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "requests locally chosen Windows actions with empty parameters and thread-scoped results",
+  () =>
+    Effect.gen(function* () {
+      const { call, store, deviceId, token, settings } = yield* setup();
+      yield* settings.updateSettings({ windowsCompanionEnabled: true });
+      const capable = { ...info, localToolsV1: "true" };
+      store.checkDevice(token, capable);
+      const withParams = {
+        deviceId,
+        action: "run-approved-script",
+        clientRequestId: "with-params",
+      };
+      const unknown = yield* call("t3_companion_enqueue", {
+        ...withParams,
+        params: {},
+      }).pipe(Effect.flip);
+      expect(unknown).toMatchObject({ _tag: "InvalidParams" });
+      const unrelated = yield* call("t3_companion_enqueue", { ...withParams, text: "额外参数" });
+      expect(unrelated.isError).toBe(true);
+      const explicitNull = yield* call("t3_companion_enqueue", {
+        ...withParams,
+        attachmentId: null,
+      });
+      expect(explicitNull.isError).toBe(true);
+      expect(store.poll(token, deviceName, capable).job).toBeNull();
+
+      const results = [
+        ["inspect-window-controls", "done", "已检查本机所选窗口。"],
+        ["run-approved-script", "failed", "Windows 用户取消了请求。"],
+        ["open-ssh-profile", "failed", "Windows 无法打开所选配置。"],
+      ] as const;
+      for (const [action, status, message] of results) {
+        const queued = yield* call("t3_companion_enqueue", {
+          deviceId,
+          action,
+          clientRequestId: action,
+        });
+        const job = store.poll(token, deviceName, capable).job!;
+        expect(job).toMatchObject({ action, threadId: owner, params: {} });
+        expect(queued.structuredContent).toMatchObject({ id: job.id, action, status: "queued" });
+        store.complete(token, { id: job.id, status, message });
+        const result = yield* call("t3_companion_result", { id: job.id });
+        expect(result.structuredContent).toMatchObject({ action, status, message });
+        const denied = yield* call(
+          "t3_companion_result",
+          { id: job.id },
+          {
+            ...scope,
+            thread: { ...scope.thread!, threadId: other },
+          },
+        );
+        expect(denied.isError).toBe(true);
+      }
+    }).pipe(Effect.provide(testLayer)),
 );
 
 it.effect(

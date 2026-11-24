@@ -33,7 +33,8 @@ export function checkAndroidCaptureRequestsInBackground(): Promise<void> {
   const deadline = Date.now() + CHECK_WINDOW_MS;
   const canCheck = () =>
     Date.now() < deadline &&
-    AppState.currentState === "background" &&
+    // 冷启动的后台任务可能尚未取得 AppState，原生模块在发通知前再核实前台状态。
+    (AppState.currentState === "background" || AppState.currentState == null) &&
     canNotifyAndroidCaptureRequests() &&
     readAndroidCaptureBackgroundWatch() > Date.now();
   const canReceive = (environmentId: EnvironmentId) =>
@@ -84,7 +85,7 @@ export function checkAndroidCaptureRequestsInBackground(): Promise<void> {
           if (rejected._tag === "Success") handled.set(environmentId, job.id);
           return;
         }
-        postAndroidCaptureRequest({
+        const delivered = postAndroidCaptureRequest({
           environmentId,
           environmentLabel,
           threadId: job.threadId,
@@ -92,7 +93,7 @@ export function checkAndroidCaptureRequestsInBackground(): Promise<void> {
           recording: job.action === "record-screen",
           expiresInMs: job.expiresInMs,
         });
-        handled.set(environmentId, job.id);
+        if (delivered) handled.set(environmentId, job.id);
       } finally {
         // 网络失败时释放当前查询，下次检查可用同一配对环境重试。
         inFlight.delete(environmentId);

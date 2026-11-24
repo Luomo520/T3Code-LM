@@ -22,7 +22,7 @@ interface AndroidAgentNotifications {
     name: string,
     recording: boolean,
     expiresInMs: number,
-  ): void;
+  ): boolean | void;
   postTaskCompletion?(
     scheme: string,
     path: string,
@@ -132,16 +132,20 @@ export function postAndroidCaptureRequest(request: {
   readonly jobId: string;
   readonly recording: boolean;
   readonly expiresInMs: number;
-}): void {
+}): boolean {
+  if (!native?.postCaptureRequest) return false;
   const path = `/threads/${encodeURIComponent(request.environmentId)}/${encodeURIComponent(request.threadId)}`;
-  native?.postCaptureRequest?.(
-    appScheme(),
-    path,
-    request.environmentId,
-    request.jobId,
-    request.environmentLabel,
-    request.recording,
-    request.expiresInMs,
+  // 旧原生模块没有返回值，按以往的投递方式处理。
+  return (
+    native.postCaptureRequest(
+      appScheme(),
+      path,
+      request.environmentId,
+      request.jobId,
+      request.environmentLabel,
+      request.recording,
+      request.expiresInMs,
+    ) !== false
   );
 }
 

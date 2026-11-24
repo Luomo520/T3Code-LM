@@ -45,7 +45,7 @@ export function AndroidCapturePermissionsSettings({
   return (
     <SettingsSection
       title="会话屏幕请求"
-      footer="选择「直接打开系统授权」可跳过 T3 提示。Android 仍会让你确认共享范围。"
+      footer="设置会保留在这台手机上。选「直接打开系统授权」后，每次开始新的系统共享时，只需在 Android 确认共享范围。"
     >
       {(
         [

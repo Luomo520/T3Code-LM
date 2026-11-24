@@ -3,7 +3,7 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
   lookupWindowsCompanionMac,
   windowsCompanionAvailability,
-  windowsCompanionCapabilities,
+  windowsCompanionCapabilityEntries,
   windowsCompanionNetworkAdapters,
 } from "@t3tools/client-runtime/device/windows-companion";
 import {
@@ -367,13 +367,16 @@ function describeDevice(device: CompanionDevice, enabled: boolean): string {
     ...windowsCompanionNetworkAdapters(device.info).map(([, value]) => ["网卡", value]),
   ].flatMap(([label, value]) => (value ? [`${label} · ${value}`] : []));
   const updated = new Date(device.detailsUpdatedAt ?? device.lastSeen).toLocaleString();
-  const capabilities = windowsCompanionCapabilities(device, enabled);
+  const capabilities = windowsCompanionCapabilityEntries(device, enabled);
   const capabilityLabels = {
     sendFile: "发送文件",
     receiveFile: "接收文件",
     screenshot: "截图",
     screenRecording: "开始录屏",
     desktopInput: "打开 T3 或操作记事本",
+    inspectControls: "查看窗口控件",
+    localScript: "运行本机诊断或已批准的脚本",
+    sshProfile: "打开本机 SSH 连接",
     stopRecording: "停止录屏",
     installApp: "安装应用",
   };
@@ -394,9 +397,7 @@ function describeDevice(device: CompanionDevice, enabled: boolean): string {
     connectionLabels[windowsCompanionAvailability(device, enabled)],
     `资料更新时间 · ${updated}`,
     "",
-    ...(Object.keys(capabilities) as (keyof typeof capabilities)[]).map(
-      (key) => `${capabilityLabels[key]} · ${capabilityReasons[capabilities[key]]}`,
-    ),
+    ...capabilities.map(([key, state]) => `${capabilityLabels[key]} · ${capabilityReasons[state]}`),
     "",
     ...(fields.length > 0 ? fields : ["在 Windows 受控端运行「设备自检」可发送设备资料。"]),
   ].join("\n");
@@ -411,6 +412,9 @@ const companionActionLabels: Readonly<Record<string, string>> = {
   "send-file": "发送文件",
   "receive-file": "接收文件",
   "write-notepad": "填写记事本",
+  "inspect-window-controls": "查看窗口控件",
+  "run-approved-script": "运行本机诊断或已批准的脚本",
+  "open-ssh-profile": "打开本机 SSH 连接",
   "read-notepad": "读取记事本",
 };
 

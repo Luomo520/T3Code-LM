@@ -46,7 +46,8 @@ internal static class DeviceInfo
             !accepting ? "paused" : remoteInputPaused ? "input-paused" : "ready";
         return new Dictionary<string, string>(details)
         {
-            { "desktopState", state }
+            { "desktopState", state },
+            { "localToolsV1", "true" }
         };
     }
 

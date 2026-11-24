@@ -2,7 +2,11 @@ import { COMPANION_MAX_IMAGE_BYTES, OrchestratorMcpFailure } from "@t3tools/cont
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { issueCompanionFileDownload } from "../../../assets/AssetAccess.ts";
-import { CompanionError, getCompanionStore } from "../../../companion/store.ts";
+import {
+  CompanionError,
+  getCompanionStore,
+  isLocalWindowsAction,
+} from "../../../companion/store.ts";
 import {
   getAndroidCaptureStore,
   isAndroidCaptureDevice,
@@ -130,10 +134,23 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
       const fail = (message: string) =>
         new OrchestratorMcpFailure({ code: "invalid_request", message });
       if (
-        (input.captureKind !== undefined &&
+        isLocalWindowsAction(input.action) &&
+        (input.attachmentId !== undefined ||
+          input.captureKind !== undefined ||
+          input.durationSeconds !== undefined ||
+          input.text !== undefined)
+      ) {
+        return yield* fail("该 Windows 操作不接受参数，请在受控端选择。");
+      }
+      const attachmentId = input.attachmentId ?? undefined;
+      const captureKind = input.captureKind ?? undefined;
+      const durationSeconds = input.durationSeconds ?? undefined;
+      const text = input.text ?? undefined;
+      if (
+        (captureKind !== undefined &&
           input.action !== "screenshot" &&
           input.action !== "record-screen") ||
-        (input.durationSeconds !== undefined && input.action !== "record-screen")
+        (durationSeconds !== undefined && input.action !== "record-screen")
       ) {
         return yield* fail(
           "Capture options apply only to their corresponding screenshot or recording action.",
@@ -142,9 +159,9 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
       if (isAndroidCaptureDevice(input.deviceId)) {
         if (
           (input.action !== "screenshot" && input.action !== "record-screen") ||
-          input.captureKind !== undefined ||
-          input.text !== undefined ||
-          input.attachmentId !== undefined
+          captureKind !== undefined ||
+          text !== undefined ||
+          attachmentId !== undefined
         ) {
           return yield* fail(
             "Android supports only a locally confirmed screenshot or recording. The phone user chooses the capture surface.",
@@ -157,25 +174,22 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
             input.deviceId,
             action,
             input.clientRequestId,
-            input.durationSeconds ?? 10,
+            durationSeconds ?? 10,
           ),
         );
         return taskSummary(task);
       }
       if (input.action === "screenshot" || input.action === "record-screen") {
         params = {
-          ...(input.captureKind === undefined ? {} : { captureKind: input.captureKind }),
-          ...(input.durationSeconds === undefined
-            ? {}
-            : { durationSeconds: String(input.durationSeconds) }),
+          ...(captureKind === undefined ? {} : { captureKind }),
+          ...(durationSeconds === undefined ? {} : { durationSeconds: String(durationSeconds) }),
         };
       } else if (input.action === "receive-file") {
-        if (!input.attachmentId)
-          return yield* fail("Select a file already attached to this thread.");
+        if (!attachmentId) return yield* fail("Select a file already attached to this thread.");
         const { projection } = yield* readThread(threadId, ["messages"]);
         const attachment = projection.messages
           .flatMap((message) => message.attachments)
-          .find((attachment) => attachment.id === input.attachmentId);
+          .find((attachment) => attachment.id === attachmentId);
         if (attachment === undefined)
           return yield* fail("This file is unavailable in the requesting thread.");
         const { attachmentsDir } = yield* ServerConfig;
@@ -184,13 +198,10 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
         );
         params = { attachmentId: attachment.id, fileName: attachment.name.slice(0, 240), sha256 };
       } else if (input.action === "write-notepad") {
-        if (
-          input.text === undefined ||
-          /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(input.text)
-        ) {
+        if (text === undefined || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text)) {
           return yield* fail("Provide plain Notepad text of up to 512 characters.");
         }
-        params = { text: input.text };
+        params = { text };
       }
       const task = yield* operate(() =>
         getCompanionStore(stateDir).enqueue(

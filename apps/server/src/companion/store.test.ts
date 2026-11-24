@@ -291,6 +291,28 @@ describe("Windows companion store", () => {
     );
   });
 
+  it("does not dispatch a locally chosen action after its Windows client loses support", () => {
+    const { store, enroll } = setup();
+    const device = enroll("PC");
+    const info = { localToolsV1: "true" };
+    const action = "inspect-window-controls";
+    expect(() => store.enqueue("thread", device.deviceId, action, "legacy")).toThrow(
+      expect.objectContaining({ status: 409, message: expect.stringContaining("升级") }),
+    );
+    store.checkDevice(device.token, info);
+    expect(() =>
+      store.enqueue("thread", device.deviceId, action, "with-params", { input: "unexpected" }),
+    ).toThrow(expect.objectContaining({ status: 400 }));
+    const task = store.enqueue("thread", device.deviceId, action, "downgraded");
+    const oldAction = store.enqueue("thread", device.deviceId, "open-notepad", "old-action");
+    expect(store.poll(device.token, "PC", {}).job).toBeNull();
+    expect(store.result("thread", task.id)).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("升级"),
+    });
+    expect(store.poll(device.token, "PC", {}).job).toMatchObject({ id: oldAction.id });
+  });
+
   it("binds Windows file transfers to the claimed job, SHA-256 and original thread", () => {
     const { store, enroll } = setup();
     const device = enroll("PC");
