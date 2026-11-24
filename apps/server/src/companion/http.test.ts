@@ -434,7 +434,7 @@ it.effect("expires Android requests before approval and during a capture", () =>
     expect(store.approve(device, first.id)).toEqual({ _tag: "inactive" });
     expect(store.result("original", first.id)).toMatchObject({
       status: "failed",
-      message: expect.stringContaining("过期"),
+      message: expect.stringContaining("未收到手机收件回执"),
     });
     store.listen(device, "Android");
     const second = store.enqueue("original", device, "record-screen", "approved", 10);
@@ -443,8 +443,20 @@ it.effect("expires Android requests before approval and during a capture", () =>
     expect(store.status(device, second.id)).toEqual({ _tag: "inactive" });
     expect(store.result("original", second.id)).toMatchObject({
       status: "failed",
-      message: expect.stringContaining("过期"),
+      message: expect.stringContaining("手机已接受请求"),
     });
     expect(() => store.complete(device, second.id, "eA==")).toThrow(/no longer active/u);
+    store.listen(device, "Android");
+    const received = store.enqueue("original", device, "screenshot", "received-only", 10);
+    store.progress(device, received.id, "received");
+    time += 45_001;
+    expect(store.result("original", received.id).message).toContain("手机已收到请求");
+
+    store.listen(device, "Android");
+    const recording = store.enqueue("original", device, "record-screen", "recording", 10);
+    store.approve(device, recording.id);
+    store.progress(device, recording.id, "recording");
+    time += 90_001;
+    expect(store.result("original", recording.id).message).toContain("手机已开始录屏");
   }),
 );

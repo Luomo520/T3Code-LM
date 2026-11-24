@@ -120,9 +120,14 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
   function sweep() {
     const time = now();
     db.prepare(`
-      UPDATE tasks SET status = 'failed', message = 'Android 屏幕捕获请求已过期。', updated_at = ?
+      UPDATE tasks SET status = 'failed', message = CASE
+        WHEN message = ? THEN '请求已过期。手机已收到请求，但未在时限内完成本机处理。'
+        WHEN message = ? THEN '请求已过期。手机已开始录屏，但服务端未按时收到文件。'
+        WHEN status = 'running' THEN '请求已过期。手机已接受请求，但未按时返回文件。'
+        ELSE '请求已过期。未收到手机收件回执，请打开已配对的 T3 App 后重试。'
+      END, updated_at = ?
       WHERE expires_at <= ? AND status IN ('queued', 'running')
-    `).run(time, time);
+    `).run(RECEIVED, RECORDING, time, time);
     db.prepare(`
       DELETE FROM tasks WHERE updated_at <= ? AND status NOT IN ('queued', 'running')
     `).run(time - HISTORY_TTL);
