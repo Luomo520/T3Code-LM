@@ -86,7 +86,7 @@ class T3LocalScreenCaptureService : Service() {
       session.registerCallback(projectionCallback, handler)
       val size = checkNotNull(request.display)
       when (request.mode) {
-        T3CaptureMode.SCREENSHOT -> screenshot(session, size, request.remoteDurationSeconds != null)
+        T3CaptureMode.SCREENSHOT -> screenshot(session, size)
         T3CaptureMode.RECORDING -> record(session, request, size)
       }
     } catch (_: Exception) {
@@ -111,11 +111,11 @@ class T3LocalScreenCaptureService : Service() {
     return File.createTempFile(prefix, extension, directory).also { output = it }
   }
 
-  private fun screenshot(session: MediaProjection, size: T3CaptureDisplay, isRemote: Boolean) {
+  private fun screenshot(session: MediaProjection, size: T3CaptureDisplay) {
     // 等系统分享窗口淡出再建立显示，静止画面也只需要收到第一帧。
     handler.postDelayed({
       try {
-        val (width, height) = captureSize(size, if (isRemote) 1080 else 2560)
+        val (width, height) = size
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         images = reader
         reader.setOnImageAvailableListener({ source ->

@@ -4,8 +4,6 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.ServiceConnection
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.CompletableDeferred
@@ -46,7 +44,8 @@ internal object T3DeviceScreenshot {
       .daemon(false).processNameSuffix("t3Screenshot").version(1)
     val dir = File(context.cacheDir, "t3-local-screen")
     check(dir.isDirectory || dir.mkdirs())
-    val raw = File.createTempFile("capture-raw-", ".png", dir)
+    val raw = File.createTempFile("截图-", ".png", dir)
+    var delivered = false
     try {
       Shizuku.bindUserService(args, connection)
       val endpoint = withTimeout(10_000) { service.await() }
@@ -54,29 +53,19 @@ internal object T3DeviceScreenshot {
       check(T3CaptureRequests.current === request && localCaptureUnlocked(context))
       check(T3ShizukuApkInstaller.accessStatus() == access)
       val uid = if (access == "adb") 2000 else 0
-      return withContext(Dispatchers.IO) {
+      withContext(Dispatchers.IO) {
         ParcelFileDescriptor.open(raw, ParcelFileDescriptor.MODE_WRITE_ONLY).use {
           check(endpoint.capture(it, uid))
         }
         check(localCaptureUnlocked(context))
-        val bitmap = checkNotNull(BitmapFactory.decodeFile(raw.path))
-        val scale = minOf(1.0, 1080.0 / maxOf(bitmap.width, bitmap.height))
-        val small = Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1),
-          (bitmap.height * scale).toInt().coerceAtLeast(1), true)
-        try {
-          val file = File.createTempFile("截图-", ".png", dir)
-          try {
-            file.outputStream().use { check(small.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-            file
-          } catch (cause: Exception) { file.delete(); throw cause }
-        } finally {
-          if (small !== bitmap) small.recycle()
-          bitmap.recycle()
-        }
+        check(raw.length() > 0)
       }
+      // screencap 已输出原尺寸 PNG，直接交给调用方上传并清理。
+      delivered = true
+      return raw
     } finally {
       runCatching { Shizuku.unbindUserService(args, connection, true) }
-      raw.delete()
+      if (!delivered) raw.delete()
     }
   }
 }
