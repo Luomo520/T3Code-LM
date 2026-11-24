@@ -1,5 +1,8 @@
 import { COMPANION_MAX_IMAGE_BYTES, OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import { isActiveRun } from "../../../orchestration-v2/ThreadManagementService.ts";
+import { matchesRecordingRequest } from "./recordingRequest.ts";
 import * as FileSystem from "effect/FileSystem";
 import { issueCompanionFileDownload } from "../../../assets/AssetAccess.ts";
 import {
@@ -160,6 +163,70 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
           "Capture options apply only to their corresponding screenshot or recording action.",
         );
       }
+      let requestId = input.clientRequestId;
+      if (input.action === "record-screen") {
+        const { caller, threads, scope } = yield* loadCaller();
+        const denied = () =>
+          new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message:
+              "本次录屏需要原会话中的明确指令，例如「录 K60 七秒给我看」。请使用设备名称或编号。",
+          });
+        if (!caller?.activeRunId) return yield* denied();
+        const records = yield* threads
+          .getThreadRecords(threadId, ["runs"], { runIds: [caller.activeRunId] })
+          .pipe(Effect.mapError(unavailable));
+        const run = records.runs.find((item) => item.id === caller.activeRunId);
+        if (
+          !run ||
+          !isActiveRun(run) ||
+          run.providerInstanceId !== scope.thread?.providerInstanceId
+        )
+          return yield* denied();
+        const messages = yield* threads
+          .getMessagesById(threadId, [run.userMessageId])
+          .pipe(Effect.mapError(unavailable));
+        const message = messages.get(run.userMessageId);
+        if (
+          !message ||
+          message.role !== "user" ||
+          message.createdBy !== "user" ||
+          !message.clientOrigin ||
+          message.threadId !== threadId ||
+          (message.creationSource !== "web" && message.creationSource !== "mobile") ||
+          message.notification ||
+          message.scheduledTaskId ||
+          message.senderThreadId ||
+          message.linkedSender ||
+          message.delegatedCompletion ||
+          message.workflowScript
+        )
+          return yield* denied();
+        const android = yield* perform(() => getAndroidCaptureStore(stateDir).list());
+        const settings = yield* ServerSettingsService;
+        const windowsEnabled = (yield* settings.getSettings.pipe(Effect.mapError(unavailable)))
+          .windowsCompanionEnabled;
+        const windows = windowsEnabled
+          ? yield* operate(() => getCompanionStore(stateDir).list())
+          : [];
+        const matches = [...android, ...windows].filter((d) =>
+          matchesRecordingRequest(message.text, [d.name, d.deviceId], durationSeconds ?? 10),
+        );
+        if (matches.length !== 1 || matches[0]?.deviceId !== input.deviceId) return yield* denied();
+        const stillActive = yield* loadCaller();
+        if (stillActive.caller?.activeRunId !== run.id) return yield* denied();
+        const claimed = yield* perform(() =>
+          getAndroidCaptureStore(stateDir).claimRecordingAuthorization(
+            threadId,
+            message.id,
+            input.deviceId,
+            DateTime.toEpochMillis(message.createdAt) + 15 * 60_000,
+          ),
+        );
+        if (!claimed) return yield* denied();
+        // 同一条用户指令只对应一项录屏。模型重试或更换请求编号都返回原任务。
+        requestId = "record:" + message.id;
+      }
       if (isAndroidCaptureDevice(input.deviceId)) {
         if (
           (input.action !== "screenshot" && input.action !== "record-screen") ||
@@ -177,7 +244,7 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
             threadId,
             input.deviceId,
             action,
-            input.clientRequestId,
+            requestId,
             durationSeconds ?? 10,
           ),
         );
@@ -226,7 +293,7 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
           threadId,
           input.deviceId,
           input.action,
-          input.clientRequestId,
+          requestId,
           params,
         ),
       );

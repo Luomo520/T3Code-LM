@@ -1,7 +1,23 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { beforeEach, afterEach, vi } from "vite-plus/test";
+const fixedTime = 1_800_000_000_000;
+beforeEach(() => {
+  vi.spyOn(Date, "now").mockReturnValue(fixedTime);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+import {
+  EnvironmentId,
+  MessageId,
+  ProviderInstanceId,
+  ThreadId,
+  type OrchestrationV2Run,
+  type OrchestrationV2ConversationMessage,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import { AssetSigner } from "../../../assets/AssetSigner.ts";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
@@ -12,7 +28,7 @@ import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagem
 import { ServerSettingsService } from "../../../serverSettings.ts";
 import { layerCompanionToolkit, layerInProcessMcpServer } from "../../McpHttpServer.ts";
 import { McpInvocationContext, type McpInvocationScope } from "../../McpInvocationContext.ts";
-import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
+import { idleThreadProjection, liveThreadShell } from "../../McpToolAccess.testkit.ts";
 
 const owner = ThreadId.make("companion-test-owner");
 const other = ThreadId.make("companion-test-other");
@@ -41,26 +57,62 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
-const testLayer = layerCompanionToolkit.pipe(
-  Layer.provideMerge(layerInProcessMcpServer),
-  Layer.provideMerge(
-    Layer.mock(ThreadManagementService)({
-      getThreadShell: (id) =>
-        Effect.succeed(
-          liveThreadShell(id, { runtimeMode: id === restricted ? "auto" : "full-access" }),
-        ),
-    }),
-  ),
-  Layer.provideMerge(ServerSettingsService.layerTest()),
-  Layer.provideMerge(layerTest(process.cwd(), { prefix: "t3-companion-mcp-" })),
-  Layer.provide(
-    Layer.succeed(AssetSigner, {
-      sign: () => Effect.succeed("test-signature"),
-      verify: (_payload, signature) => Effect.succeed(signature === "test-signature"),
-    }),
-  ),
-  Layer.provide(NodeServices.layer),
-);
+const recordingMessageId = MessageId.make("recording-consent");
+const makeTestLayer = (recordingText = "", authenticated = true) =>
+  layerCompanionToolkit.pipe(
+    Layer.provideMerge(layerInProcessMcpServer),
+    Layer.provideMerge(
+      Layer.mock(ThreadManagementService)({
+        getThreadRecords: (id) => {
+          const shell = liveThreadShell(id);
+          return Effect.succeed({
+            ...idleThreadProjection(shell),
+            runs: [
+              {
+                id: shell.activeRunId!,
+                providerInstanceId: scope.thread!.providerInstanceId,
+                status: "running",
+                userMessageId: recordingMessageId,
+              } as OrchestrationV2Run,
+            ],
+          });
+        },
+        getMessagesById: (id) => {
+          const message: OrchestrationV2ConversationMessage = {
+            id: recordingMessageId,
+            threadId: id,
+            role: "user",
+            createdBy: "user",
+            creationSource: "web",
+            ...(authenticated ? { clientOrigin: { clientAlias: "owner" } } : {}),
+            runId: liveThreadShell(id).activeRunId,
+            nodeId: null,
+            text: recordingText,
+            streaming: false,
+            attachments: [],
+            createdAt: DateTime.makeUnsafe(fixedTime),
+            updatedAt: DateTime.makeUnsafe(fixedTime),
+          };
+          return Effect.succeed(new Map([[recordingMessageId, message]]));
+        },
+        getThreadShell: (id) =>
+          Effect.succeed(
+            liveThreadShell(id, { runtimeMode: id === restricted ? "auto" : "full-access" }),
+          ),
+      }),
+    ),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(layerTest(process.cwd(), { prefix: "t3-companion-mcp-" })),
+    Layer.provide(
+      Layer.succeed(AssetSigner, {
+        sign: () => Effect.succeed("test-signature"),
+        verify: (_payload, signature) => Effect.succeed(signature === "test-signature"),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+const testLayer = makeTestLayer();
 
 const png =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
@@ -220,7 +272,7 @@ it.effect("keeps a completed recording scoped to the original thread", () =>
       },
     });
     expect(result.content.map(({ type }) => type)).toEqual(["text"]);
-  }).pipe(Effect.provide(testLayer)),
+  }).pipe(Effect.provide(makeTestLayer("Record Test desktop for 10 seconds"))),
 );
 
 it.effect("delivers Windows button and field receipts only to the requesting thread", () =>
@@ -405,6 +457,12 @@ it.effect("returns a signed Android MP4 recording to its original conversation",
       clientRequestId: "android-video",
     });
     expect(queued.isError).not.toBe(true);
+    const retry = yield* call("t3_companion_enqueue", {
+      deviceId,
+      action: "record-screen",
+      clientRequestId: "agent-changed-the-key",
+    });
+    expect(retry.structuredContent).toEqual(queued.structuredContent);
     const job = store.listen(deviceId, "Test Android").job!;
     expect(job.durationSeconds).toBe(10);
     store.approve(deviceId, job.id);
@@ -422,5 +480,31 @@ it.effect("returns a signed Android MP4 recording to its original conversation",
       captureScope: "android-screen",
       recording: { url: expect.stringMatching(/\.mp4$/u), expiresAt: expect.any(Number) },
     });
-  }).pipe(Effect.provide(testLayer)),
+  }).pipe(Effect.provide(makeTestLayer("录 Test Android 十秒给我看"))),
+);
+
+it.effect.each([
+  ["帮我排查录屏", true],
+  ["不要录 K60 七秒给我看", true],
+  ["录 K60 七秒给我看", false],
+  ["录 K60 三秒给我看", true],
+  ["录 K90 七秒给我看", true],
+] as const)(
+  "blocks recording without matching user authorization: %s (%s)",
+  ([text, authenticated]) =>
+    Effect.gen(function* () {
+      const { call } = yield* setup();
+      const { stateDir } = yield* ServerConfig;
+      const store = getAndroidCaptureStore(stateDir);
+      const phone = "android:consent-test";
+      store.listen(phone, "K60");
+      const result = yield* call("t3_companion_enqueue", {
+        deviceId: phone,
+        action: "record-screen",
+        durationSeconds: 7,
+        clientRequestId: "agent",
+      });
+      expect(result.isError).toBe(true);
+      expect(store.listen(phone, "K60").job).toBeNull();
+    }).pipe(Effect.provide(makeTestLayer(text, authenticated))),
 );

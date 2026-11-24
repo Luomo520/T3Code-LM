@@ -96,6 +96,11 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA busy_timeout = 2500;
+    CREATE TABLE IF NOT EXISTS recording_authorizations (
+      thread_id TEXT NOT NULL, message_id TEXT NOT NULL, device_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL, PRIMARY KEY(thread_id, message_id)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS recording_authorizations_expiry ON recording_authorizations(expires_at);
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       thread_id TEXT NOT NULL,
@@ -195,6 +200,26 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
 
   return {
     close: () => db.close(),
+    // 两端各有任务队列。一次授权先绑定设备，避免同名设备重新上线后重复消费原指令。
+    claimRecordingAuthorization(
+      threadId: string,
+      messageId: string,
+      deviceId: string,
+      expiresAt: number,
+    ) {
+      const time = now();
+      db.prepare("DELETE FROM recording_authorizations WHERE expires_at <= ?").run(time);
+      if (time >= expiresAt) return false;
+      db.prepare(
+        "INSERT INTO recording_authorizations VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+      ).run(threadId, messageId, deviceId, expiresAt);
+      const row = db
+        .prepare(
+          "SELECT device_id FROM recording_authorizations WHERE thread_id = ? AND message_id = ?",
+        )
+        .get(threadId, messageId);
+      return row?.device_id === deviceId;
+    },
     list() {
       const time = sweep();
       return [...devices.entries()].map(([deviceId, device]) => ({
