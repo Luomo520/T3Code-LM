@@ -149,6 +149,65 @@ it("requires the phone's explicit confirmation before opening Android consent an
   }
 });
 
+it.each([
+  ["inactive", 1],
+  ["active", 2],
+] as const)("checks the original job after a lost upload receipt (%s)", async (status, uploads) => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const root = createRoot(document.createElement("div"));
+  const job = {
+    id: "record-weak-network",
+    threadId: "from-phone",
+    action: "record-screen",
+    durationSeconds: 7,
+    expiresAt: 1_800_000_000_000,
+  };
+  let attempts = 0;
+  state.unlocked.mockResolvedValue(true);
+  state.capture.mockResolvedValue({
+    status: "done",
+    uri: "file:///cache/clip.mp4",
+    name: "clip.mp4",
+  });
+  state.send.mockImplementation(async ({ environmentId, input }) => {
+    expect(environmentId).toBe("env-android");
+    if (input._tag !== "listen") expect(input.id).toBe(job.id);
+    switch (input._tag) {
+      case "listen":
+        return { _tag: "Success", value: { _tag: "pending", job } };
+      case "approve":
+        return { _tag: "Success", value: { _tag: "active", job } };
+      case "complete":
+        return ++attempts === 1
+          ? { _tag: "Failure" }
+          : { _tag: "Success", value: { _tag: "accepted" } };
+      case "status":
+        return { _tag: "Success", value: { _tag: status, job } };
+      default:
+        throw new Error(input._tag);
+    }
+  });
+  try {
+    await act(async () => root.render(<AndroidCaptureCoordinator />));
+    await act(async () =>
+      state.alert.mock.calls[0]?.[2].find(({ text }) => text === "继续系统授权")?.onPress(),
+    );
+    expect(state.send.mock.calls.map(([{ input }]) => input._tag)).toEqual([
+      "listen",
+      "approve",
+      "complete",
+      "status",
+      ...(uploads === 2 ? ["complete"] : []),
+    ]);
+    expect(state.capture).toHaveBeenCalledOnce();
+    expect(state.deleteFile).toHaveBeenCalledOnce();
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+    vi.resetAllMocks();
+  }
+});
+
 it("presents a queued recording only once after returning to the foreground", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.active = false;

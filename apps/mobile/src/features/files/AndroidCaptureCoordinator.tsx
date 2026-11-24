@@ -106,9 +106,14 @@ function EnvironmentCaptureCoordinator({
   ) {
     const response = await request(input);
     if (response._tag === "Success") return;
-    // 传输结果已提交但未收到响应时，服务端接受相同结果的重试。
+    // 弱网可能只丢了回执。先查同一请求，已经结束的任务无需再发整段视频。
     if (input._tag === "complete" && action) {
-      if (!(await native.isUnlocked())) {
+      if (!available.current || current.current !== input.id) return;
+      const status = await request({ _tag: "status", id: input.id });
+      if (status._tag === "Success" && status.value._tag === "inactive") return;
+      const unlocked = await native.isUnlocked();
+      if (!available.current || current.current !== input.id) return;
+      if (!unlocked) {
         await request({ _tag: "reject", id: input.id, reason: "locked" });
         return;
       }
