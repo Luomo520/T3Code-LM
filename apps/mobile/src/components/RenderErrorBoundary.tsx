@@ -1,4 +1,3 @@
-import { Observe } from "expo-observe";
 import { Component, type ReactNode } from "react";
 import { ScrollView, View } from "react-native";
 
@@ -62,9 +61,7 @@ export class RenderErrorBoundary extends Component<
     return { failed: true, error };
   }
 
-  override componentDidCatch(error: unknown, info: { componentStack?: string }) {
-    // A caught render error never reaches Observe's global handler.
-    Observe.reportError(error);
+  override componentDidCatch(_error: unknown, info: { componentStack?: string }) {
     this.setState({ componentStack: info.componentStack });
   }
 
@@ -104,7 +101,9 @@ export function RenderFailureView(
       <Text accessibilityRole="header" className="text-center text-xl font-t3-bold">
         {title}
       </Text>
-      <Text className="text-center text-sm text-foreground-muted">{gt("Try again. If the problem continues, copy the details to report it.")}</Text>
+      <Text className="text-center text-sm text-foreground-muted">
+        {gt("Try again. If the problem continues, copy the details to report it.")}
+      </Text>
       <Text selectable className="text-center font-mono text-xs text-danger-foreground">
         {props.details.split("\n", 1)[0]?.slice(0, 300)}
       </Text>

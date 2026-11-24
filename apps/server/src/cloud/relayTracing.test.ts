@@ -9,15 +9,12 @@ import { FetchHttpClient } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
-import { relayLayer } from "./relayTracing.ts";
+import { layerServerRelayBroker } from "./relayTracing.ts";
 
 const tracesTo = (policy?: ManagedPolicyDocument) =>
   Effect.service(RelayTracing.RelayClientTracer).pipe(
     Effect.provide(
-      relayLayer(
-        { serviceName: "t3code-server", runtime: "node", client: "environment-server" },
-        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
-      ).pipe(
+      layerServerRelayBroker.pipe(
         Layer.provide(ManagedPolicy.layerTest(policy)),
         Layer.provide(
           ServerConfig.layerTest(process.cwd(), { prefix: "t3-relay-tracing-" }).pipe(
@@ -32,7 +29,7 @@ const tracesTo = (policy?: ManagedPolicyDocument) =>
 
 it.effect("a policy with telemetry off stops relay tracing to T3 Connect", () =>
   Effect.gen(function* () {
-    assert.isTrue(yield* tracesTo());
+    assert.isFalse(yield* tracesTo());
     assert.isFalse(
       yield* tracesTo({
         schemaVersion: 1,

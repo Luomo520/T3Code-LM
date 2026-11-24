@@ -318,18 +318,8 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
   Effect.orDie,
 );
 
-export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
-  Config.all({
-    ...sdkFlags,
-    telemetry: flag("T3CODE_TELEMETRY_ENABLED", T3CODE_TRUE, T3CODE_FALSE, String),
-  }).pipe(
-    Effect.map(
-      ({ telemetry, t3, spec }) => telemetry.value !== false && !(t3.value ?? spec.value ?? false),
-    ),
-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
-    Effect.orDie,
-    Effect.runSync,
-  );
+// 保留旧桌面 IPC 的查询语义，环境变量不能开启产品遥测。
+export const isRelayTracingEnabled = (_env: Readonly<Record<string, string | undefined>>) => false;
 
 export type SignalName = "traces" | "metrics" | "logs";
 

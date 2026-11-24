@@ -387,19 +387,12 @@ describe("OtelEnvironment", () => {
 });
 
 describe("isRelayTracingEnabled", () => {
-  it("defaults on and respects the T3CODE SDK override of the standard kill switch", () => {
-    assert.isTrue(OtelEnvironment.isRelayTracingEnabled({}));
-    assert.isFalse(OtelEnvironment.isRelayTracingEnabled({ OTEL_SDK_DISABLED: "true" }));
-    assert.isTrue(
-      OtelEnvironment.isRelayTracingEnabled({
-        OTEL_SDK_DISABLED: "true",
-        T3CODE_OTEL_SDK_DISABLED: "false",
-      }),
-    );
+  it("旧环境变量不能重新开启中继上报", () => {
+    assert.isFalse(OtelEnvironment.isRelayTracingEnabled({}));
     assert.isFalse(
       OtelEnvironment.isRelayTracingEnabled({
-        OTEL_SDK_DISABLED: "false",
-        T3CODE_OTEL_SDK_DISABLED: "true",
+        T3CODE_TELEMETRY_ENABLED: "true",
+        T3CODE_OTEL_SDK_DISABLED: "false",
       }),
     );
   });
