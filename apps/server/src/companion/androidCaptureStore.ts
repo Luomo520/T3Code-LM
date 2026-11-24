@@ -52,12 +52,19 @@ function decodeMp4(base64: string) {
   let offset = 0;
   let boxes = 0;
   while (offset + 8 <= data.length && ++boxes <= 32) {
-    const size = data.readUInt32BE(offset);
+    const shortSize = data.readUInt32BE(offset);
+    const remaining = data.length - offset;
+    // Android 的 MPEG4Writer 即使只录几秒，也可能给 mdat 使用 64 位长度。
+    const header = shortSize === 1 ? 16 : 8;
+    if (remaining < header) throw invalid;
+    const wideSize = shortSize === 1 ? data.readBigUInt64BE(offset + 8) : null;
+    if (wideSize !== null && wideSize > BigInt(remaining)) throw invalid;
+    const size = wideSize !== null ? Number(wideSize) : shortSize || remaining;
     const type = data.toString("ascii", offset + 4, offset + 8);
-    if (size < 8 || offset + size > data.length || (offset === 0 && type !== "ftyp")) {
+    if (size < header || size > remaining || (offset === 0 && type !== "ftyp")) {
       throw invalid;
     }
-    if (type === "mdat" && size <= 8) throw invalid;
+    if (type === "mdat" && size <= header) throw invalid;
     types.add(type);
     offset += size;
   }

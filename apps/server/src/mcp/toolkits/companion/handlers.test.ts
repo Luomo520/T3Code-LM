@@ -310,7 +310,7 @@ it.effect("returns a signed Android MP4 recording to its original conversation",
     expect(() => store.complete(deviceId, job.id, png)).toThrow(/MP4/u);
     // 测试容器边界、扩展和原会话签名。视频解码由客户端的原生播放器负责。
     const media = Buffer.from(
-      "000000106674797069736F6D00000000000000086D6F6F76000000096D64617401",
+      "000000106674797069736F6D00000000000000086D6F6F76000000016D646174000000000000001101",
       "hex",
     ).toString("base64");
     store.complete(deviceId, job.id, media);

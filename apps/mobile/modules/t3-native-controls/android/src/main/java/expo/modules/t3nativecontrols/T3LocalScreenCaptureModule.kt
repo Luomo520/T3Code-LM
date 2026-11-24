@@ -4,7 +4,6 @@ import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
-import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.PowerManager
 import androidx.lifecycle.Lifecycle
@@ -24,7 +23,7 @@ internal enum class T3CaptureMode { SCREENSHOT, RECORDING }
 internal data class T3CaptureDisplay(val width: Int, val height: Int, val densityDpi: Int)
 
 @Suppress("DEPRECATION")
-private fun captureDisplay(activity: Activity): T3CaptureDisplay {
+internal fun captureDisplay(activity: Activity): T3CaptureDisplay {
   val density = activity.resources.displayMetrics.densityDpi
   if (Build.VERSION.SDK_INT >= 30) {
     val bounds = activity.windowManager.maximumWindowMetrics.bounds
@@ -79,7 +78,6 @@ internal fun localCaptureUnlocked(context: Context): Boolean =
 
 class T3LocalScreenCaptureModule : Module() {
   private val owner = UUID.randomUUID().toString()
-  private var systemRequest: T3CaptureRequest? = null
 
   override fun definition() = ModuleDefinition {
     Name("T3LocalScreenCapture")
@@ -110,29 +108,6 @@ class T3LocalScreenCaptureModule : Module() {
       T3CaptureRequests.stop(owner, false, requestId)
     }.runOnQueue(Queues.MAIN)
 
-    OnActivityResult { activity, response ->
-      if (response.requestCode != REQUEST_CAPTURE) return@OnActivityResult
-      val request = systemRequest ?: return@OnActivityResult
-      systemRequest = null
-      // 面板已经离开时，丢弃迟到的系统授权。
-      if (T3CaptureRequests.current !== request) return@OnActivityResult
-      val data = response.data
-      if (!localCaptureUnlocked(activity)) {
-        request.resolve(null, "locked")
-      } else if (response.resultCode != Activity.RESULT_OK || data == null) {
-        request.resolve(null, "denied")
-      } else {
-        try {
-          request.display = captureDisplay(activity)
-          request.authorization = data
-          request.resultCode = response.resultCode
-          activity.startForegroundService(Intent(activity, T3LocalScreenCaptureService::class.java))
-        } catch (_: RuntimeException) {
-          request.resolve(null)
-        }
-      }
-    }
-
     OnDestroy {
       android.os.Handler(android.os.Looper.getMainLooper()).post { T3CaptureRequests.stop(owner, false) }
     }
@@ -151,31 +126,28 @@ class T3LocalScreenCaptureModule : Module() {
       val visible = if (remoteDurationSeconds == null) activity.hasWindowFocus()
         else (activity as? LifecycleOwner)?.lifecycle?.currentState == Lifecycle.State.RESUMED
       check(visible) { "请回到会话后再确认本次屏幕捕获。" }
-      check(T3CaptureRequests.current == null && systemRequest == null) { "已有屏幕捕获请求，请先结束它。" }
+      check(T3CaptureRequests.current == null) { "已有屏幕捕获请求，请先结束它。" }
       val request = T3CaptureRequest(owner, mode, requestId, remoteDurationSeconds)
       T3CaptureRequests.current = request
-      systemRequest = request
       request.onStarted = { sendEvent("onRecordingStarted", mapOf("requestId" to requestId)) }
       try {
-        launchConsent(activity)
+        val access = if (mode == T3CaptureMode.SCREENSHOT) T3ShizukuApkInstaller.accessStatus() else null
+        val method = if (access == "root" || access == "adb") T3DeviceScreenshot.choose(activity, access) else "system"
+        if (T3CaptureRequests.current === request) {
+          when (method) {
+            "cancel" -> request.resolve(null, "canceled")
+            "device" -> {
+              val file = T3DeviceScreenshot.capture(activity, request, checkNotNull(access))
+              if (localCaptureUnlocked(activity)) request.resolve(file)
+              else { file.delete(); request.resolve(null, "locked") }
+            }
+            else -> T3ProjectionConsentActivity.launch(activity, request.id)
+          }
+        }
         request.result.await()
       } finally {
         if (T3CaptureRequests.current === request) T3CaptureRequests.stop(owner, false)
       }
     }
 
-  @Suppress("DEPRECATION")
-  private fun launchConsent(activity: Activity) {
-    try {
-      val manager = activity.getSystemService(MediaProjectionManager::class.java)
-      activity.startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE)
-    } catch (cause: RuntimeException) {
-      systemRequest = null
-      throw cause
-    }
-  }
-
-  private companion object {
-    const val REQUEST_CAPTURE = 0x7491
-  }
 }

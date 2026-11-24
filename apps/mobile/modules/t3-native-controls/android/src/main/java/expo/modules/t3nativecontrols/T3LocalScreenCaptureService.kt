@@ -35,6 +35,7 @@ class T3LocalScreenCaptureService : Service() {
   private var display: VirtualDisplay? = null
   private var images: ImageReader? = null
   private var recorder: MediaRecorder? = null
+  private var recordingStartedMs = 0L
   private var recording = false
   private var output: File? = null
   private var screenObserverRegistered = false
@@ -173,6 +174,7 @@ class T3LocalScreenCaptureService : Service() {
     display = session.createVirtualDisplay("T3 录屏", width, height, size.densityDpi,
       DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, video.surface, null, handler)
     video.start()
+    recordingStartedMs = android.os.SystemClock.elapsedRealtime()
     recording = true
     request.onStarted?.invoke()
     handler.postDelayed({ finish(true) }, (request.remoteDurationSeconds ?: 30) * 1_000L)
@@ -185,6 +187,7 @@ class T3LocalScreenCaptureService : Service() {
     handler.removeCallbacksAndMessages(null)
     // 保留录像时先完成 MP4 封装。锁屏或撤销时直接释放输入并删除临时文件。
     val unlocked = localCaptureUnlocked(this)
+    val elapsedUs = (android.os.SystemClock.elapsedRealtime() - recordingStartedMs) * 1_000L
     val videoComplete = !recording || (
       keepResult && unlocked && runCatching { recorder?.stop() }.isSuccess
     )
@@ -206,6 +209,10 @@ class T3LocalScreenCaptureService : Service() {
     output = null
     val saved = file?.takeIf {
       keepResult && unlocked && localCaptureUnlocked(this) && videoComplete && it.length() > 0
+    }
+    if (saved != null && request.mode == T3CaptureMode.RECORDING) {
+      // 封装失败时原始录像仍可播放。单文件时长最多 30 秒。
+      runCatching { preserveRecordingDuration(saved, elapsedUs) }
     }
     if (saved == null) file?.delete()
     request.resolve(saved, if (unlocked && localCaptureUnlocked(this)) failure else "locked")

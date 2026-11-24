@@ -14,6 +14,9 @@
     </intent>
   </queries>
   <application>
+    <activity android:name=".T3ProjectionConsentActivity" android:exported="false"
+      android:taskAffinity="${applicationId}.projectionConsent" android:excludeFromRecents="true"
+      android:theme="@android:style/Theme.Material.Light.NoActionBar" />
     <receiver android:name=".T3ReceivedApkInstallSession" android:exported="false" />
     <provider
       android:name="rikka.shizuku.ShizukuProvider"

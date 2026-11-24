@@ -51,11 +51,11 @@ class T3ApkInstallService : IT3ApkInstallService.Stub() {
     }
     if ("package:$packageName" in packages) return "设备授权安装不适用于系统应用，请使用系统安装器。"
 
-    // 固定安装包名，Android 会核对实际 APK 内的包名。
+    // 省略路径时从标准输入读取；HyperOS 会把单独的短横线误判成未知选项。
 
     val process = ProcessBuilder(
       "/system/bin/cmd", "package", "install", "-r", "--user", userId.toString(),
-      "--pkg", packageName, "-S", sizeBytes.toString(), "-"
+      "--pkg", packageName, "-S", sizeBytes.toString()
     ).redirectErrorStream(true).start()
     val readResult = FutureTask {
       process.inputStream.bufferedReader().use { it.readText().trim() }
