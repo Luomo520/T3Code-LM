@@ -1183,6 +1183,7 @@ export const AndroidCaptureFailure = Schema.Literals([
   "failed",
 ]);
 export const AndroidCaptureJob = Schema.Struct({
+  progressReceipts: Schema.optionalKey(Schema.Literal(true)),
   id: CompanionIdentifier,
   threadId: ThreadId,
   action: AndroidCaptureAction,
@@ -1201,6 +1202,10 @@ export const AndroidCaptureInput = Schema.Union([
     delivery: Schema.optionalKey(
       Schema.Literals(["background-ready", "background", "unavailable"]),
     ),
+  }),
+  Schema.TaggedStruct("progress", {
+    id: CompanionIdentifier,
+    stage: Schema.Literals(["received", "recording"]),
   }),
   Schema.TaggedStruct("approve", { id: CompanionIdentifier }),
   Schema.TaggedStruct("status", { id: CompanionIdentifier }),

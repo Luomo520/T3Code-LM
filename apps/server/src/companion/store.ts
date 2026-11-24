@@ -50,7 +50,16 @@ export function isLocalWindowsAction(action: string): boolean {
   return LOCAL_WINDOWS_ACTIONS.some((candidate) => candidate === action);
 }
 
+export const WINDOWS_FORM_ACTIONS = ["press-window-button", "fill-window-field"] as const;
+export function isWindowsFormAction(action: string) {
+  return WINDOWS_FORM_ACTIONS.some((item) => item === action);
+}
+function supportsLocalAction(action: string, info: Strings) {
+  if (isWindowsFormAction(action)) return info.formControlsV1 === "true";
+  return !isLocalWindowsAction(action) || info.localToolsV1 === "true";
+}
 const actions = [
+  ...WINDOWS_FORM_ACTIONS,
   "screenshot",
   "record-screen",
   "open-t3",
@@ -623,12 +632,11 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         if (task === undefined) return { name: device.name, job: null };
         const params = JSON.parse(task.params) as Strings;
         // 领取时使用当前设备上报的能力，避免已排队的请求交给降级后的旧客户端。
-        const unsupported =
-          isLocalWindowsAction(task.action) && info.localToolsV1 !== "true"
-            ? LOCAL_WINDOWS_TOOLS_UPGRADE
-            : !supportsCaptureOptions(params, info)
-              ? "The Windows companion no longer supports the requested capture options."
-              : undefined;
+        const unsupported = !supportsLocalAction(task.action, info)
+          ? LOCAL_WINDOWS_TOOLS_UPGRADE
+          : !supportsCaptureOptions(params, info)
+            ? "The Windows companion no longer supports the requested capture options."
+            : undefined;
         if (unsupported !== undefined) {
           db.prepare(`
             UPDATE tasks SET status = 'failed', message = ?, updated_at = ? WHERE id = ?
@@ -1044,6 +1052,17 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
       if (localAction && Object.keys(params).length !== 0) {
         throw new CompanionError(400, "该 Windows 操作不接受参数，请在受控端选择。");
       }
+      if (isWindowsFormAction(action)) {
+        const fill = action === "fill-window-field";
+        if (
+          Object.keys(params).some((key) => key !== "controlName" && !(fill && key === "text")) ||
+          (params.controlName !== undefined &&
+            (!params.controlName.trim() || params.controlName.length > 96)) ||
+          (fill && (typeof params.text !== "string" || params.text.length > 512))
+        ) {
+          throw new CompanionError(400, "窗口控件参数无效。");
+        }
+      }
       const thread = label(threadId, 512);
       const request = label(clientRequestId, 128);
       const encodedParams = encodeStrings(params);
@@ -1066,7 +1085,7 @@ export function createCompanionStore(stateDir: string, now = Date.now) {
         const device = db.prepare("SELECT name, info FROM devices WHERE id = ?").get(deviceId);
         if (device === undefined) throw new CompanionError(404, "Windows companion not found.");
         const info = JSON.parse(String(device.info)) as Strings;
-        if (localAction && info.localToolsV1 !== "true") {
+        if (!supportsLocalAction(action, info)) {
           throw new CompanionError(409, LOCAL_WINDOWS_TOOLS_UPGRADE);
         }
         if (!supportsCaptureOptions(params, info)) {

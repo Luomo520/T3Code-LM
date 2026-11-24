@@ -93,7 +93,18 @@ export function checkAndroidCaptureRequestsInBackground(): Promise<void> {
           recording: job.action === "record-screen",
           expiresInMs: job.expiresInMs,
         });
-        if (delivered) handled.set(environmentId, job.id);
+        if (delivered) {
+          if (job.progressReceipts) {
+            const receipt = await runAtomCommand(
+              appAtomRegistry,
+              captureCommand,
+              { environmentId, input: { _tag: "progress", id: job.id, stage: "received" } },
+              { reportFailure: false, reportDefect: false },
+            );
+            if (receipt._tag !== "Success") return;
+          }
+          handled.set(environmentId, job.id);
+        }
       } finally {
         // 网络失败时释放当前查询，下次检查可用同一配对环境重试。
         inFlight.delete(environmentId);

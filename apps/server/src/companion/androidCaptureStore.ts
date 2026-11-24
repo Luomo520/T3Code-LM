@@ -14,6 +14,8 @@ import * as NodeSqlite from "node:sqlite";
 import { archivedCapturePath, captureArchiveDirectory } from "./captureArchive.ts";
 import { CompanionError, decodePng } from "./store.ts";
 
+const RECEIVED = "手机已收到请求，等待本机处理。";
+const RECORDING = "手机已开始录屏。";
 const REQUEST_TTL = 45_000;
 // 后台检查的运行时机由 Android 决定，等待本机确认的请求需要独立的有效期。
 const BACKGROUND_REQUEST_TTL = 10 * 60_000;
@@ -146,6 +148,7 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
   );
   const job = (task: CaptureRow, time: number) => ({
     id: task.id,
+    progressReceipts: true as const,
     threadId: ThreadId.make(task.thread_id),
     action: task.action,
     durationSeconds: task.seconds,
@@ -252,7 +255,7 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
       db.prepare(`
         INSERT INTO tasks (id, thread_id, device_id, device_name, request_id, action, seconds,
           expires_at, updated_at, status, message)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '等待目标手机本机确认。')
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '已排队，等待手机接收。')
       `).run(
         id,
         threadId,
@@ -265,6 +268,23 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
         time,
       );
       return taskView(inThread(threadId, id));
+    },
+    progress(deviceId: string, id: string, stage: "received" | "recording") {
+      const time = sweep();
+      const task = owned(deviceId, id);
+      const receiving = stage === "received" && task.status === "queued";
+      const recording =
+        stage === "recording" && task.status === "running" && task.action === "record-screen";
+      const message = receiving ? RECEIVED : recording ? RECORDING : undefined;
+      // 手机重连和事件延迟均可能重送回执。终态和原有到期时间应保留。
+      if (message && task.message !== message) {
+        db.prepare("UPDATE tasks SET message = ?, updated_at = ? WHERE id = ? AND status = ?").run(
+          message,
+          time,
+          id,
+          task.status,
+        );
+      }
     },
     approve(deviceId: string, id: string) {
       const time = sweep();
@@ -315,7 +335,10 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
           NodeFS.linkSync(temporary, file);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-          if (NodeFS.statSync(file).size !== data.length || !NodeFS.readFileSync(file).equals(data)) {
+          if (
+            NodeFS.statSync(file).size !== data.length ||
+            !NodeFS.readFileSync(file).equals(data)
+          ) {
             throw new CompanionError(409, "Existing Android capture differs from the upload.");
           }
         }

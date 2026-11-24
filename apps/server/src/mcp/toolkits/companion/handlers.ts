@@ -6,6 +6,7 @@ import {
   CompanionError,
   getCompanionStore,
   isLocalWindowsAction,
+  isWindowsFormAction,
 } from "../../../companion/store.ts";
 import {
   getAndroidCaptureStore,
@@ -133,6 +134,9 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
       let params: Record<string, string> = {};
       const fail = (message: string) =>
         new OrchestratorMcpFailure({ code: "invalid_request", message });
+      if (input.controlName !== undefined && !isWindowsFormAction(input.action)) {
+        return yield* fail("控件名称只适用于窗口表单操作。");
+      }
       if (
         isLocalWindowsAction(input.action) &&
         (input.attachmentId !== undefined ||
@@ -183,6 +187,20 @@ export const layerStandard = McpToolAccess.toLayer(CompanionStandardToolkit, {
         params = {
           ...(captureKind === undefined ? {} : { captureKind }),
           ...(durationSeconds === undefined ? {} : { durationSeconds: String(durationSeconds) }),
+        };
+      } else if (isWindowsFormAction(input.action)) {
+        if (
+          input.attachmentId !== undefined ||
+          input.captureKind !== undefined ||
+          input.durationSeconds !== undefined ||
+          (input.action === "press-window-button" && input.text !== undefined) ||
+          (input.action === "fill-window-field" && typeof input.text !== "string")
+        ) {
+          return yield* fail("请提供对应的窗口操作和填写内容。");
+        }
+        params = {
+          ...(input.controlName !== undefined ? { controlName: input.controlName } : {}),
+          ...(text !== undefined ? { text } : {}),
         };
       } else if (input.action === "receive-file") {
         if (!attachmentId) return yield* fail("Select a file already attached to this thread.");

@@ -17,7 +17,8 @@
 10. 保存原会话发来的 MSI 后，可在受控端选择「打开安装器」，核对文件与来源并在 Windows 确认。安装器结束后，原会话可查看安装结果。如果受控端退出或 Windows 重启，重新选择「恢复接收」后可继续提交这次安装的回执。恢复时只读取安装登记，证据不足则显示「尚未核实」。
 11. 「检查窗口控件」可选择受控端能识别的记事本、计算器或画图窗口。受控端在本机列出可见的按钮、菜单项、复选框和单选按钮名称，只把 Windows 用户勾选的条目发回原会话。部分由系统宿主承载的应用窗口可能不会列出。
 12. 在受控端的「本机脚本…」中选择「批准脚本…」，可登记机主已审阅、保存在本机固定磁盘上的 PowerShell `.ps1`。脚本更新后需重新批准，也可以随时在同一列表撤销批准。会话发起「运行本机脚本」请求后，机主仍须在 Windows 选择并确认运行。程序以当前普通用户权限执行脚本，沿用 Windows PowerShell 执行策略。原会话只收到执行状态。列表也提供检查 OpenSSH 客户端和当前用户临时目录的预设。
-13. 「打开 SSH 终端」允许机主从 `%USERPROFILE%\.ssh\config` 里选择一个普通 `Host` 别名。需要先安装系统 OpenSSH 客户端。受控端打开独立终端，机主在本机核对主机并登录。配置中的 `Include`、`Match`、代理命令和预设远端命令须从 Windows 终端直接使用。此入口关闭 SSH 转发。SSH 窗口关闭后可重新编辑配置。原会话只收到终端启动状态。
+13. 在会话中请求点击窗口按钮或填写字段。机主在电脑上选择受支持的记事本、计算器或画图窗口，再确认控件和文字。受控端在执行前重新核对窗口，窗口变化或本机接手会取消操作。
+14. 「打开 SSH 终端」允许机主从 `%USERPROFILE%\.ssh\config` 里选择一个普通 `Host` 别名。需要先安装系统 OpenSSH 客户端。受控端打开独立终端，机主在本机核对主机并登录。配置中的 `Include`、`Match`、代理命令和预设远端命令须从 Windows 终端直接使用。此入口关闭 SSH 转发。SSH 窗口关闭后可重新编辑配置。原会话只收到终端启动状态。
 14. 从受控端选择「解除配对」后退出，再从 Windows 的「已安装的应用」卸载。设备也可以在 T3Code-LM 的设备控制界面撤销。
 
 ## 构建
@@ -28,7 +29,7 @@
 .\build.ps1 -MakeNsis 'C:\Path\To\makensis.exe'
 ```
 
-成品位于 `build/T3Code-LM-Companion-0.2.5-1-Windows-x64-Setup.exe`。WinForms 提供原生窗口与通知区域，.NET Framework 提供 HTTPS 和 DPAPI，Win32 提供截图，NSIS 提供按用户安装和卸载。安装程序采用应用版本 0.2.5-1，Windows 文件版本为 0.2.5.1。
+成品位于 `build/T3Code-LM-Companion-0.2.5-2-localtest.1-Windows-x64-Setup.exe`。WinForms 提供原生窗口与通知区域，.NET Framework 提供 HTTPS 和 DPAPI，Win32 提供截图，NSIS 提供按用户安装和卸载。安装程序采用应用版本 0.2.5-2-localtest.1，Windows 文件版本为 0.2.5.2。
 
 `CompanionWindow.cs` 负责界面、配对和本机确认。 `CaptureChoice.cs` 和 `CaptureTarget.cs` 负责本机目标选择、校验和拍摄。 `Transport.cs` 负责服务器协议和配对记录。 `DesktopWindowChoice.cs` 和 `WindowsDesktop.cs` 负责选择及操作固定应用的窗口，`WindowsMcp.cs` 查询本机接管状态。 `Recording.cs` 负责写入本机 MJPEG AVI。
 

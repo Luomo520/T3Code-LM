@@ -47,7 +47,8 @@ internal static class DeviceInfo
         return new Dictionary<string, string>(details)
         {
             { "desktopState", state },
-            { "localToolsV1", "true" }
+            { "localToolsV1", "true" },
+            { "formControlsV1", "true" }
         };
     }
 

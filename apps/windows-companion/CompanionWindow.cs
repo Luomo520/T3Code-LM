@@ -967,7 +967,7 @@ internal sealed class CompanionWindow : Form
     private static bool IsDesktopAction(string action)
     {
         return action == "open-t3" || action == "open-notepad" || action == "close-window" ||
-            action == "write-notepad" || action == "read-notepad" || IsLocalToolAction(action);
+            action == "write-notepad" || action == "read-notepad" || IsLocalToolAction(action) || WindowFormControl.Supports(action);
     }
 
     private static bool IsLocalToolAction(string action)
@@ -995,6 +995,8 @@ internal sealed class CompanionWindow : Form
             case "write-notepad": label = "选择记事本窗口并替换编辑区文字"; break;
             case "read-notepad": label = "选择记事本窗口并将编辑区文字发回会话"; break;
             case "inspect-window-controls": label = "选择窗口并确认回传控件名称"; break;
+            case "press-window-button": label = "选择窗口并确认点击按钮"; break;
+            case "fill-window-field": label = "选择窗口并确认填写文字"; break;
             case "run-approved-script": label = "选择并运行已批准的本机脚本"; break;
             case "open-ssh-profile": label = "选择本机 SSH 配置并打开终端"; break;
             default:
@@ -1132,6 +1134,41 @@ internal sealed class CompanionWindow : Form
         Dictionary<string, object> outcome, Action verifyRequest, Func<Task> verifyJob, Stopwatch requestAge)
     {
         verifyRequest();
+        if (WindowFormControl.Supports(action))
+        {
+            using (var cancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
+            {
+                inProgress = cancel;
+                try
+                {
+                    var fields = arguments ?? new Dictionary<string, object>();
+                    bool fill = action == "fill-window-field";
+                    foreach (var key in fields.Keys)
+                        if (key != "controlName" && !(fill && key == "text")) throw new InvalidOperationException("窗口操作参数无效。");
+                    string name = Json.String(fields, "controlName");
+                    string text = fields.ContainsKey("text") ? fields["text"] as string : null;
+                    if ((name != null && name.Length > 96) || (fill && (text == null || text.Length > 512)))
+                        throw new InvalidOperationException("控件名称或填写内容无效。");
+                    var windows = WindowsDesktop.ListInspectableWindows();
+                    if (windows.Count == 0) throw new InvalidOperationException("请先打开受支持的普通窗口。");
+                    var window = DesktopActionChoice.Pick(this, windows, "选择窗口", "仅操作所选窗口中的一个控件。",
+                        "选择控件", requestAge, dialog => desktopChoiceDialog = dialog);
+                    await WindowsDesktop.CheckBeforeWindowAction(window, Handle, verifyRequest, verifyJob, cancel.Token);
+                    var choices = await WindowFormControl.Find(window, fill, name, cancel.Token);
+                    if (choices.Count == 0) throw new InvalidOperationException("所选窗口没有符合条件的可操作控件。");
+                    var control = DesktopActionChoice.Pick(this, choices, fill ? "确认填写" : "确认点击",
+                        fill ? "将替换所选字段的内容：" + text : "请选择这次允许点击的按钮。", fill ? "填写" : "点击",
+                        requestAge, dialog => desktopChoiceDialog = dialog);
+                    await WindowsDesktop.CheckBeforeWindowAction(window, Handle, verifyRequest, verifyJob, cancel.Token);
+                    var ownerHandle = Handle;
+                    // 在输入前再次核对原窗口和控件。UIA 操作不依赖屏幕坐标。
+                    control.Apply(window, text, () => WindowsDesktop.VerifyBeforeWindowAction(window, ownerHandle, verifyRequest, cancel.Token));
+                    outcome["message"] = fill ? "已填写所选字段。" : "已点击所选按钮。";
+                }
+                finally { inProgress = null; }
+            }
+            return;
+        }
         if (IsLocalToolAction(action))
         {
             outcome["message"] = await RunLocalTool(action, verifyRequest, verifyJob, requestAge);

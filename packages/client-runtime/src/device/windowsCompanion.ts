@@ -56,6 +56,7 @@ export function windowsCompanionCapabilities(device: CompanionDevice, enabled: b
     screenshot: availability,
     screenRecording: availability,
     desktopInput,
+    ...(device.info.formControlsV1 === "true" ? ({ windowForm: desktopInput } as const) : {}),
     ...(device.info.localToolsV1 === "true"
       ? ({
           inspectControls: desktopInput,

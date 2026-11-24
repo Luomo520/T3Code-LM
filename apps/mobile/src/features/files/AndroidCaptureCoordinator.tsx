@@ -76,6 +76,18 @@ function EnvironmentCaptureCoordinator({
   }, [environmentId, native]);
   const request = (input: typeof AndroidCaptureInput.Type) => command({ environmentId, input });
 
+  const recordingReceipt = useRef<string | null>(null);
+  useEffect(() => {
+    const subscription = native.addListener?.("onRecordingStarted", ({ requestId }) => {
+      if (recordingReceipt.current !== requestId || current.current !== requestId) return;
+      void command({
+        environmentId,
+        input: { _tag: "progress", id: requestId, stage: "recording" },
+      }).catch(() => {});
+    });
+    return () => subscription?.remove();
+  }, [command, environmentId, native]);
+
   async function finish(
     input: Extract<typeof AndroidCaptureInput.Type, { _tag: "reject" | "complete" }>,
     action?: Job["action"],
@@ -138,6 +150,7 @@ function EnvironmentCaptureCoordinator({
         return;
       }
       backendApproved.current = true;
+      recordingReceipt.current = job.progressReceipts ? job.id : null;
       const kind = captureKind(job.action);
       const captureOnce = () =>
         native.captureEnvironmentRequest
@@ -328,6 +341,9 @@ function EnvironmentCaptureCoordinator({
         if (captureOwner === existing.id) captureOwner = null;
       }
       if (!job || presented.current === job.id || captureOwner) return;
+      if (job.progressReceipts) {
+        void request({ _tag: "progress", id: job.id, stage: "received" }).catch(() => {});
+      }
       const policy = readAndroidCapturePolicy(environmentId, job.action);
       presented.current = job.id;
       if (policy === "deny") {

@@ -398,6 +398,10 @@ it.effect(
       ]);
       const pending = store.enqueue("original", device, "record-screen", "handoff", 10);
       time += 120_000;
+      expect(store.result("original", pending.id).message).toContain("等待手机接收");
+      expect(() => store.progress("android:other", pending.id, "received")).toThrow();
+      store.progress(device, pending.id, "received");
+      expect(store.result("original", pending.id).message).toContain("已收到");
       expect(store.listen(device, "Android", "background").job?.id).toBe(pending.id);
       expect(store.listen(device, "Android", "background").job?.id).toBe(pending.id);
       expect(store.result("original", pending.id).status).toBe("queued");
@@ -405,6 +409,9 @@ it.effect(
       expect(store.listen(device, "Android", "background-ready").job?.id).toBe(pending.id);
       expect(store.approve(device, pending.id)._tag).toBe("active");
       expect(store.listen(device, "Android", "background").job).toBeNull();
+      store.progress(device, pending.id, "recording");
+      store.progress(device, pending.id, "received");
+      expect(store.result("original", pending.id).message).toContain("已开始录屏");
       store.listen(device, "Android", "unavailable");
       expect(store.list()).toEqual([]);
       expect(store.result("original", pending.id)).toMatchObject({ status: "failed" });
