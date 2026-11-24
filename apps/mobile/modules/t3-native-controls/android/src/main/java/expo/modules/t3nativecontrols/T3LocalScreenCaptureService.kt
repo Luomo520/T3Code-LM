@@ -15,7 +15,6 @@ import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
-import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -34,7 +33,7 @@ class T3LocalScreenCaptureService : Service() {
   private var projection: MediaProjection? = null
   private var display: VirtualDisplay? = null
   private var images: ImageReader? = null
-  private var recorder: MediaRecorder? = null
+  private var recorder: T3ScreenVideoEncoder? = null
   private var recordingStartedMs = 0L
   private var recording = false
   private var output: File? = null
@@ -157,25 +156,44 @@ class T3LocalScreenCaptureService : Service() {
     handler.postDelayed({ finish(false) }, 8_000)
   }
 
-  @Suppress("DEPRECATION")
+  private val drainVideo = object : Runnable {
+    override fun run() {
+      if (!recording) return
+      try {
+        recorder?.drain()
+        handler.postDelayed(this, 12)
+      } catch (_: Exception) {
+        finish(false)
+      }
+    }
+  }
+
   private fun record(session: MediaProjection, request: T3CaptureRequest, size: T3CaptureDisplay) {
-    val (width, height) = captureSize(size, 1280)
-    val video = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else MediaRecorder()
-    recorder = video
-    video.setVideoSource(MediaRecorder.VideoSource.SURFACE)
-    video.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-    video.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-    video.setVideoSize(width, height)
-    video.setVideoFrameRate(30)
-    // 远端结果按现有媒体归档的 5 MiB 上限回传。
-    video.setVideoEncodingBitRate(if (request.remoteDurationSeconds == null) 3_000_000 else 1_100_000)
-    video.setOutputFile(outputFile("录屏-", ".mp4").absolutePath)
-    video.prepare()
+    val file = outputFile("录屏-", ".mp4")
+    // 会话媒体最多 5 MiB，按请求时长预留封装及码率波动空间。
+    val budget = request.remoteDurationSeconds?.let { 4 * 1024 * 1024 * 8 / it.coerceAtLeast(1) }
+    // 先按屏幕原始比例录制，较老编码器无法准备时逐级降低分辨率。
+    val longRemote = (request.remoteDurationSeconds ?: 0) > 12
+    // 长视频按回传预算降低像素数和刷新率，避免高刷页面滚动时超过上限。
+    val frameRate = if (longRemote) 12 else 30
+    val edges = if (longRemote) listOf(2400, 1920, 1280) else listOf(3840, 2560, 1920, 1280)
+    val sizes = edges.map { captureSize(size, it) }.distinct()
+    val (width, height) = sizes.first { (w, h) ->
+      val bitRate = minOf((w.toLong() * h * 3).coerceIn(1_500_000L, 16_000_000L).toInt(), budget ?: Int.MAX_VALUE)
+      try {
+        recorder = T3ScreenVideoEncoder(file, w, h, bitRate, frameRate)
+        true
+      } catch (error: Exception) {
+        if ((w to h) == sizes.last()) throw error
+        false
+      }
+    }
+    val video = checkNotNull(recorder)
     display = session.createVirtualDisplay("T3 录屏", width, height, size.densityDpi,
       DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, video.surface, null, handler)
-    video.start()
     recordingStartedMs = android.os.SystemClock.elapsedRealtime()
     recording = true
+    handler.post(drainVideo)
     request.onStarted?.invoke()
     handler.postDelayed({ finish(true) }, (request.remoteDurationSeconds ?: 30) * 1_000L)
   }
@@ -189,7 +207,7 @@ class T3LocalScreenCaptureService : Service() {
     val unlocked = localCaptureUnlocked(this)
     val elapsedUs = (android.os.SystemClock.elapsedRealtime() - recordingStartedMs) * 1_000L
     val videoComplete = !recording || (
-      keepResult && unlocked && runCatching { recorder?.stop() }.isSuccess
+      keepResult && unlocked && runCatching { recorder?.finish(elapsedUs) }.isSuccess
     )
     display?.release()
     display = null
@@ -209,10 +227,6 @@ class T3LocalScreenCaptureService : Service() {
     output = null
     val saved = file?.takeIf {
       keepResult && unlocked && localCaptureUnlocked(this) && videoComplete && it.length() > 0
-    }
-    if (saved != null && request.mode == T3CaptureMode.RECORDING) {
-      // 封装失败时原始录像仍可播放。单文件时长最多 30 秒。
-      runCatching { preserveRecordingDuration(saved, elapsedUs) }
     }
     if (saved == null) file?.delete()
     request.resolve(saved, if (unlocked && localCaptureUnlocked(this)) failure else "locked")
