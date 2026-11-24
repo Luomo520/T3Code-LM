@@ -10,7 +10,6 @@ import { useEffect, useEffectEvent, useRef } from "react";
 import { Alert, ToastAndroid } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { AppText } from "../../components/ui/AppText";
-import * as Dialog from "../../components/ui/Dialog";
 
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { appAtomRegistry } from "../../state/atom-registry";
