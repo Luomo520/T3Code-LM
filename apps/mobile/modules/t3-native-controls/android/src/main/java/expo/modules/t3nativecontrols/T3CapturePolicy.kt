@@ -19,7 +19,10 @@ internal object T3CapturePolicy {
   @Synchronized
   fun read(context: Context, environment: String, kind: String): String {
     val entry = file(context, environment, kind)
-    if (!entry.baseFile.exists() && !File(entry.baseFile.path + ".bak").exists()) return "ask"
+    if (!entry.baseFile.exists() && !File(entry.baseFile.path + ".bak").exists()) {
+      // 录屏由机主为每个后端单独开启。设备已有 Sui 授权也不代表启用远程录屏。
+      return if (kind == "recording") "deny" else "ask"
+    }
     return runCatching { entry.openRead().bufferedReader().use { it.readText() } }
       .getOrNull()?.takeIf { it == "system" || it == "ask" } ?: "deny"
   }

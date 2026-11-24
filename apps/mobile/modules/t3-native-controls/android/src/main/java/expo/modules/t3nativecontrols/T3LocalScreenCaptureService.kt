@@ -142,7 +142,9 @@ class T3LocalScreenCaptureService : Service() {
     accept(request)
     request.authorization = null
     try {
-      if (request.sharedScope != null && !shareNotificationAvailable(this)) {
+      val holding = request.sharedScope != null
+      val remoteRecording = request.remoteDurationSeconds != null && request.mode == T3CaptureMode.RECORDING
+      if ((holding || remoteRecording) && !notificationAvailable(this, if (holding) SHARE_CHANNEL_ID else CHANNEL_ID)) {
         shutdown("revoked")
         return START_NOT_STICKY
       }
@@ -321,6 +323,7 @@ class T3LocalScreenCaptureService : Service() {
     connectSurface(video.surface, width, height, size.densityDpi)
     recordingStartedMs = android.os.SystemClock.elapsedRealtime()
     recording = true
+    android.widget.Toast.makeText(this, "录屏中", android.widget.Toast.LENGTH_SHORT).show()
     if (share != null) {
       // 每段录像有自己的停止按钮，上一段的旧通知不能截断下一段。
       recordingAction = UUID.randomUUID().toString()
@@ -409,6 +412,9 @@ class T3LocalScreenCaptureService : Service() {
     fun actionIntent(action: String): PendingIntent = PendingIntent.getService(
       this, 0, Intent(this, javaClass).setAction(action), PendingIntent.FLAG_IMMUTABLE
     )
+    if ((holding || mode == T3CaptureMode.RECORDING) && Build.VERSION.SDK_INT >= 31) {
+      builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+    }
     if (holding) {
       // 更新通知时沿用同一共享的撤销入口，即使机主点的是尚未刷新的旧通知也有效。
       val end = actionIntent(shareAction ?: UUID.randomUUID().toString().also { shareAction = it })
@@ -416,9 +422,6 @@ class T3LocalScreenCaptureService : Service() {
         builder.addAction(Notification.Action.Builder(null, "停止并回传", actionIntent(it)).build())
       }
       builder.addAction(Notification.Action.Builder(null, "结束共享", end).build())
-      if (Build.VERSION.SDK_INT >= 31) {
-        builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-      }
       val kind = if (mode == T3CaptureMode.SCREENSHOT) "截图" else "录屏"
       builder.setContentText(if (recording) "正在录屏，可提前回传到原会话" else "原会话的${kind}请求会自动处理，最多 60 秒")
       builder.setDeleteIntent(end)
@@ -453,11 +456,13 @@ class T3LocalScreenCaptureService : Service() {
       )
     }
 
-    fun shareNotificationAvailable(context: Context): Boolean {
+    fun shareNotificationAvailable(context: Context): Boolean = notificationAvailable(context, SHARE_CHANNEL_ID)
+
+    private fun notificationAvailable(context: Context, channel: String): Boolean {
       val manager = context.getSystemService(NotificationManager::class.java)
       if (!manager.areNotificationsEnabled()) return false
-      createCaptureChannel(context, SHARE_CHANNEL_ID)
-      return (manager.getNotificationChannel(SHARE_CHANNEL_ID)?.importance ?: 0) >
+      createCaptureChannel(context, channel)
+      return (manager.getNotificationChannel(channel)?.importance ?: 0) >
         NotificationManager.IMPORTANCE_NONE
     }
   }
