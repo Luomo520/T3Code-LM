@@ -92,6 +92,15 @@ function startClientAppearance(): void {
     if (previous?.chatWidth !== settings.chatWidth) {
       root.dataset.chatWidth = settings.chatWidth;
     }
+    if (
+      previous?.themeBrightness !== settings.themeBrightness ||
+      previous.surfaceSeparation !== settings.surfaceSeparation ||
+      previous.textBrightness !== settings.textBrightness
+    ) {
+      root.style.setProperty("--tone-brightness", String(settings.themeBrightness / 1000));
+      root.style.setProperty("--tone-separation", String(settings.surfaceSeparation / 1400));
+      root.style.setProperty("--tone-text", String(settings.textBrightness / 830));
+    }
     if (previous?.appearanceContrast !== settings.appearanceContrast) {
       applyAppearanceContrast(root, settings.appearanceContrast);
     }

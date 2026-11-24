@@ -91,6 +91,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 :root {
   --app-scrollbar-width: 6px;
+  /* 浅色下压暗底色、抬亮卡片，深色下同样让卡片浮在底色上。 */
+  --tone-canvas-shift: calc(var(--tone-brightness, 0) - var(--tone-separation, 0));
+  --tone-surface-shift: calc(var(--tone-brightness, 0) + var(--tone-separation, 0));
+  --tone-text-shift: var(--tone-text, 0);
   --appearance-contrast-base: 100%;
   --appearance-contrast-boost: 0%;
   --appearance-contrast-border-boost: 0%;
@@ -1114,7 +1118,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 :root {
   color-scheme: light;
   --radius: 0.5rem;
-  --background: var(--color-zinc-25);
+  --background: oklab(from var(--color-zinc-25) calc(l + var(--tone-canvas-shift, 0)) a b);
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
   --toolbar-foreground: var(--foreground);
@@ -1123,22 +1127,25 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --toolbar-control-foreground: var(--foreground);
   --toolbar-control-hover: var(--accent);
   --surface-raised: color-mix(in srgb, var(--card) 20%, transparent);
-  --foreground: var(--color-zinc-900);
-  --card: var(--color-white);
-  --card-foreground: var(--color-zinc-900);
-  --popover: var(--color-white);
-  --popover-foreground: var(--color-zinc-900);
+  --foreground: oklab(from var(--color-zinc-900) calc(l + var(--tone-text-shift, 0)) a b);
+  --card: oklab(from var(--color-white) calc(l + var(--tone-surface-shift, 0)) a b);
+  --card-foreground: oklab(from var(--color-zinc-900) calc(l + var(--tone-text-shift, 0)) a b);
+  --popover: oklab(from var(--color-white) calc(l + var(--tone-surface-shift, 0)) a b);
+  --popover-foreground: oklab(from var(--color-zinc-900) calc(l + var(--tone-text-shift, 0)) a b);
   --primary: oklch(0.488 0.217 264);
   --primary-foreground: var(--color-white);
   --secondary: var(--color-zinc-50);
-  --secondary-foreground: var(--color-zinc-800);
+  --secondary-foreground: oklab(from var(--color-zinc-800) calc(l + var(--tone-text-shift, 0)) a b);
   --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
+  --muted-foreground: oklab(from var(--color-zinc-500) calc(l + var(--tone-text-shift, 0)) a b);
   --placeholder: var(--muted-foreground);
   --secondary-label: var(--muted-foreground);
   --icon-muted: var(--muted-foreground);
   /* One step past the accent, so a user turn stands off the near-white canvas. */
-  --message-surface: color-mix(in srgb, var(--color-zinc-200) 55%, var(--color-zinc-100));
+  --message-surface: oklab(
+    from color-mix(in srgb, var(--color-zinc-200) 55%, var(--color-zinc-100))
+      calc(l + var(--tone-surface-shift, 0)) a b
+  );
   --message-foreground: var(--foreground);
   --message-action: var(--primary);
   --message-action-foreground: var(--primary-foreground);
@@ -1169,13 +1176,15 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --update-foreground: var(--primary);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
      portaled mobile sheets and settings navigation outside the app sidebar. */
-  --sidebar: var(--color-zinc-50);
+  --sidebar: oklab(from var(--color-zinc-50) calc(l + var(--tone-canvas-shift, 0)) a b);
   --sidebar-foreground: var(--foreground);
   --sidebar-muted-foreground: var(--muted-foreground);
-  --sidebar-control-surface: var(--color-zinc-100);
-  --sidebar-row-hover: var(--color-zinc-25);
-  --sidebar-row-active: var(--color-white);
-  --sidebar-row-selected: var(--color-white);
+  --sidebar-control-surface: oklab(
+    from var(--color-zinc-100) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --sidebar-row-hover: oklab(from var(--color-zinc-25) calc(l + var(--tone-surface-shift, 0)) a b);
+  --sidebar-row-active: oklab(from var(--color-white) calc(l + var(--tone-surface-shift, 0)) a b);
+  --sidebar-row-selected: oklab(from var(--color-white) calc(l + var(--tone-surface-shift, 0)) a b);
   --sidebar-border: var(--border);
   --sidebar-stage-fade: var(--sidebar);
   --code-background: color-mix(in srgb, var(--card) 90%, var(--background));
@@ -1190,22 +1199,40 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     /* The canvas is true black, matching the sidebar. Raised surfaces keep the tone they had
        over neutral-950, so cards, popovers, and the composer still lift. Borders and hover
        states provide separation without milky gray fills. */
-    --background: #000;
-    --surface-raised: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-    --foreground: var(--color-neutral-100);
-    --card: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-    --card-foreground: var(--color-neutral-100);
-    --popover: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-    --popover-foreground: var(--color-neutral-100);
+    --background: oklab(from #000 calc(l + var(--tone-canvas-shift, 0)) a b);
+    --surface-raised: oklab(
+      from color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white))
+        calc(l + var(--tone-surface-shift, 0)) a b
+    );
+    --foreground: oklab(from var(--color-neutral-100) calc(l + var(--tone-text-shift, 0)) a b);
+    --card: oklab(
+      from color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white))
+        calc(l + var(--tone-surface-shift, 0)) a b
+    );
+    --card-foreground: oklab(from var(--color-neutral-100) calc(l + var(--tone-text-shift, 0)) a b);
+    --popover: oklab(
+      from color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white))
+        calc(l + var(--tone-surface-shift, 0)) a b
+    );
+    --popover-foreground: oklab(
+      from var(--color-neutral-100) calc(l + var(--tone-text-shift, 0)) a b
+    );
     --primary: oklch(0.571 0.21 264);
     --secondary: --alpha(var(--color-white) / 3%);
-    --secondary-foreground: var(--color-neutral-100);
+    --secondary-foreground: oklab(
+      from var(--color-neutral-100) calc(l + var(--tone-text-shift, 0)) a b
+    );
     --muted: --alpha(var(--color-white) / 3%);
-    --muted-foreground: var(--color-neutral-400);
+    --muted-foreground: oklab(
+      from var(--color-neutral-400) calc(l + var(--tone-text-shift, 0)) a b
+    );
     --accent: --alpha(var(--color-white) / 4%);
     --accent-foreground: var(--color-neutral-100);
     /* A user turn sits above the composer tone, level with the selected sidebar row. */
-    --message-surface: color-mix(in srgb, var(--color-neutral-950) 92%, var(--color-white));
+    --message-surface: oklab(
+      from color-mix(in srgb, var(--color-neutral-950) 92%, var(--color-white))
+        calc(l + var(--tone-surface-shift, 0)) a b
+    );
     --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
     --error-foreground: var(--color-red-400);
     --tool-error-icon: #fca5a5;
@@ -1233,35 +1260,39 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
    zinc hierarchy: zinc-50 navigation, zinc-25 hover, and white selected/raised
    surfaces. */
 [data-app-sidebar] {
-  --background: var(--color-zinc-25);
-  --foreground: var(--color-zinc-900);
-  --card: var(--color-white);
-  --card-foreground: var(--color-zinc-900);
+  --background: oklab(from var(--color-zinc-25) calc(l + var(--tone-canvas-shift, 0)) a b);
+  --foreground: oklab(from var(--color-zinc-900) calc(l + var(--tone-text-shift, 0)) a b);
+  --card: oklab(from var(--color-white) calc(l + var(--tone-surface-shift, 0)) a b);
+  --card-foreground: oklab(from var(--color-zinc-900) calc(l + var(--tone-text-shift, 0)) a b);
   --accent: var(--color-zinc-100);
   --accent-foreground: var(--color-zinc-900);
   --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
+  --muted-foreground: oklab(from var(--color-zinc-500) calc(l + var(--tone-text-shift, 0)) a b);
   --border: var(--color-zinc-200);
   --input: var(--color-zinc-300);
-  --sidebar: var(--color-zinc-50);
-  --sidebar-foreground: var(--color-zinc-900);
-  --sidebar-muted-foreground: var(--color-zinc-500);
-  --sidebar-control-surface: var(--color-zinc-100);
-  --sidebar-row-hover: var(--color-zinc-25);
-  --sidebar-row-active: var(--color-white);
-  --sidebar-row-selected: var(--color-white);
+  --sidebar: oklab(from var(--color-zinc-50) calc(l + var(--tone-canvas-shift, 0)) a b);
+  --sidebar-foreground: oklab(from var(--color-zinc-900) calc(l + var(--tone-text-shift, 0)) a b);
+  --sidebar-muted-foreground: oklab(
+    from var(--color-zinc-500) calc(l + var(--tone-text-shift, 0)) a b
+  );
+  --sidebar-control-surface: oklab(
+    from var(--color-zinc-100) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --sidebar-row-hover: oklab(from var(--color-zinc-25) calc(l + var(--tone-surface-shift, 0)) a b);
+  --sidebar-row-active: oklab(from var(--color-white) calc(l + var(--tone-surface-shift, 0)) a b);
+  --sidebar-row-selected: oklab(from var(--color-white) calc(l + var(--tone-surface-shift, 0)) a b);
   --sidebar-border: var(--color-zinc-200);
   --sidebar-stage-fade: var(--sidebar);
 
   @variant dark {
-    --background: #000;
-    --foreground: #f1f3f7;
-    --card: #000;
+    --background: oklab(from #000 calc(l + var(--tone-canvas-shift, 0)) a b);
+    --foreground: oklab(from #f1f3f7 calc(l + var(--tone-text-shift, 0)) a b);
+    --card: oklab(from #000 calc(l + var(--tone-surface-shift, 0)) a b);
     --card-foreground: var(--foreground);
     --accent: #191a1d;
     --accent-foreground: #f7f9ff;
     --muted: #0a0a0a;
-    --muted-foreground: #a3a3a3;
+    --muted-foreground: oklab(from #a3a3a3 calc(l + var(--tone-text-shift, 0)) a b);
     --border: rgb(255 255 255 / 8%);
     --input: rgb(255 255 255 / 18%);
     --sidebar: var(--card);
@@ -1274,7 +1305,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --sidebar-border: var(--border);
     --sidebar-stage-fade: var(--card);
     /* Row metadata sits a step below read titles (75% white). */
-    --secondary-label: #8f8f8f;
+    --secondary-label: oklab(from #8f8f8f calc(l + var(--tone-text-shift, 0)) a b);
   }
 }
 
@@ -1324,20 +1355,34 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 /* The non-empty marker adds enough specificity to outrank the generated root
    dark variant without reintroducing raw `.dark` selectors. */
 html[data-theme-id]:not([data-theme-id=""]) {
-  --background: var(--app-theme-canvas);
-  --app-chrome-background: var(--app-theme-chrome);
-  --toolbar-background: var(--app-theme-toolbar);
-  --toolbar-foreground: var(--app-theme-toolbar-foreground);
+  --background: oklab(from var(--app-theme-canvas) calc(l + var(--tone-canvas-shift, 0)) a b);
+  --app-chrome-background: oklab(
+    from var(--app-theme-chrome) calc(l + var(--tone-canvas-shift, 0)) a b
+  );
+  --toolbar-background: oklab(
+    from var(--app-theme-toolbar) calc(l + var(--tone-canvas-shift, 0)) a b
+  );
+  --toolbar-foreground: oklab(
+    from var(--app-theme-toolbar-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
   --toolbar-border: var(--app-theme-toolbar-border);
-  --toolbar-control: var(--app-theme-toolbar-control);
+  --toolbar-control: oklab(
+    from var(--app-theme-toolbar-control) calc(l + var(--tone-surface-shift, 0)) a b
+  );
   --toolbar-control-foreground: var(--app-theme-toolbar-control-foreground);
-  --toolbar-control-hover: var(--app-theme-toolbar-control-hover);
-  --surface-raised: var(--app-theme-surface-raised);
-  --foreground: var(--app-theme-text);
-  --card: var(--app-theme-surface);
-  --card-foreground: var(--app-theme-text);
-  --popover: var(--app-theme-surface-overlay);
-  --popover-foreground: var(--app-theme-text);
+  --toolbar-control-hover: oklab(
+    from var(--app-theme-toolbar-control-hover) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --surface-raised: oklab(
+    from var(--app-theme-surface-raised) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --foreground: oklab(from var(--app-theme-text) calc(l + var(--tone-text-shift, 0)) a b);
+  --card: oklab(from var(--app-theme-surface) calc(l + var(--tone-surface-shift, 0)) a b);
+  --card-foreground: oklab(from var(--app-theme-text) calc(l + var(--tone-text-shift, 0)) a b);
+  --popover: oklab(
+    from var(--app-theme-surface-overlay) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --popover-foreground: oklab(from var(--app-theme-text) calc(l + var(--tone-text-shift, 0)) a b);
   /* Solid controls (CTAs, switches, sliders, the send button) all share the
      theme's action color so every "act now" affordance reads consistently;
      the accent keeps driving surfaces, selection, and focus. Palettes without
@@ -1345,16 +1390,26 @@ html[data-theme-id]:not([data-theme-id=""]) {
   --primary: var(--app-theme-message-action);
   --primary-foreground: var(--app-theme-message-action-foreground);
   --secondary: var(--app-theme-secondary);
-  --secondary-foreground: var(--app-theme-secondary-foreground);
+  --secondary-foreground: oklab(
+    from var(--app-theme-secondary-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
   --muted: var(--app-theme-muted);
-  --muted-foreground: var(--app-theme-muted-foreground);
-  --placeholder: var(--app-theme-placeholder);
-  --secondary-label: var(--app-theme-secondary-label);
+  --muted-foreground: oklab(
+    from var(--app-theme-muted-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
+  --placeholder: oklab(from var(--app-theme-placeholder) calc(l + var(--tone-text-shift, 0)) a b);
+  --secondary-label: oklab(
+    from var(--app-theme-secondary-label) calc(l + var(--tone-text-shift, 0)) a b
+  );
   --icon-muted: var(--app-theme-icon-muted);
   --accent: var(--app-theme-accent-surface);
   --accent-foreground: var(--app-theme-accent-surface-foreground);
-  --message-surface: var(--app-theme-message-surface);
-  --message-foreground: var(--app-theme-message-foreground);
+  --message-surface: oklab(
+    from var(--app-theme-message-surface) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --message-foreground: oklab(
+    from var(--app-theme-message-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
   --message-action: var(--app-theme-message-action);
   --message-action-foreground: var(--app-theme-message-action-foreground);
   --message-action-hover: var(--app-theme-message-action-hover);
@@ -1372,15 +1427,29 @@ html[data-theme-id]:not([data-theme-id=""]) {
   --border: var(--app-theme-border);
   --input: var(--app-theme-input);
   --ring: var(--app-theme-focus);
-  --sidebar: var(--app-theme-sidebar);
-  --sidebar-foreground: var(--app-theme-sidebar-foreground);
-  --sidebar-muted-foreground: var(--app-theme-sidebar-muted-foreground);
-  --sidebar-control-surface: var(--app-theme-sidebar-control-surface);
-  --sidebar-row-hover: var(--app-theme-sidebar-row-hover);
-  --sidebar-row-active: var(--app-theme-sidebar-row-active);
-  --sidebar-row-selected: var(--app-theme-sidebar-row-selected);
+  --sidebar: oklab(from var(--app-theme-sidebar) calc(l + var(--tone-canvas-shift, 0)) a b);
+  --sidebar-foreground: oklab(
+    from var(--app-theme-sidebar-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
+  --sidebar-muted-foreground: oklab(
+    from var(--app-theme-sidebar-muted-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
+  --sidebar-control-surface: oklab(
+    from var(--app-theme-sidebar-control-surface) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --sidebar-row-hover: oklab(
+    from var(--app-theme-sidebar-row-hover) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --sidebar-row-active: oklab(
+    from var(--app-theme-sidebar-row-active) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --sidebar-row-selected: oklab(
+    from var(--app-theme-sidebar-row-selected) calc(l + var(--tone-surface-shift, 0)) a b
+  );
   --sidebar-border: var(--app-theme-sidebar-border);
-  --sidebar-stage-fade: var(--app-theme-sidebar);
+  --sidebar-stage-fade: oklab(
+    from var(--app-theme-sidebar) calc(l + var(--tone-canvas-shift, 0)) a b
+  );
   --code-background: var(--app-theme-code-background);
   --code-foreground: var(--app-theme-code-foreground);
   --terminal-background: var(--app-theme-terminal-background);
@@ -1562,26 +1631,44 @@ html[data-theme-id="t3-chat"] {
 }
 
 html[data-theme-id] [data-app-sidebar] {
-  --background: var(--app-theme-canvas);
-  --foreground: var(--app-theme-text);
-  --card: var(--app-theme-surface);
-  --card-foreground: var(--app-theme-text);
+  --background: oklab(from var(--app-theme-canvas) calc(l + var(--tone-canvas-shift, 0)) a b);
+  --foreground: oklab(from var(--app-theme-text) calc(l + var(--tone-text-shift, 0)) a b);
+  --card: oklab(from var(--app-theme-surface) calc(l + var(--tone-surface-shift, 0)) a b);
+  --card-foreground: oklab(from var(--app-theme-text) calc(l + var(--tone-text-shift, 0)) a b);
   --accent: var(--app-theme-accent-surface);
   --accent-foreground: var(--app-theme-accent-surface-foreground);
   --muted: var(--app-theme-muted);
-  --muted-foreground: var(--app-theme-muted-foreground);
-  --secondary-label: var(--app-theme-secondary-label);
+  --muted-foreground: oklab(
+    from var(--app-theme-muted-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
+  --secondary-label: oklab(
+    from var(--app-theme-secondary-label) calc(l + var(--tone-text-shift, 0)) a b
+  );
   --border: var(--app-theme-border);
   --input: var(--app-theme-input);
-  --sidebar: var(--app-theme-sidebar);
-  --sidebar-foreground: var(--app-theme-sidebar-foreground);
-  --sidebar-muted-foreground: var(--app-theme-sidebar-muted-foreground);
-  --sidebar-control-surface: var(--app-theme-sidebar-control-surface);
-  --sidebar-row-hover: var(--app-theme-sidebar-row-hover);
-  --sidebar-row-active: var(--app-theme-sidebar-row-active);
-  --sidebar-row-selected: var(--app-theme-sidebar-row-selected);
+  --sidebar: oklab(from var(--app-theme-sidebar) calc(l + var(--tone-canvas-shift, 0)) a b);
+  --sidebar-foreground: oklab(
+    from var(--app-theme-sidebar-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
+  --sidebar-muted-foreground: oklab(
+    from var(--app-theme-sidebar-muted-foreground) calc(l + var(--tone-text-shift, 0)) a b
+  );
+  --sidebar-control-surface: oklab(
+    from var(--app-theme-sidebar-control-surface) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --sidebar-row-hover: oklab(
+    from var(--app-theme-sidebar-row-hover) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --sidebar-row-active: oklab(
+    from var(--app-theme-sidebar-row-active) calc(l + var(--tone-surface-shift, 0)) a b
+  );
+  --sidebar-row-selected: oklab(
+    from var(--app-theme-sidebar-row-selected) calc(l + var(--tone-surface-shift, 0)) a b
+  );
   --sidebar-border: var(--app-theme-sidebar-border);
-  --sidebar-stage-fade: var(--app-theme-sidebar);
+  --sidebar-stage-fade: oklab(
+    from var(--app-theme-sidebar) calc(l + var(--tone-canvas-shift, 0)) a b
+  );
   border-color: color-mix(in srgb, var(--contrast-sidebar-foreground) 10%, transparent);
 
   @variant dark {

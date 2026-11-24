@@ -332,6 +332,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "appearance",
   },
   {
+    id: "setting-themeBrightness",
+    title: "界面明暗",
+    to: "/settings/appearance",
+    searchTerms: ["向右提亮界面底色。"],
+  },
+  {
+    id: "setting-surfaceSeparation",
+    title: "卡片层次",
+    to: "/settings/appearance",
+    searchTerms: ["向右拉开卡片与背景的明暗差距。"],
+  },
+  {
+    id: "setting-textBrightness",
+    title: "文字明暗",
+    to: "/settings/appearance",
+    searchTerms: ["向右提亮标题、正文和辅助文字。"],
+  },
+  {
     // Prefixed because the slider control already owns the `appearance-contrast` id.
     id: "setting-appearance-contrast",
     title: "Contrast",

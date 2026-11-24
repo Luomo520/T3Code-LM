@@ -37,6 +37,20 @@ import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { TypographySection } from "./TypographySettings";
 import { ThreadDetailsItemsRow } from "./ThreadDetailsItemsRow";
 
+const toneSliders = [
+  { key: "themeBrightness", id: "setting-themeBrightness", description: "向右提亮界面底色。" },
+  {
+    key: "surfaceSeparation",
+    id: "setting-surfaceSeparation",
+    description: "向右拉开卡片与背景的明暗差距。",
+  },
+  {
+    key: "textBrightness",
+    id: "setting-textBrightness",
+    description: "向右提亮标题、正文和辅助文字。",
+  },
+] as const;
+
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
   "nightly-artwork": "Nightly artwork",
@@ -163,6 +177,57 @@ export function AppearanceSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="appearance-interface" title="Interface">
+        {toneSliders.map(({ key, id, description }) => {
+          const row = searchableSetting(id);
+          const value = settings[key];
+          const label = value === 0 ? "默认" : (value > 0 ? "+" : "") + value;
+          const ratio = (value + 100) / 200;
+          return (
+            <SettingsRow
+              key={key}
+              {...row}
+              description={description}
+              resetAction={
+                value !== 0 ? (
+                  <SettingResetButton
+                    label={row.title}
+                    onClick={() => updateSettings({ [key]: 0 })}
+                  />
+                ) : null
+              }
+              control={
+                <div className="flex w-full items-center gap-3 sm:w-52">
+                  <output
+                    htmlFor={key}
+                    className="min-w-12 rounded-md bg-muted px-2 py-1 text-center text-xs tabular-nums"
+                  >
+                    {label}
+                  </output>
+                  <input
+                    type="range"
+                    id={key}
+                    aria-label={row.title}
+                    aria-valuetext={label}
+                    className="settings-slider min-w-0 flex-1"
+                    min={-100}
+                    max={100}
+                    step={5}
+                    value={value}
+                    style={
+                      {
+                        "--settings-slider-progress": ratio * 100 + "%",
+                        "--settings-slider-fill-offset": 0.5 - ratio + "rem",
+                      } as CSSProperties
+                    }
+                    onChange={(event) =>
+                      updateSettings({ [key]: event.currentTarget.valueAsNumber })
+                    }
+                  />
+                </div>
+              }
+            />
+          );
+        })}
         <SettingsRow
           {...searchableSetting("setting-appearance-contrast")}
           description="Adjust the contrast of colors and borders across the interface."

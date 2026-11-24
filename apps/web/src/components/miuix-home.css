@@ -17,44 +17,44 @@
 
 /* 标准外观取样于首页样板，自定义主题沿用自己的配色。 */
 html:not([data-theme-id]) [data-miuix-home] {
-  --background: #f4f5f8;
-  --miuix-home-paper: #fff;
+  --background: oklab(from #f4f5f8 calc(l + var(--tone-canvas-shift, 0)) a b);
+  --miuix-home-paper: oklab(from #fff calc(l + var(--tone-surface-shift, 0)) a b);
   --miuix-home-divider: #e9eaf0;
 }
 
 html.dark:not([data-theme-id]) [data-miuix-home] {
-  --background: #17191e;
-  --miuix-home-paper: #24262d;
+  --background: oklab(from #17191e calc(l + var(--tone-canvas-shift, 0)) a b);
+  --miuix-home-paper: oklab(from #24262d calc(l + var(--tone-surface-shift, 0)) a b);
   --miuix-home-divider: #323640;
 }
 
 html:not([data-theme-id]) [data-app-sidebar] {
-  --sidebar: #eaedf3;
-  --sidebar-foreground: #171b23;
-  --sidebar-muted-foreground: #626978;
-  --sidebar-row-hover: #f4f7fd;
-  --sidebar-row-active: #e7efff;
-  --sidebar-row-selected: #f1f5ff;
+  --sidebar: oklab(from #eaedf3 calc(l + var(--tone-canvas-shift, 0)) a b);
+  --sidebar-foreground: oklab(from #171b23 calc(l + var(--tone-text-shift, 0)) a b);
+  --sidebar-muted-foreground: oklab(from #626978 calc(l + var(--tone-text-shift, 0)) a b);
+  --sidebar-row-hover: oklab(from #f4f7fd calc(l + var(--tone-surface-shift, 0)) a b);
+  --sidebar-row-active: oklab(from #e7efff calc(l + var(--tone-surface-shift, 0)) a b);
+  --sidebar-row-selected: oklab(from #f1f5ff calc(l + var(--tone-surface-shift, 0)) a b);
   --sidebar-stage-fade: var(--sidebar);
-  --miuix-sidebar-paper: #fff;
-  --miuix-sidebar-current-text: #2056c0;
+  --miuix-sidebar-paper: oklab(from #fff calc(l + var(--tone-surface-shift, 0)) a b);
+  --miuix-sidebar-current-text: oklab(from #2056c0 calc(l + var(--tone-text-shift, 0)) a b);
   --miuix-sidebar-action: #2362e5;
   --miuix-sidebar-action-text: #fff;
-  --secondary-label: #626978;
+  --secondary-label: oklab(from #626978 calc(l + var(--tone-text-shift, 0)) a b);
 }
 
 html.dark:not([data-theme-id]) [data-app-sidebar] {
-  --sidebar: #1e2027;
-  --sidebar-foreground: #f1f2f5;
-  --sidebar-muted-foreground: #adb2bf;
-  --sidebar-row-hover: #303440;
-  --sidebar-row-active: #293853;
-  --sidebar-row-selected: #323b4e;
-  --miuix-sidebar-paper: #24262d;
-  --miuix-sidebar-current-text: #8db5ff;
+  --sidebar: oklab(from #1e2027 calc(l + var(--tone-canvas-shift, 0)) a b);
+  --sidebar-foreground: oklab(from #f1f2f5 calc(l + var(--tone-text-shift, 0)) a b);
+  --sidebar-muted-foreground: oklab(from #adb2bf calc(l + var(--tone-text-shift, 0)) a b);
+  --sidebar-row-hover: oklab(from #303440 calc(l + var(--tone-surface-shift, 0)) a b);
+  --sidebar-row-active: oklab(from #293853 calc(l + var(--tone-surface-shift, 0)) a b);
+  --sidebar-row-selected: oklab(from #323b4e calc(l + var(--tone-surface-shift, 0)) a b);
+  --miuix-sidebar-paper: oklab(from #24262d calc(l + var(--tone-surface-shift, 0)) a b);
+  --miuix-sidebar-current-text: oklab(from #8db5ff calc(l + var(--tone-text-shift, 0)) a b);
   --miuix-sidebar-action: #8db5ff;
   --miuix-sidebar-action-text: #17191e;
-  --secondary-label: #adb2bf;
+  --secondary-label: oklab(from #adb2bf calc(l + var(--tone-text-shift, 0)) a b);
 }
 
 [data-miuix-home] [data-miuix-home-header] {
@@ -178,4 +178,13 @@ html.dark:not([data-theme-id]) [data-app-sidebar] {
     outline: 1px solid Highlight;
     outline-offset: -2px;
   }
+}
+
+/* 最近列表保持平铺，以便键盘导航和拖动顺序一致。只在两组相邻时留出间距。 */
+[data-sidebar-view="recent"]
+  > [data-sidebar-thread-group="pinned"]
+  + [data-sidebar-thread-group="threads"] {
+  margin-block-start: 0.625rem;
+  border-block-start: 1px solid
+    color-mix(in oklab, var(--sidebar-foreground) 22%, var(--sidebar-border));
 }

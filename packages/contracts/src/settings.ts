@@ -151,6 +151,7 @@ export const GlassOpacity = Schema.Int.check(
 export type GlassOpacity = typeof GlassOpacity.Type;
 const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
 
+export const AppearanceTone = Schema.Int.check(Schema.isBetween({ minimum: -100, maximum: 100 }));
 export const MIN_APPEARANCE_CONTRAST = 50;
 export const MAX_APPEARANCE_CONTRAST = 200;
 export const AppearanceContrast = Schema.Int.check(
@@ -426,6 +427,9 @@ export const ClientSettingsSchema = Schema.Struct({
   effortDisplay: EffortDisplay.pipe(Schema.withDecodingDefault(Effect.succeed("label" as const))),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  themeBrightness: AppearanceTone.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  surfaceSeparation: AppearanceTone.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  textBrightness: AppearanceTone.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   appearanceContrast: AppearanceContrast.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_APPEARANCE_CONTRAST)),
   ),
@@ -2170,6 +2174,9 @@ export const ClientSettingsPatch = Schema.Struct({
   effortDisplay: Schema.optionalKey(EffortDisplay),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
+  themeBrightness: Schema.optionalKey(AppearanceTone),
+  surfaceSeparation: Schema.optionalKey(AppearanceTone),
+  textBrightness: Schema.optionalKey(AppearanceTone),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),
   panelAnimationDurationMs: Schema.optionalKey(PanelAnimationDurationMs),
   browserDefaultViewport: Schema.optionalKey(PreviewViewportSetting),

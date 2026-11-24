@@ -179,6 +179,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(theme !== "system" ? ["Theme"] : []),
     ...(!followSystem ? ["Follow system"] : []),
     ...(themeHalves !== null ? ["Theme mix"] : []),
+    ...(settings.themeBrightness !== 0 ? ["界面明暗"] : []),
+    ...(settings.surfaceSeparation !== 0 ? ["卡片层次"] : []),
+    ...(settings.textBrightness !== 0 ? ["文字明暗"] : []),
     ...(settings.appearanceContrast !== DEFAULT_UNIFIED_SETTINGS.appearanceContrast
       ? ["Contrast"]
       : []),
@@ -376,6 +379,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       return;
     }
     updateSettings({
+      themeBrightness: 0,
+      surfaceSeparation: 0,
+      textBrightness: 0,
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
