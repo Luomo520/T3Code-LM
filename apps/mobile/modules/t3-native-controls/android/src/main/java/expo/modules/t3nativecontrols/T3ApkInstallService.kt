@@ -62,11 +62,29 @@ class T3ApkInstallService : IT3ApkInstallService.Stub() {
     }
     thread(name = "t3-apk-install-result") { readResult.run() }
     try {
+      val digest = java.security.MessageDigest.getInstance("SHA-256")
       val transferredBytes = runCatching {
-        process.outputStream.use { output -> input.copyTo(output) }
+        process.outputStream.use { output -> java.security.DigestInputStream(input, digest).copyTo(output) }
       }.getOrNull()
       val result = readResult.get()
-      if (process.waitFor() == 0 && transferredBytes == sizeBytes && result == "Success") return null
+      if (process.waitFor() == 0 && transferredBytes == sizeBytes && result == "Success") {
+        // 普通应用未必能查到由 shell 安装的包。在同一身份下核对安装后的原始 APK。
+        val lookup = ProcessBuilder("/system/bin/cmd", "package", "path", "--user", userId.toString(), packageName).start()
+        val paths = lookup.inputStream.bufferedReader().use { it.readLines() }
+        val base = paths.singleOrNull { it.startsWith("package:") && it.endsWith("/base.apk") }
+        if (lookup.waitFor() != 0 || base == null) return "无法核实已安装的 APK。"
+        val installed = java.security.MessageDigest.getInstance("SHA-256")
+        java.io.File(base.removePrefix("package:")).inputStream().use { stream ->
+          val buffer = ByteArray(128 * 1024)
+          while (true) {
+            val count = stream.read(buffer)
+            if (count < 0) break
+            installed.update(buffer, 0, count)
+          }
+        }
+        return if (java.security.MessageDigest.isEqual(installed.digest(), digest.digest())) null
+          else "已安装 APK 与本次收到的文件不一致。"
+      }
       // 安装器可能在读取输入前拒绝安装。保留它给出的原因。
       return result.take(400).ifBlank { "Android 安装器未返回成功结果。" }
     } finally {

@@ -175,7 +175,13 @@ class T3LocalApkInstallModule : Module() {
         }
         apk.receiptKey?.let {
           when (result["status"]) {
-            "installed" -> Unit
+            "installed" -> if (method != "system") {
+              // 本机安装服务已核对包名及完整文件摘要，原会话可按这份回执读取版本。
+              val verified = org.json.JSONObject().put("status", "verified")
+                .put("packageName", apk.packageName).put("version", apk.version ?: apk.versionCode.toString())
+                .put("versionCode", apk.versionCode.toString())
+              check(store.edit().putString(it, verified.toString()).commit()) { "无法保存已核实的安装回执。" }
+            } else Unit
             "cancelled" -> recordCancelled(it)
             else -> store.edit().putString(it, priorReceipt).commit()
           }
