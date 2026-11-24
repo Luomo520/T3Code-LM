@@ -57,6 +57,7 @@ internal class T3CaptureRequest(
   val canShareInForeground: (() -> Boolean)? = null,
 ) {
   val result = CompletableDeferred<Map<String, String>>()
+  var onConsentRequested: (() -> Unit)? = null
   var onStarted: (() -> Unit)? = null
   var finish: ((Boolean, String) -> Unit)? = null
   var authorization: Intent? = null
@@ -98,7 +99,7 @@ class T3LocalScreenCaptureModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("T3LocalScreenCapture")
-    Events("onRecordingStarted")
+    Events("onRecordingStarted", "onConsentRequested")
 
     AsyncFunction("isUnlocked") {
       val context = appContext.reactContext ?: return@AsyncFunction false
@@ -239,6 +240,7 @@ class T3LocalScreenCaptureModule : Module() {
         inForeground.takeIf { sharedScope != null },
       )
       T3CaptureRequests.current = request
+      request.onConsentRequested = { sendEvent("onConsentRequested", mapOf("requestId" to requestId)) }
       request.onStarted = { sendEvent("onRecordingStarted", mapOf("requestId" to requestId)) }
       try {
         if (reuse) {

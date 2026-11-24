@@ -76,7 +76,9 @@ function EnvironmentCaptureCoordinator({
   }, [environmentId, native]);
   const request = (input: typeof AndroidCaptureInput.Type) => command({ environmentId, input });
 
+  const consentReceipt = useRef<string | null>(null);
   const recordingReceipt = useRef<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- 订阅原生授权与录制事件，仅向当前请求的环境回报。
   useEffect(() => {
     const subscription = native.addListener?.("onRecordingStarted", ({ requestId }) => {
       if (recordingReceipt.current !== requestId || current.current !== requestId) return;
@@ -85,7 +87,17 @@ function EnvironmentCaptureCoordinator({
         input: { _tag: "progress", id: requestId, stage: "recording" },
       }).catch(() => {});
     });
-    return () => subscription?.remove();
+    const consent = native.addListener?.("onConsentRequested", ({ requestId }) => {
+      if (consentReceipt.current !== requestId || current.current !== requestId) return;
+      void command({
+        environmentId,
+        input: { _tag: "progress", id: requestId, stage: "system-consent" },
+      }).catch(() => {});
+    });
+    return () => {
+      subscription?.remove();
+      consent?.remove();
+    };
   }, [command, environmentId, native]);
 
   async function finish(
@@ -150,6 +162,7 @@ function EnvironmentCaptureCoordinator({
         return;
       }
       backendApproved.current = true;
+      consentReceipt.current = job.consentReceipt ? job.id : null;
       recordingReceipt.current = job.progressReceipts ? job.id : null;
       const kind = captureKind(job.action);
       const captureOnce = () =>

@@ -21,6 +21,7 @@ class T3ProjectionConsentActivity : Activity() {
     try {
       val manager = getSystemService(MediaProjectionManager::class.java)
       startActivityForResult(manager.createScreenCaptureIntent(), CAPTURE)
+      pending.onConsentRequested?.invoke()
     } catch (_: RuntimeException) {
       pending.resolve(null)
       finishAndRemoveTask()

@@ -51,7 +51,7 @@ export interface LocalScreenCapture {
   stopRecording(requestId: string): Promise<void>;
   cancelCapture(requestId: string): Promise<void>;
   addListener(
-    event: "onRecordingStarted",
+    event: "onRecordingStarted" | "onConsentRequested",
     listener: (value: { readonly requestId: string }) => void,
   ): { remove(): void };
 }

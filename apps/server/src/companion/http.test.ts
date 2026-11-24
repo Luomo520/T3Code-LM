@@ -455,8 +455,57 @@ it.effect("expires Android requests before approval and during a capture", () =>
     store.listen(device, "Android");
     const recording = store.enqueue("original", device, "record-screen", "recording", 10);
     store.approve(device, recording.id);
+    store.progress(device, recording.id, "system-consent");
+    expect(store.result("original", recording.id).message).toContain("等待确认");
     store.progress(device, recording.id, "recording");
+    store.progress(device, recording.id, "system-consent");
     time += 90_001;
     expect(store.result("original", recording.id).message).toContain("手机已开始录屏");
+    store.listen(device, "Android");
+    const dialog = store.enqueue("original", device, "record-screen", "dialog", 10);
+    store.approve(device, dialog.id);
+    store.progress(device, dialog.id, "system-consent");
+    time += 90_001;
+    expect(store.result("original", dialog.id).message).toContain("已发起系统共享授权");
+  }),
+);
+
+it.effect("keeps Android requests in arrival order across sessions, cancellation and restart", () =>
+  Effect.gen(function* () {
+    const { config } = yield* setup();
+    let time = 1_000_000;
+    const open = () => createAndroidCaptureStore(config.stateDir, () => time);
+    let store = open();
+    const device = "android:queue";
+    try {
+      store.listen(device, "K60");
+      const first = store.enqueue("alpha", device, "record-screen", "one", 10);
+      const skipped = store.enqueue("beta", device, "screenshot", "one", 10);
+      const last = store.enqueue("gamma", device, "screenshot", "one", 10);
+      expect(store.enqueue("beta", device, "screenshot", "one", 10).id).toBe(skipped.id);
+      expect(() => store.cancel("alpha", skipped.id)).toThrow();
+      time += 1;
+      store.progress(device, first.id, "received");
+      store.progress(device, last.id, "received");
+      expect(store.result("gamma", last.id).message).toContain("前一项");
+      expect(store.approve(device, last.id)._tag).toBe("inactive");
+      expect(store.listen(device, "K60").job?.id).toBe(first.id);
+      expect(store.approve(device, first.id)._tag).toBe("active");
+      expect(store.cancel("beta", skipped.id).status).toBe("canceled");
+      store.close();
+      store = open();
+      time += 60_000;
+      expect(store.listen(device, "K60").job).toBeNull();
+      store.reject(device, first.id, "denied");
+      const head = store.listen(device, "K60").job;
+      expect(head).toMatchObject({ id: last.id, threadId: "gamma", expiresInMs: 45_000 });
+      time += 4_000;
+      expect(store.listen(device, "K60").job?.expiresAt).toBe(head?.expiresAt);
+      expect(store.approve(device, last.id)._tag).toBe("active");
+      expect(store.result("beta", skipped.id).status).toBe("canceled");
+      expect(store.result("alpha", first.id).status).toBe("failed");
+    } finally {
+      store.close();
+    }
   }),
 );

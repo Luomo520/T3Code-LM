@@ -14,7 +14,11 @@ import * as NodeSqlite from "node:sqlite";
 import { archivedCapturePath, captureArchiveDirectory } from "./captureArchive.ts";
 import { CompanionError, decodePng } from "./store.ts";
 
+const WAITING = "已排队，等待手机处理前一项请求。";
+const READY = "已排队，等待手机接收。";
+const MAX_PENDING = 8;
 const RECEIVED = "手机已收到请求，等待本机处理。";
+const SYSTEM_CONSENT = "手机已发起系统共享授权，等待确认。";
 const RECORDING = "手机已开始录屏。";
 const REQUEST_TTL = 45_000;
 // 后台检查的运行时机由 Android 决定，等待本机确认的请求需要独立的有效期。
@@ -121,13 +125,15 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
     const time = now();
     db.prepare(`
       UPDATE tasks SET status = 'failed', message = CASE
+        WHEN message = ? THEN '排队已过期，手机尚未领取这项请求。'
         WHEN message = ? THEN '请求已过期。手机已收到请求，但未在时限内完成本机处理。'
+        WHEN message = ? THEN '请求已过期。手机已发起系统共享授权，未收到后续结果。'
         WHEN message = ? THEN '请求已过期。手机已开始录屏，但服务端未按时收到文件。'
         WHEN status = 'running' THEN '请求已过期。手机已接受请求，但未按时返回文件。'
         ELSE '请求已过期。未收到手机收件回执，请打开已配对的 T3 App 后重试。'
       END, updated_at = ?
       WHERE expires_at <= ? AND status IN ('queued', 'running')
-    `).run(RECEIVED, RECORDING, time, time);
+    `).run(WAITING, RECEIVED, SYSTEM_CONSENT, RECORDING, time, time);
     db.prepare(`
       DELETE FROM tasks WHERE updated_at <= ? AND status NOT IN ('queued', 'running')
     `).run(time - HISTORY_TTL);
@@ -137,6 +143,12 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
     return time;
   }
   const byId = db.prepare("SELECT * FROM tasks WHERE id = ?");
+  // 收件回执会修改 updated_at；使用插入顺序保持同一设备内的先来先处理。
+  const nextQueued = db.prepare(`
+    SELECT * FROM tasks WHERE device_id = ? AND status = 'queued'
+      AND NOT EXISTS (SELECT 1 FROM tasks WHERE device_id = ? AND status = 'running')
+    ORDER BY rowid LIMIT 1
+  `);
   const read = (id: string) => byId.get(id) as CaptureRow | undefined;
   const owned = (deviceId: string, id: string) => {
     const task = read(id);
@@ -154,6 +166,7 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
   const job = (task: CaptureRow, time: number) => ({
     id: task.id,
     progressReceipts: true as const,
+    consentReceipt: true as const,
     threadId: ThreadId.make(task.thread_id),
     action: task.action,
     durationSeconds: task.seconds,
@@ -209,13 +222,19 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
           backgroundUntil: delivery === "background-ready" ? time + BACKGROUND_DEVICE_TTL : 0,
         });
       }
-      const task = db
-        .prepare(`
-        SELECT * FROM tasks WHERE device_id = ? AND status = 'queued'
-          AND NOT EXISTS (SELECT 1 FROM tasks WHERE device_id = ? AND status = 'running')
-        ORDER BY updated_at, id LIMIT 1
-      `)
-        .get(deviceId, deviceId) as CaptureRow | undefined;
+      let task = nextQueued.get(deviceId, deviceId) as CaptureRow | undefined;
+      if (task?.message === WAITING) {
+        // 轮到这项后才开始计算手机确认时间，后续心跳不能续期。
+        const until =
+          time +
+          (delivery === "background" || delivery === "background-ready"
+            ? BACKGROUND_REQUEST_TTL
+            : REQUEST_TTL);
+        db.prepare(
+          "UPDATE tasks SET message = ?, updated_at = ?, expires_at = ? WHERE id = ? AND message = ?",
+        ).run(READY, time, until, task.id, WAITING);
+        task = read(task.id);
+      }
       return {
         _tag: "pending" as const,
         job: task ? job(task, time) : null,
@@ -255,12 +274,13 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
       `)
           .get(deviceId)?.count ?? 0,
       );
-      if (pending !== 0) throw new CompanionError(409, "目标手机已有一项屏幕捕获请求。");
+      if (pending >= MAX_PENDING)
+        throw new CompanionError(409, "目标手机等待处理的请求已满，请稍后重试。");
       const id = NodeCrypto.randomUUID();
       db.prepare(`
         INSERT INTO tasks (id, thread_id, device_id, device_name, request_id, action, seconds,
           expires_at, updated_at, status, message)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '已排队，等待手机接收。')
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
       `).run(
         id,
         threadId,
@@ -269,18 +289,28 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
         requestId,
         action,
         seconds,
-        time + (device.backgroundUntil > time ? BACKGROUND_REQUEST_TTL : REQUEST_TTL),
+        time +
+          (pending > 0 || device.backgroundUntil > time ? BACKGROUND_REQUEST_TTL : REQUEST_TTL),
         time,
+        pending > 0 ? WAITING : READY,
       );
       return taskView(inThread(threadId, id));
     },
-    progress(deviceId: string, id: string, stage: "received" | "recording") {
+    progress(deviceId: string, id: string, stage: "received" | "system-consent" | "recording") {
       const time = sweep();
       const task = owned(deviceId, id);
-      const receiving = stage === "received" && task.status === "queued";
+      const receiving = stage === "received" && task.status === "queued" && task.message === READY;
       const recording =
         stage === "recording" && task.status === "running" && task.action === "record-screen";
-      const message = receiving ? RECEIVED : recording ? RECORDING : undefined;
+      const consent =
+        stage === "system-consent" && task.status === "running" && task.message !== RECORDING;
+      const message = receiving
+        ? RECEIVED
+        : consent
+          ? SYSTEM_CONSENT
+          : recording
+            ? RECORDING
+            : undefined;
       // 手机重连和事件延迟均可能重送回执。终态和原有到期时间应保留。
       if (message && task.message !== message) {
         db.prepare("UPDATE tasks SET message = ?, updated_at = ? WHERE id = ? AND status = ?").run(
@@ -296,8 +326,11 @@ export function createAndroidCaptureStore(stateDir: string, now = Date.now) {
       const task = owned(deviceId, id);
       // 对同一明确选择的重试返回同一任务。失效或他机任务不能进入采集。
       if (task.status === "queued") {
+        if (task.message === WAITING || nextQueued.get(deviceId, deviceId)?.id !== id) {
+          return { _tag: "inactive" as const };
+        }
         db.prepare(`
-          UPDATE tasks SET status = 'running', message = '等待 Android 系统屏幕捕获授权。',
+          UPDATE tasks SET status = 'running', message = '手机已接受请求，等待本机处理。',
             updated_at = ?, expires_at = ? WHERE id = ? AND status = 'queued'
         `).run(time, time + CAPTURE_TTL, id);
       }

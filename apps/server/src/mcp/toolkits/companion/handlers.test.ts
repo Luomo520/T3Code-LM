@@ -223,6 +223,42 @@ it.effect("keeps a completed recording scoped to the original thread", () =>
   }).pipe(Effect.provide(testLayer)),
 );
 
+it.effect("delivers Windows button and field receipts only to the requesting thread", () =>
+  Effect.gen(function* () {
+    const { call, store, deviceId, token, settings } = yield* setup();
+    yield* settings.updateSettings({ windowsCompanionEnabled: true });
+    const capable = { ...info, formControlsV1: "true" };
+    store.checkDevice(token, capable);
+    for (const [action, params] of [
+      ["fill-window-field", { controlName: "备注", text: "样例" }],
+      ["press-window-button", { controlName: "保存" }],
+    ] as const) {
+      const input = { deviceId, action, clientRequestId: action, ...params };
+      const queued = yield* call("t3_companion_enqueue", input);
+      expect(queued.isError).not.toBe(true);
+      const job = store.poll(token, deviceName, capable).job!;
+      expect(job).toMatchObject({ threadId: owner, action, params });
+      const receipt = { id: job.id, status: "done", message: "操作已完成" } as const;
+      store.complete(token, receipt);
+      store.complete(token, receipt);
+      const repeated = yield* call("t3_companion_enqueue", input);
+      expect(repeated.structuredContent).toMatchObject({ id: job.id, status: "done" });
+      expect(store.poll(token, deviceName, capable).job).toBeNull();
+      const foreign = yield* call(
+        "t3_companion_result",
+        { id: job.id },
+        {
+          ...scope,
+          thread: { ...scope.thread!, threadId: other },
+        },
+      );
+      expect(foreign.isError).toBe(true);
+      const result = yield* call("t3_companion_result", { id: job.id });
+      expect(result.structuredContent).toMatchObject(receipt);
+    }
+  }).pipe(Effect.provide(testLayer)),
+);
+
 it.effect("queues the explicit Notepad text only for its paired device", () =>
   Effect.gen(function* () {
     const { call, store, deviceId, token, settings } = yield* setup();
