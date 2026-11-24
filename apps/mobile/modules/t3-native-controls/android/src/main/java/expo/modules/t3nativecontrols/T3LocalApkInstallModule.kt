@@ -69,7 +69,11 @@ class T3LocalApkInstallModule : Module() {
 
     AsyncFunction("requestDeviceAccess").Coroutine<String> {
       runExclusive {
-        check(appContext.currentActivity?.hasWindowFocus() == true) { "请在应用前台请求设备授权。" }
+        val activity = checkNotNull(appContext.currentActivity) { "请在应用前台请求设备授权。" }
+        check(activity.hasWindowFocus()) { "请在应用前台请求设备授权。" }
+        val status = T3ShizukuApkInstaller.accessStatus()
+        if (status != "available") return@runExclusive status
+        if (!readDevicePermissionNotice(activity)) return@runExclusive T3ShizukuApkInstaller.accessStatus()
         T3ShizukuApkInstaller.requestAccess()
       }
     }
