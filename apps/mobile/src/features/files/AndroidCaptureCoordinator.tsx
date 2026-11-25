@@ -154,15 +154,16 @@ function EnvironmentCaptureCoordinator({
         await finish({ _tag: "reject", id: job.id, reason: "denied" });
         return;
       }
+      const confirmedJob = approved.value.job;
+      // 手机按收到的任务采集。领取回执中的任务发生变化时，不能沿用原确认。
       if (
-        selection &&
-        (approved.value.job.threadId !== selection.threadId ||
-          approved.value.job.id !== job.id ||
-          approved.value.job.action !== selection.action ||
-          approved.value.job.durationSeconds !== job.durationSeconds ||
-          currentThreadRoute(environmentId, selection.threadId) !== selection.routeKey)
+        confirmedJob.id !== job.id ||
+        confirmedJob.threadId !== job.threadId ||
+        confirmedJob.action !== job.action ||
+        confirmedJob.durationSeconds !== job.durationSeconds ||
+        (selection && currentThreadRoute(environmentId, selection.threadId) !== selection.routeKey)
       ) {
-        endShare();
+        if (selection) endShare();
         await finish({ _tag: "reject", id: job.id, reason: "canceled" });
         return;
       }

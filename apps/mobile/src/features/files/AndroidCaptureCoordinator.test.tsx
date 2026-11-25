@@ -150,6 +150,50 @@ it("requires the phone's explicit confirmation before opening Android consent an
 });
 
 it.each([
+  { id: "another-job" },
+  { threadId: "another-thread" },
+  { action: "screenshot" },
+  { durationSeconds: 30 },
+])("cancels before recording if the server confirms a different job (%j)", async (change) => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const root = createRoot(document.createElement("div"));
+  const job = {
+    id: "original",
+    threadId: "thread-one",
+    action: "record-screen",
+    durationSeconds: 7,
+  };
+  state.unlocked.mockResolvedValue(true);
+  state.send.mockImplementation(async ({ input }) => {
+    if (input._tag === "listen") return { _tag: "Success", value: { _tag: "pending", job } };
+    if (input._tag === "approve")
+      return { _tag: "Success", value: { _tag: "active", job: { ...job, ...change } } };
+    return { _tag: "Success", value: { _tag: "accepted" } };
+  });
+  try {
+    await act(async () => root.render(<AndroidCaptureCoordinator />));
+    await act(async () =>
+      state.alert.mock.calls[0]?.[2].find(({ text }) => text === "继续系统授权")?.onPress(),
+    );
+    expect(state.capture).not.toHaveBeenCalled();
+    expect(state.send.mock.calls.map(([{ input }]) => input._tag)).toEqual([
+      "listen",
+      "approve",
+      "reject",
+    ]);
+    expect(state.send.mock.lastCall?.[0].input).toEqual({
+      _tag: "reject",
+      id: job.id,
+      reason: "canceled",
+    });
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+    vi.resetAllMocks();
+  }
+});
+
+it.each([
   ["inactive", 1],
   ["active", 2],
 ] as const)("checks the original job after a lost upload receipt (%s)", async (status, uploads) => {
