@@ -1,6 +1,6 @@
 Unicode true
 Name "T3Code-LM Windows 受控端"
-OutFile "T3Code-LM-Companion-0.2.5-2-localtest.1-Windows-x64-Setup.exe"
+OutFile "T3Code-LM-Companion-0.2.6-1-Windows-x64-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\T3Code-LM-Companion"
 InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\T3Code-LM-Companion" "InstallLocation"
 RequestExecutionLevel user
@@ -18,10 +18,10 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-VIProductVersion "0.2.5.2"
+VIProductVersion "0.2.6.1"
 VIAddVersionKey /LANG=2052 "ProductName" "${PRODUCT}"
-VIAddVersionKey /LANG=2052 "ProductVersion" "0.2.5-2-localtest.1"
-VIAddVersionKey /LANG=2052 "FileVersion" "0.2.5.2"
+VIAddVersionKey /LANG=2052 "ProductVersion" "0.2.6-1"
+VIAddVersionKey /LANG=2052 "FileVersion" "0.2.6.1"
 VIAddVersionKey /LANG=2052 "FileDescription" "T3Code-LM Windows 受控端安装程序"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "T3Code-LM"
 
@@ -39,7 +39,7 @@ Section "安装"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\T3Code-LM Windows 受控端.lnk" "$INSTDIR\T3Code-LM-Companion.exe"
   WriteRegStr HKCU "${ARP}" "DisplayName" "${PRODUCT}"
-  WriteRegStr HKCU "${ARP}" "DisplayVersion" "0.2.5-2-localtest.1"
+  WriteRegStr HKCU "${ARP}" "DisplayVersion" "0.2.6-1"
   WriteRegStr HKCU "${ARP}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${ARP}" "DisplayIcon" "$INSTDIR\T3Code-LM-Companion.exe"
   WriteRegStr HKCU "${ARP}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'

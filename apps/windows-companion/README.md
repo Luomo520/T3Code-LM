@@ -29,7 +29,7 @@
 .\build.ps1 -MakeNsis 'C:\Path\To\makensis.exe'
 ```
 
-成品位于 `build/T3Code-LM-Companion-0.2.5-2-localtest.1-Windows-x64-Setup.exe`。WinForms 提供原生窗口与通知区域，.NET Framework 提供 HTTPS 和 DPAPI，Win32 提供截图，NSIS 提供按用户安装和卸载。安装程序采用应用版本 0.2.5-2-localtest.1，Windows 文件版本为 0.2.5.2。
+成品位于 `build/T3Code-LM-Companion-0.2.6-1-Windows-x64-Setup.exe`。WinForms 提供原生窗口与通知区域，.NET Framework 提供 HTTPS 和 DPAPI，Win32 提供截图，NSIS 提供按用户安装和卸载。安装程序采用应用版本 0.2.6-1，Windows 文件版本为 0.2.6.1。
 
 `CompanionWindow.cs` 负责界面、配对和本机确认。 `CaptureChoice.cs` 和 `CaptureTarget.cs` 负责本机目标选择、校验和拍摄。 `Transport.cs` 负责服务器协议和配对记录。 `DesktopWindowChoice.cs` 和 `WindowsDesktop.cs` 负责选择及操作固定应用的窗口，`WindowsMcp.cs` 查询本机接管状态。 `Recording.cs` 负责写入本机 MJPEG AVI。
 
