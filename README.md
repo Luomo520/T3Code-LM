@@ -6,6 +6,8 @@ T3Code-LM 是基于 [T3 Code](https://github.com/pingdotgg/t3code) 的中文增�
 
 你可以直接在 Windows 电脑上使用，也可以让 Linux 电脑或 NAS 运行服务，再从其他设备连接。适合需要在多台设备之间继续 App、网页、桌面应用或硬件开发工作的用户。
 
+**隐私与用量统计。** 从 0.2.6 起，T3Code-LM 已移除从上游 T3 Code 继承的产品遥测和 Android 自动崩溃上报。你仍可在自己的 T3 环境中查看 Token 用量、缓存率和生成速度。[了解数据使用范围](CHANGELOG.md#026)
+
 **[下载 T3Code-LM](https://github.com/Luomo520/T3Code-LM/releases/latest)** · [查看全部版本](https://github.com/Luomo520/T3Code-LM/releases) · [反馈问题](https://github.com/Luomo520/T3Code-LM/issues)
 
 <p>
